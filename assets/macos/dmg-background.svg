@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="660" height="420" viewBox="0 0 660 420">
+  <!-- Finder window background of the DMG: icons sit at (170,200) and (490,200). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f7fb"/>
+      <stop offset="1" stop-color="#e9eaf3"/>
+    </linearGradient>
+  </defs>
+  <rect width="660" height="420" fill="url(#bg)"/>
+  <g fill="none" stroke="#7b82ee" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" opacity="0.85">
+    <path d="M262 200 C 300 176, 360 176, 398 200"/>
+    <path d="M380 184 L 400 201 L 376 210"/>
+  </g>
+  <text x="330" y="330" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="19" fill="#3b3e57">Drag Matrix Finder into Applications</text>
+  <text x="330" y="356" text-anchor="middle" font-family="'Source Sans 3', sans-serif" font-size="15" fill="#7a7d92">Kéo Matrix Finder vào thư mục Applications</text>
+</svg>
