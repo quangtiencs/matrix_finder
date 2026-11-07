@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <!-- Simplified variant that stays legible at 16-32 px. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#eceef2"/></linearGradient>
+    <linearGradient id="front" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffdb6a"/><stop offset="1" stop-color="#f5a91c"/></linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="58" fill="url(#bg)"/>
+  <rect x="1" y="1" width="254" height="254" rx="57" fill="none" stroke="#d3d6de" stroke-width="2"/>
+  <path d="M36 84 q0 -18 18 -18 h42 q10 0 16 8 l8 10 h82 q18 0 18 18 v10 h-184 Z" fill="#e39a12"/>
+  <rect x="28" y="100" width="200" height="124" rx="20" fill="url(#front)"/>
+  <g fill="none" stroke="#7a4a00" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" opacity="0.75"><path d="M74 124 h-14 v76 h14"/><path d="M182 124 h14 v76 h-14"/></g>
+  <rect x="84" y="128" width="36" height="30" rx="8" fill="#7a4a00" opacity="0.88"/>
+  <rect x="136" y="128" width="36" height="30" rx="8" fill="#7a4a00" opacity="0.22"/>
+  <rect x="84" y="166" width="36" height="30" rx="8" fill="#7a4a00" opacity="0.22"/>
+  <rect x="136" y="166" width="36" height="30" rx="8" fill="#7a4a00" opacity="0.88"/>
+</svg>
