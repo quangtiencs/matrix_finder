@@ -75,6 +75,8 @@ pub struct TermOpts<'a> {
     pub theme: &'a Theme,
     pub font_size: f32,
     pub copy_on_select: bool,
+    /// Lines scrolled per row of trackpad travel, per mouse wheel notch.
+    pub scroll: [f32; 2],
     /// The pane holding this terminal is the active one.
     pub active: bool,
     /// Allowed splits of its window: right, left, down, up.
@@ -902,7 +904,24 @@ impl TermSession {
 
     fn mouse(&mut self, ui: &egui::Ui, resp: &egui::Response, rect: Rect, origin: Pos2, o: &TermOpts, out: &mut TermResponse) {
         let mode = *self.term.lock().mode();
-        let (mods, scroll, zoom, events, hover) = ui.input(|i| (i.modifiers, i.raw_scroll_delta.y, i.zoom_delta(), i.events.clone(), i.pointer.hover_pos()));
+        let (mods, zoom, events, hover) = ui.input(|i| (i.modifiers, i.zoom_delta(), i.events.clone(), i.pointer.hover_pos()));
+        // Scrolled lines, like Ghostty: a row of trackpad travel and a mouse wheel notch
+        // each scroll their own number of lines (1 and 3 by default). With Shift held
+        // egui reports the wheel as horizontal, so take x then.
+        let scroll: f32 = events
+            .iter()
+            .map(|e| match e {
+                egui::Event::MouseWheel { unit, delta, modifiers } => {
+                    let d = if delta.y == 0.0 && modifiers.shift { delta.x } else { delta.y };
+                    match unit {
+                        egui::MouseWheelUnit::Point => d / self.cell.y.max(1.0) * o.scroll[0],
+                        egui::MouseWheelUnit::Line => d * o.scroll[1],
+                        egui::MouseWheelUnit::Page => d * self.lines as f32,
+                    }
+                }
+                _ => 0.0,
+            })
+            .sum();
         let hovered = hover.is_some_and(|p| rect.contains(p)) && resp.hovered();
         let offset = self.term.lock().grid().display_offset();
         let reporting = mode.intersects(TermMode::MOUSE_MODE) && !mods.shift;
@@ -915,10 +934,9 @@ impl TermSession {
 
         if hovered && scroll != 0.0 {
             self.scroll_acc += scroll;
-            let step = self.cell.y.max(1.0);
-            let n = (self.scroll_acc / step).trunc() as i32;
+            let n = self.scroll_acc.trunc() as i32;
             if n != 0 {
-                self.scroll_acc -= n as f32 * step;
+                self.scroll_acc -= n as f32;
                 if reporting {
                     let (row, col, _) = self.grid_pos(hover.unwrap_or(origin), origin);
                     for _ in 0..n.unsigned_abs().min(10) {
@@ -932,12 +950,12 @@ impl TermSession {
                         (false, false) => b"\x1b[B",
                     };
                     let mut v = Vec::new();
-                    for _ in 0..(n.unsigned_abs() * 3).min(30) {
+                    for _ in 0..n.unsigned_abs().min(30) {
                         v.extend_from_slice(seq);
                     }
                     self.write(v);
                 } else {
-                    self.term.lock().scroll_display(Scroll::Delta(n * 3));
+                    self.term.lock().scroll_display(Scroll::Delta(n));
                 }
             }
         }

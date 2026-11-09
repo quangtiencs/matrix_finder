@@ -4225,6 +4225,7 @@ impl App {
                 focused: side == self.active && self.dialog.is_none() && !self.palette.open,
                 term_font_size: self.cfg.term_font_size,
                 term_copy_on_select: self.cfg.term_copy_on_select,
+                term_scroll: [self.cfg.term_scroll_trackpad, self.cfg.term_scroll_wheel],
                 quick_filters: &self.cfg.quick_filters,
             };
             for e in pane_ui(&mut child, &mut self.panes[side], side, &ctx) {

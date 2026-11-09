@@ -713,6 +713,19 @@ impl App {
                         changed |= ui.add(egui::DragValue::new(&mut self.cfg.term_scrollback).range(500..=200_000).speed(100)).changed();
                     });
                     row_line(ui, th);
+                    for (v, label, hint, default) in [
+                        (&mut self.cfg.term_scroll_trackpad, t("Trackpad scroll speed"), t("Lines per row the finger moves"), 1.0),
+                        (&mut self.cfg.term_scroll_wheel, t("Mouse wheel scroll speed"), t("Lines per wheel notch"), 3.0),
+                    ] {
+                        row(ui, th, &label, &hint, |ui| {
+                            if *v != default && ui.small_button(t("Reset")).clicked() {
+                                *v = default;
+                                changed = true;
+                            }
+                            changed |= ui.add(egui::Slider::new(v, crate::config::SCROLL_SPEEDS).logarithmic(true).step_by(0.1).fixed_decimals(1).suffix("×")).changed();
+                        });
+                        row_line(ui, th);
+                    }
                     changed |= toggle_row(ui, th, &mut self.cfg.term_copy_on_select, &t("Copy on select"), "");
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.term_close_on_exit, &t("Close the tab when the shell exits"), "");
