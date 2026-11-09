@@ -950,6 +950,57 @@ fn default_apps_choose_and_reset() {
 /// Colour themes and fonts through the Settings tab, as a user would pick them.
 #[test]
 #[ignore]
+fn terminal_close_asks_while_a_program_runs() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let term = h.state_mut().shot_terminal(&d.home, None, None);
+    let tabs = h.state().strip.tabs.len();
+    let running = |app: &App| app.panes[0].tab().term.as_ref().and_then(|t| t.running_program());
+    term_type(&mut h, 0, term, "sleep 30\n");
+    wait_until(&mut h, 3.0, |app| running(app).is_some());
+    assert_eq!(running(h.state()).as_deref(), Some("sleep"));
+
+    // Closing the tab asks; Cancel keeps it.
+    let live = h.state().live;
+    h.state_mut().request_close_tabs(&[live]);
+    assert!(matches!(&h.state().dialog, Some(Dialog::CloseTerminals { programs, .. }) if programs == &["sleep"]));
+    settle(&mut h, 2);
+    h.get_by_label(&t("Cancel")).click();
+    settle(&mut h, 2);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs);
+
+    // Quitting asks too, naming the program.
+    assert!(matches!(h.state().quit, Quit::No));
+    h.state_mut().quit = Quit::Asking;
+    settle(&mut h, 2);
+    h.get_by_label("sleep");
+    h.get_by_label(&t("Cancel")).click();
+    settle(&mut h, 2);
+    assert!(matches!(h.state().quit, Quit::No));
+
+    // Back at the prompt: closing goes ahead without asking.
+    term_type(&mut h, 0, term, "\x03");
+    wait_until(&mut h, 3.0, |app| running(app).is_none());
+    assert_eq!(running(h.state()), None);
+    let live = h.state().live;
+    h.state_mut().request_close_tabs(&[live]);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs - 1);
+
+    // With the setting off, a running program does not hold closing back.
+    let term = h.state_mut().shot_terminal(&d.home, None, None);
+    term_type(&mut h, 0, term, "sleep 30\n");
+    wait_until(&mut h, 3.0, |app| running(app).is_some());
+    h.state_mut().cfg.term_confirm_close = false;
+    let live = h.state().live;
+    h.state_mut().request_close_tabs(&[live]);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs - 1);
+}
+
+#[test]
+#[ignore]
 fn settings_fonts_and_terminal_themes() {
     let d = demo_env();
     let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
@@ -1652,6 +1703,67 @@ fn press_chord(h: &mut Harness<'static, App>, text: &str) {
     let c = crate::shortcuts::Chord::parse(text).unwrap();
     let m = Modifiers { ctrl: c.ctrl, alt: c.alt, shift: c.shift, mac_cmd: c.cmd, command: c.cmd || (c.ctrl && !cfg!(target_os = "macos")) };
     key_press(h, c.key, None, m);
+}
+
+/// Typing in a file window opens the search box with the typed text, which filters the
+/// folder; Esc puts the folder back, Enter keeps the filter. Space still marks files.
+#[test]
+#[ignore]
+fn type_to_search_in_a_file_window() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let downloads = d.home.join("Downloads");
+    h.state_mut().shot_pane(0, &downloads, None);
+    h.state_mut().active = 0;
+    settle(&mut h, 3);
+    let names = |app: &App| -> Vec<String> {
+        let tab = app.panes[0].tab();
+        tab.view.iter().map(|&i| tab.entries[i].name.clone()).filter(|n| n != "..").collect()
+    };
+    let all = names(h.state());
+    assert!(all.len() > 2, "{all:?}");
+
+    // Two letters typed in one frame, then more in the open box.
+    push(&mut h, Event::Text("ph".into()));
+    settle(&mut h, 2);
+    assert!(h.state().palette.open);
+    assert_eq!(h.state().palette.query(), "ph");
+    push(&mut h, Event::Text("oto".into()));
+    settle(&mut h, 2);
+    assert_eq!(h.state().palette.query(), "photo");
+    assert_eq!(names(h.state()), ["photo.jpg"], "filtered while typing");
+
+    // Esc: closed, the whole folder again.
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert!(!h.state().palette.open);
+    assert_eq!(names(h.state()), all);
+
+    // Enter keeps the filter.
+    push(&mut h, Event::Text("SHA".into()));
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    assert!(!h.state().palette.open);
+    assert_eq!(h.state().panes[0].tab().filter_text, "SHA");
+    assert_eq!(names(h.state()), ["SHA256SUMS"]);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert_eq!(names(h.state()), all, "Esc in the list turns the filter off");
+
+    // Space marks the file under the cursor instead.
+    h.state_mut().panes[0].tab_mut().cursor = 1;
+    push(&mut h, Event::Key { key: Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    push(&mut h, Event::Text(" ".into()));
+    settle(&mut h, 2);
+    assert!(!h.state().palette.open);
+    assert_eq!(h.state().panes[0].tab().marked.len(), 1);
+
+    // Text that comes with a shortcut does not start a search.
+    h.state_mut().panes[0].tab_mut().marked.clear();
+    h.input_mut().modifiers = Modifiers::COMMAND;
+    push(&mut h, Event::Text("a".into()));
+    settle(&mut h, 1);
+    h.input_mut().modifiers = Modifiers::NONE;
+    settle(&mut h, 1);
+    assert!(!h.state().palette.open);
 }
 
 /// Windows and tabs by keyboard, numbered windows, and keys a terminal keeps. The keys

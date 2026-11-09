@@ -730,6 +730,8 @@ impl App {
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.term_close_on_exit, &t("Close the tab when the shell exits"), "");
                     row_line(ui, th);
+                    changed |= toggle_row(ui, th, &mut self.cfg.term_confirm_close, &t("Ask before closing a running program"), &t("When closing a window, a tab or the app while a program (not the shell) runs in its terminal"));
+                    row_line(ui, th);
                     let in_home = self.cfg.start_in_home;
                     ui.add_enabled_ui(!in_home, |ui| {
                         let hint = if in_home { t("Matrix Finder starts in the home folder (Settings → Files & layout)") } else { String::new() };
