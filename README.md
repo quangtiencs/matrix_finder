@@ -110,6 +110,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 | 🏠 **Starts at Home** | The app opens your home folder with no terminal running. To restore the last session instead, turn off *Settings → Files & layout → Open the home folder at start* |
 | ↺ **Reset to defaults** | *Settings → Reset to defaults…* restores every preference (theme, language, UI scale, panels, terminal and safety options) after you confirm. Bookmarks, saved connections, backup and terminal profiles are kept |
 | 👁️ **Quick View stays out of terminals** | While a terminal tab is active, the Quick View panel is hidden so the terminal gets the full width. It comes back when you switch to a file tab, and the setting itself is not changed |
+| 🤖 **AI button** | When Claude Code, Codex, Gemini CLI, Qwen Code or OpenCode is installed, the terminal's info bar gets an AI button that starts it at the prompt (only while the terminal is idle). *Settings → Terminal* chooses which tool it starts, or hides it |
 | 🖌️ **Terminal colour themes** | 21 built-in schemes with their own ANSI colours (Dracula, Nord, Tokyo Night, Catppuccin, Solarized, Gruvbox…), picked per profile from a gallery with a live sample; open terminals update at once |
 | 🚀 **Default apps** | Files open with your system's default app. *Settings → Default apps* or **Always use this app** in Open with lets you choose another one per file type, and one click goes back to the system's choice |
 | 🔤 **Fonts** | *Settings → Fonts*: pick the font and size of the interface and of the terminal, from the bundled fonts or anything installed |
@@ -208,6 +209,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - Background tabs show activity and bell dots.
   - Closing a window, a tab or the app while a program (not the shell) is running in a terminal asks first and names the program; this can be turned off in *Settings → Terminal*.
   - An **info bar** on every terminal window shows what is running and the folder, shortened to `~/…` (hover over it for the full path). Its buttons open the folder in a file window beside the terminal, copy the path, clear the screen, restart a shell that has exited, change the text size, and split or close the window.
+  - **AI button**: Matrix Finder looks for Claude Code (`claude`), Codex (`codex`), Gemini CLI (`gemini`), Qwen Code (`qwen`) and OpenCode (`opencode`), the way your shell finds them (so PATH and aliases from its startup files count). When one is installed, the info bar gets a single AI button with that tool's logo; a click types its command at the prompt. The button is greyed out while any program runs in the terminal and works again once the shell is idle. *Settings → Terminal → AI button* chooses the tool (or **Automatic**: the first one installed, in the order above), looks again after you install one, and turns the button (and the search) off; right-click the button to switch between the installed tools or hide it.
 - **Profiles**: <kbd>F9</kbd> opens the default profile, and the **▾** arrow next to the terminal button lists every profile. A profile combines:
   - **a terminal**: the built-in tab, the native OS terminal, Ghostty, iTerm2, Windows Terminal, PowerShell, Alacritty, Kitty, WezTerm, Konsole, GNOME Terminal, or a custom command with `{dir}` / `{cmd}`
   - **a shell**: bash, zsh, fish, nu, pwsh, cmd and so on
@@ -625,7 +627,9 @@ src/
 ├── certview.rs    X.509 certificates
 ├── defaultapps.rs which app opens which file type, and the system's own choice
 ├── chrome.rs      native-looking integrated title bar
+├── agents.rs      AI coding agents for the AI button: which are installed, their logos
 └── i18n.rs        translations (+ i18n_data.rs: keys and Vietnamese)
+assets/agents/     logos of the AI coding agents (LobeHub Icons, MIT)
 assets/fonts/      Source Sans 3, Source Serif 4, Source Code Pro (SIL OFL 1.1)
 assets/logo/       Matrix Finder logo: a folder made of a matrix (SVG source + PNG exports)
 ```
@@ -634,7 +638,7 @@ assets/logo/       Matrix Finder logo: a folder made of a matrix (SVG source + P
 
 ## 📄 License
 
-The code is under the **MIT** license. The bundled fonts are under the SIL Open Font License 1.1 (`assets/fonts/OFL.txt`).
+The code is under the **MIT** license. The bundled fonts are under the SIL Open Font License 1.1 (`assets/fonts/OFL.txt`). The AI coding agent logos come from [LobeHub Icons](https://github.com/lobehub/lobe-icons) (MIT, `assets/agents/LICENSE.txt`); they are trademarks of their owners and only show which tool the AI button starts.
 
 <div align="center">
 <br>

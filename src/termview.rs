@@ -310,21 +310,59 @@ impl TermSession {
     /// run the shell's own `cd`. False (nothing sent) when the shell has exited or a
     /// full-screen program (vim, less, …) has the terminal.
     pub fn cd(&mut self, dir: &Path) -> bool {
+        let d = dir.to_string_lossy();
+        let line = match self.shell_name().to_lowercase().as_str() {
+            "cmd" => format!("cd /d \"{d}\""),
+            "pwsh" | "powershell" => format!("Set-Location -LiteralPath '{}'", d.replace('\'', "''")),
+            "nu" | "nushell" => format!("cd \"{}\"", d.replace('\\', "\\\\").replace('"', "\\\"")),
+            _ => format!("cd {}", crate::terminal::sh_quote(&d)),
+        };
+        if !self.run_line(&line) {
+            return false;
+        }
+        self.cwd = dir.to_path_buf();
+        true
+    }
+
+    /// Start `program` (a command the shell finds, or a full path) at the shell's
+    /// prompt. False (nothing sent) while another program runs in the foreground,
+    /// or when the shell has exited.
+    pub fn run_program(&mut self, program: &str) -> bool {
+        if !self.is_idle() {
+            return false;
+        }
+        let plain = !program.is_empty() && program.chars().all(|c| c.is_ascii_alphanumeric() || "/\\._-+:".contains(c));
+        let line = match self.shell_name().to_lowercase().as_str() {
+            _ if plain => program.to_string(),
+            "cmd" => format!("\"{program}\""),
+            "pwsh" | "powershell" => format!("& '{}'", program.replace('\'', "''")),
+            "nu" | "nushell" => format!("^\"{}\"", program.replace('\\', "\\\\").replace('"', "\\\"")),
+            _ => crate::terminal::sh_quote(program),
+        };
+        self.run_line(&line)
+    }
+
+    /// The shell waits at its prompt: it runs, and no other program has the terminal
+    /// (none in the foreground, which only Unix can tell, and no full-screen one).
+    pub fn is_idle(&self) -> bool {
+        self.exited.is_none() && self.foreground_pid().is_none() && !self.term.lock().mode().contains(TermMode::ALT_SCREEN)
+    }
+
+    /// Clear what is typed on the prompt line, type `line` and press Enter. False
+    /// (nothing sent) when the shell has exited or a full-screen program (vim,
+    /// less, …) has the terminal.
+    fn run_line(&mut self, line: &str) -> bool {
         if self.exited.is_some() || self.term.lock().mode().contains(TermMode::ALT_SCREEN) {
             return false;
         }
-        let d = dir.to_string_lossy();
-        let line = match self.shell_name().to_lowercase().as_str() {
-            // Esc clears the prompt line in cmd and PowerShell (PSReadLine).
-            "cmd" => format!("\x1bcd /d \"{d}\"\r"),
-            "pwsh" | "powershell" => format!("\x1bSet-Location -LiteralPath '{}'\r", d.replace('\'', "''")),
-            "nu" | "nushell" => format!("\x05\x15cd \"{}\"\r", d.replace('\\', "\\\\").replace('"', "\\\"")),
-            // POSIX shells and fish: Ctrl+E Ctrl+U clears the line.
-            _ => format!("\x05\x15cd {}\r", crate::terminal::sh_quote(&d)),
+        // Esc clears the prompt line in cmd and PowerShell (PSReadLine); Ctrl+E
+        // Ctrl+U in POSIX shells, fish and nu.
+        let clear = match self.shell_name().to_lowercase().as_str() {
+            "cmd" | "pwsh" | "powershell" => "\x1b",
+            _ => "\x05\x15",
         };
-        self.write(line.into_bytes());
+        self.write(format!("{clear}{line}\r").into_bytes());
         self.scroll_to_bottom();
-        self.cwd = dir.to_path_buf();
         true
     }
 

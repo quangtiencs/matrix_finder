@@ -1,6 +1,7 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 //! Matrix Finder: a cross-platform dual-panel file manager.
 
+mod agents;
 mod app;
 mod archive;
 mod checksum;

@@ -198,6 +198,10 @@ pub struct App {
     icon_themes: Option<(Vec<String>, Option<String>)>,
     egui_ctx: egui::Context,
     closed_tabs: Vec<ClosedTab>,
+    /// AI coding agents found on this computer (`None`: not looked for yet), and
+    /// the search under way.
+    agents: Option<Vec<crate::agents::Found>>,
+    agents_rx: Option<Receiver<Vec<crate::agents::Found>>>,
     /// Live filter while typing in the search box: (pane, tab uid, filter before).
     pal_filter: Option<(usize, u64, String)>,
     settings_page: SettingsPage,
@@ -339,6 +343,8 @@ impl App {
             icon_themes: None,
             egui_ctx: cc.egui_ctx.clone(),
             closed_tabs: Vec::new(),
+            agents: None,
+            agents_rx: None,
             pal_filter: None,
             settings_page: SettingsPage::Appearance,
             shortcut_capture: None,
@@ -2602,6 +2608,65 @@ impl App {
         }
     }
 
+    /// The agent the AI button in the terminals' info bars starts (`None`: no button),
+    /// and every agent found. Starts looking for them the first time a terminal is shown.
+    fn ai_button(&mut self) -> (Option<crate::agents::Found>, Vec<crate::agents::Found>) {
+        if !self.cfg.term_agents {
+            return (None, Vec::new());
+        }
+        if self.agents.is_none() && self.panes.iter().any(|p| p.tab().is_terminal()) {
+            self.find_agents(false);
+        }
+        let found = self.agents.clone().unwrap_or_default();
+        (crate::agents::pick(&found, &self.cfg.term_agent).cloned(), found)
+    }
+
+    /// Look for the installed AI coding agents (again, when `again`).
+    fn find_agents(&mut self, again: bool) {
+        if self.agents_rx.is_some() || (self.agents.is_some() && !again) {
+            return;
+        }
+        // Tests (and README screenshots) do not depend on what this computer has.
+        if cfg!(test) {
+            self.agents.get_or_insert_with(Vec::new);
+            return;
+        }
+        self.agents_rx = Some(crate::agents::detect_in_background(&self.egui_ctx));
+    }
+
+    fn poll_agents(&mut self) {
+        if let Some(found) = self.agents_rx.as_ref().and_then(|rx| rx.try_recv().ok()) {
+            self.agents = Some(found);
+            self.agents_rx = None;
+        }
+    }
+
+    fn agent_act(&mut self, side: usize, act: crate::agents::AgentAct) {
+        use crate::agents::AgentAct;
+        match act {
+            AgentAct::Run(id) => {
+                let Some(run) = self.agents.as_ref().and_then(|v| v.iter().find(|f| f.id == id)).map(|f| f.run.clone()) else { return };
+                self.active = side;
+                if let Some(term) = self.panes[side].tab_mut().term.as_mut() {
+                    term.want_focus = true;
+                    // Nothing is sent unless the shell waits at its prompt (the button is
+                    // greyed out otherwise).
+                    term.run_program(&run);
+                }
+            }
+            AgentAct::Choose(id) => {
+                self.cfg.term_agent = id.to_string();
+                self.save_cfg();
+            }
+            AgentAct::HideButton => {
+                self.cfg.term_agents = false;
+                self.save_cfg();
+                self.toast(t("The AI button is hidden. Settings → Terminal shows it again."), false);
+            }
+            AgentAct::Settings => self.open_settings(SettingsPage::Terminal),
+        }
+    }
+
     /// Poll every terminal (also in hidden tabs): titles, folder, exit.
     fn poll_terminals(&mut self, ctx: &egui::Context) {
         let mut done: Vec<u64> = Vec::new();
@@ -4295,6 +4360,7 @@ impl App {
             }
         }
         self.pane_rects = rects.clone();
+        let (agent, agents) = self.ai_button();
         let mut events: Vec<(usize, PaneEvent)> = vec![];
         let mut settings_areas = Vec::new();
         let mut transfers_areas = Vec::new();
@@ -4323,6 +4389,8 @@ impl App {
                 term_copy_on_select: self.cfg.term_copy_on_select,
                 term_scroll: [self.cfg.term_scroll_trackpad, self.cfg.term_scroll_wheel],
                 quick_filters: &self.cfg.quick_filters,
+                agent: agent.as_ref(),
+                agents: &agents,
             };
             for e in pane_ui(&mut child, &mut self.panes[side], side, &ctx) {
                 match e {
@@ -4501,6 +4569,7 @@ impl App {
                 self.panes[side].tab_mut().set_sort(k, &lc!(self));
             }
             PaneEvent::Term(r) => self.handle_term_response(side, r),
+            PaneEvent::Agent(a) => self.agent_act(side, a),
             PaneEvent::SettingsArea(_) | PaneEvent::TransfersArea(_) => {}
             PaneEvent::QuickFilter(i) => {
                 self.active = side;
@@ -5296,6 +5365,7 @@ impl eframe::App for App {
         self.quit_step(ctx);
         self.handle_keys(ctx);
         self.poll_terminals(ctx);
+        self.poll_agents();
         self.poll_instance(ctx);
         self.poll_jobs(ctx);
         self.poll_connect();

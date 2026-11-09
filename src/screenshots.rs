@@ -999,6 +999,96 @@ fn terminal_close_asks_while_a_program_runs() {
     assert_eq!(h.state().strip.tabs.len(), tabs - 1);
 }
 
+/// The AI button in a terminal's info bar: it starts the chosen agent at the prompt,
+/// is greyed out while a program runs, and Settings chooses the agent or turns it off.
+#[test]
+#[ignore]
+fn terminal_ai_button() {
+    use crate::agents::{AgentAct, Found};
+    use egui::accesskit::Role;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    // Stand-in agents: each notes the folder it started in, then keeps running.
+    let bin = d.home.join("agent-bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let fake = |name: &str| {
+        let p = bin.join(name);
+        std::fs::write(&p, "#!/bin/sh\npwd > \"$0.ran\"\nexec sleep 30\n").unwrap();
+        std::fs::set_permissions(&p, <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755)).unwrap();
+        let _ = std::fs::remove_file(bin.join(format!("{name}.ran")));
+        Found { id: crate::agents::get(name).unwrap().id, run: p.to_string_lossy().to_string() }
+    };
+    let found = vec![fake("claude"), fake("codex"), fake("gemini")];
+    let term = h.state_mut().shot_terminal(&d.demo, None, None);
+    h.state_mut().agents = Some(found);
+    wait_until(&mut h, 2.0, |_| false);
+    let idle = |app: &App| app.panes[0].tab().term.as_ref().is_some_and(|t| t.is_idle());
+    wait_until(&mut h, 5.0, idle);
+
+    // One button, for the first agent installed.
+    assert!(h.query_by_role_and_label(Role::Button, "Claude Code").is_some());
+    assert!(h.query_by_label("Codex").is_none());
+    assert!(h.query_by_label("Gemini CLI").is_none());
+
+    // At the prompt, a click starts it in this terminal and folder.
+    h.get_by_role_and_label(Role::Button, "Claude Code").click();
+    wait_until(&mut h, 5.0, |app| !idle(app) && bin.join("claude.ran").exists());
+    let ran = std::fs::read_to_string(bin.join("claude.ran")).expect("the agent ran");
+    assert_eq!(Path::new(ran.trim()).canonicalize().unwrap(), d.demo.canonicalize().unwrap());
+    assert_eq!(h.state().panes[0].tab().uid, term);
+
+    // While it runs, the button is greyed out and a click does nothing.
+    let tabs = h.state().strip.tabs.len();
+    assert!(h.get_by_role_and_label(Role::Button, "Claude Code").is_disabled());
+    std::fs::remove_file(bin.join("claude.ran")).unwrap();
+    h.get_by_role_and_label(Role::Button, "Claude Code").click();
+    wait_until(&mut h, 1.0, |_| false);
+    assert!(!bin.join("claude.ran").exists());
+    assert_eq!(h.state().strip.tabs.len(), tabs);
+
+    // Back at the prompt it works again.
+    term_type(&mut h, 0, term, "\x03");
+    wait_until(&mut h, 5.0, idle);
+    assert!(!h.get_by_role_and_label(Role::Button, "Claude Code").is_disabled());
+
+    // Its menu switches to another installed agent; that is saved.
+    h.state_mut().agent_act(0, AgentAct::Choose("codex"));
+    settle(&mut h, 3);
+    assert!(h.query_by_label("Claude Code").is_none());
+    assert!(h.query_by_role_and_label(Role::Button, "Codex").is_some());
+    assert_eq!(Settings::load().term_agent, "codex");
+
+    // Settings → Terminal: pick Gemini CLI; an agent that is not installed cannot be
+    // picked; Automatic goes back to the first one installed.
+    h.state_mut().open_settings(SettingsPage::Terminal);
+    settle(&mut h, 4);
+    scroll_settings(&mut h, 2000.0);
+    h.get_by_role_and_label(Role::RadioButton, "Gemini CLI").click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.term_agent, "gemini");
+    assert!(h.get_by_role_and_label(Role::RadioButton, "Qwen Code").is_disabled());
+    h.get_by_role_and_label(Role::RadioButton, "Qwen Code").click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.term_agent, "gemini");
+    let settings_tab = h.state().strip.active;
+    h.state_mut().show_tab(settings_tab - 1);
+    settle(&mut h, 3);
+    assert!(h.query_by_role_and_label(Role::Button, "Gemini CLI").is_some());
+    h.state_mut().show_tab(settings_tab);
+    settle(&mut h, 3);
+    h.get_by_role_and_label(Role::RadioButton, &t("Automatic: the first one installed")).click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.term_agent, "");
+
+    // The switch turns the button off.
+    h.get_by_role_and_label(Role::CheckBox, &t("Show the AI button")).click();
+    settle(&mut h, 3);
+    assert!(!h.state().cfg.term_agents);
+    h.state_mut().show_tab(settings_tab - 1);
+    settle(&mut h, 3);
+    assert!(h.query_by_label("Claude Code").is_none());
+}
+
 #[test]
 #[ignore]
 fn settings_fonts_and_terminal_themes() {
