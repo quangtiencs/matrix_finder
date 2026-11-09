@@ -1376,12 +1376,10 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         h.state_mut().dialog = None;
     }
 
-    // Light files beside a dark terminal in both modes, so the two windows are easy to
-    // tell apart; the README's showcase has the same scene all in Breeze Light.
-    let terminal_scenes = [("terminal-tabs", "Breeze Dark", true), ("showcase-terminal", "Breeze Light", mode.dir == "light")];
-    for (name, term_theme, _) in terminal_scenes.into_iter().filter(|(name, _, ok)| *ok && (want(name) || (*name == "showcase-terminal" && want("showcase")))) {
+    if want("terminal-tabs") {
+        // Light files beside a dark terminal in both modes, so the two windows are easy to tell apart.
         let mut cfg = settings("Breeze Light", d);
-        set_terminal_theme(&mut cfg, term_theme);
+        set_terminal_theme(&mut cfg, "Breeze Dark");
         cfg.bookmarks = vec![Bookmark::new("Home", d.home.to_string_lossy().to_string())];
         let mut h = app_harness(&cfg, gnome);
         let proj = d.home.join("Projects/matrix_finder");
@@ -1412,7 +1410,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         app.show_tab(split_tab);
         app.shot_focus(1);
         term_type(&mut h, 0, term, "ls -lgo && cat build.log\n");
-        shot(&mut h, name);
+        shot(&mut h, "terminal-tabs");
     }
 
     if want("terminal-profiles") || want("terminal-themes") || want("settings") {
@@ -1658,7 +1656,10 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
     }
 
     if want("terminal") {
-        let mut h = app_harness(&downloads_cfg(), gnome);
+        // A dark terminal in the light interface too, like most people run one.
+        let mut cfg = downloads_cfg();
+        set_terminal_theme(&mut cfg, "Breeze Dark");
+        let mut h = app_harness(&cfg, gnome);
         let app = h.state_mut();
         app.shot_pane(0, &d.downloads, Some(".."));
         let term = app.shot_terminal(&d.downloads, None, None);
@@ -1672,8 +1673,8 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
 
 /// The four scenes of `docs/showcase.png`, left to right and top to bottom:
 /// (mode, scene). Light and dark both appear; `terminal-tabs` is light files beside a dark terminal in either mode.
-/// The four windows of `docs/showcase.png`, all in Breeze Light.
-const SHOWCASE: [(&str, &str); 4] = [("light", "panels"), ("light", "showcase-terminal"), ("light", "table-parquet"), ("light", "disk-usage")];
+/// The four windows of `docs/showcase.png`: the Breeze Light interface, with a dark terminal.
+const SHOWCASE: [(&str, &str); 4] = [("light", "panels"), ("light", "terminal-tabs"), ("light", "table-parquet"), ("light", "disk-usage")];
 
 /// Coverage (0..=1) of a rectangle with rounded corners at pixel (`x`, `y`).
 fn rounded_coverage(x: u32, y: u32, w: u32, h: u32, radius: f32) -> f32 {

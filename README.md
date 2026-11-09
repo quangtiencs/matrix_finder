@@ -23,9 +23,9 @@ Easy to start with, and it has power-user features in the Total Commander tradit
 
 <br>
 
-<img src="docs/showcase.png" alt="Matrix Finder in the Breeze Light theme: dual panels, files beside a terminal in one tab, a Parquet preview, and a disk usage treemap">
+<img src="docs/showcase.png" alt="Matrix Finder in the Breeze Light theme: dual panels, light files beside a dark terminal in one tab, a Parquet preview, and a disk usage treemap">
 
-<sub>Dual panels · files beside a terminal in one tab · Parquet preview · disk usage treemap, in the <b>Breeze Light</b> theme.</sub>
+<sub>Dual panels · light files beside a dark terminal in one tab · Parquet preview · disk usage treemap, in the <b>Breeze Light</b> theme with a <b>Breeze Dark</b> terminal.</sub>
 
 </div>
 
