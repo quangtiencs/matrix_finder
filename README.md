@@ -485,12 +485,21 @@ NOT name LIKE '.%' OR (ext = 'md' AND size < 4KB)
 - **macOS**: `Matrix Finder.app` in `/Applications` (or `~/Applications`) and a `matrix_finder` command.
 - **Linux**: the `matrix_finder` command plus a menu entry and icons in `~/.local` (`--system` installs for all users under `/usr/local`).
 
+Install the newest release:
+
 ```bash
-curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash   # newest release
-scripts/install.sh                     # this checkout
+curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash
+```
+
+Options go after `bash -s --` (e.g. `| bash -s -- --version 0.3.0`). From a checkout of this repository:
+
+```bash
+scripts/install.sh                     # build and install this checkout
 scripts/install.sh --version 0.3.0     # a given release (--ref for a branch or commit)
 scripts/install.sh --uninstall         # remove it again (settings are kept)
 ```
+
+On macOS the script first checks that the compiler can link with the macOS SDK. If the Command Line Tools are half-updated (the build would fail with `tapi error: malformed file … unknown architecture`), it builds with an older SDK that works, or says how to repair the tools.
 
 Run it again to upgrade: the new version replaces the old one in place, and files the old one had but the new one does not are removed. Source downloads and build output are kept in `~/.cache/matrix_finder` (`~/Library/Caches/matrix_finder` on macOS), so upgrades build faster. `--help` lists every option.
 
