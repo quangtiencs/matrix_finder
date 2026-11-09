@@ -224,7 +224,7 @@ install_linux_packages() {
             for p in build-essential pkg-config libssl-dev git ca-certificates curl \
                      libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
                      libx11-6 libxcursor1 libxrandr2 libxi6; do
-                dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null | grep -q '^ii' || missing="$missing $p"
+                grep -q '^ii' <<<"$(dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null)" || missing="$missing $p"
             done ;;
         *" fedora "*|*" rhel "*|*" centos "*)
             pm=dnf
@@ -264,6 +264,64 @@ check_mac_tools() {
         fi
         die "install the Xcode command line tools (xcode-select --install), then run this script again"
     fi
+    check_mac_linker
+}
+
+# Links a tiny program with `cc`, which is what rustc links with. Catches a linker
+# that is older than the SDK beside it (a half-finished Command Line Tools update:
+# "tapi error: malformed file ... unknown architecture") before a long build. When
+# an older SDK in the same folder works, the build uses that one instead.
+link_test() {
+    local dir out
+    dir=$(mktemp -d)
+    printf 'int main(void) { return 0; }\n' >"$dir/t.c"
+    if out=$(cc -arch "$(uname -m)" "$dir/t.c" -o "$dir/t" 2>&1); then rm -rf "$dir"; return 0; fi
+    rm -rf "$dir"
+    printf '%s\n' "$out" | grep -v '^ *\^' | head -4 | sed 's/^/    /' >&2
+    return 1
+}
+
+check_mac_linker() {
+    command -v cc >/dev/null || die "no C compiler (cc) found; install the Xcode command line tools (xcode-select --install)"
+    link_test 2>/dev/null && return 0
+    local dev cc_path ldv current sdks s d
+    dev=$(xcode-select -p)
+    cc_path=$(command -v cc)
+    ldv=$(ld -v 2>&1 | sed -n 's/.*PROJECT:\([^ ]*\).*/\1/p' | head -1 || true)
+    current=$(cd -P "${SDKROOT:-$(xcrun --show-sdk-path 2>/dev/null || echo /nonexistent)}" 2>/dev/null && pwd || true)
+    warn "the C compiler cannot link a test program with the macOS SDK${current:+ ${current##*/}}:"
+    link_test || true
+    # Another SDK of the same tools, newest first (real folders, not the MacOSX.sdk links).
+    for d in "$dev/SDKs" "$dev/Platforms/MacOSX.platform/Developer/SDKs"; do
+        [ -d "$d" ] || continue
+        sdks=$(cd "$d" && for s in MacOSX[0-9]*.sdk; do if [ -d "$s" ] && [ ! -L "$s" ]; then echo "$s"; fi; done |
+            sed 's/^MacOSX//; s/\.sdk$//' | sort -t. -k1,1nr -k2,2nr)
+        for s in $sdks; do
+            [ "$d/MacOSX$s.sdk" = "$current" ] && continue
+            if SDKROOT="$d/MacOSX$s.sdk" link_test 2>/dev/null; then
+                export SDKROOT="$d/MacOSX$s.sdk"
+                warn "building with the older SDK MacOSX$s.sdk, which works"
+                warn "to fix the tools for good, update the Command Line Tools (System Settings > General > Software Update)"
+                return 0
+            fi
+        done
+    done
+    printf '\n' >&2
+    if [ "$cc_path" != /usr/bin/cc ]; then
+        warn "cc is $cc_path, not Apple's /usr/bin/cc: take it off PATH (e.g. conda deactivate) and try again"
+    fi
+    case $dev in
+        /Library/Developer/CommandLineTools*)
+            die "the Command Line Tools at $dev look half-updated (linker ${ldv:-unknown}, SDK ${current##*/}).
+Update them in System Settings > General > Software Update, or reinstall them:
+    sudo rm -rf /Library/Developer/CommandLineTools && xcode-select --install
+then run this script again" ;;
+        *)
+            die "the linker of $dev (${ldv:-unknown}) cannot use the SDK ${current##*/}.
+Update Xcode, or use the Command Line Tools instead:
+    sudo xcode-select -s /Library/Developer/CommandLineTools
+then run this script again" ;;
+    esac
 }
 
 # ---------------------------------------------------------------- source
@@ -348,7 +406,7 @@ say "Using $(rustc --version)"
 # --locked keeps the dependency versions the release was tested with; a source whose
 # Cargo.lock is out of date builds without it rather than failing.
 locked=--locked
-if cargo metadata --locked --format-version 1 2>&1 >/dev/null | grep -q 'lock file.*needs to be updated'; then
+if grep -q 'lock file.*needs to be updated' <<<"$(cargo metadata --locked --format-version 1 2>&1 >/dev/null)"; then
     warn "Cargo.lock does not match Cargo.toml; building with updated dependencies"
     locked=""
 fi
@@ -482,7 +540,7 @@ fi
 if [ -f "$manifest" ]; then
     grep -v '^#' "$manifest" | while IFS= read -r p; do
         [ -n "$p" ] || continue
-        if ! printf '%s' "$new_files" | grep -qxF "$p"; then
+        if ! grep -qxF "$p" <<<"$new_files"; then
             echo "    removing old $p"
             remove_path "$p"
         fi
