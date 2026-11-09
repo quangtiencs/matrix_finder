@@ -202,7 +202,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
 - **A terminal in a tab** (<kbd>Ctrl</kbd>+<kbd>`</kbd>), in the style of Ghostty:
   - GPU-drawn, with full VT/xterm emulation (alacritty_terminal): true colour, alternate screen, mouse reporting for vim/htop/tmux, and bracketed paste.
-  - 10,000 lines of scrollback.
+  - 10,000 lines of scrollback. Scrolling follows the finger on a trackpad and moves 3 lines per mouse wheel notch, like Ghostty; both speeds can be changed in *Settings → Terminal*.
   - Copy & paste with word, line and block selection.
   - **Links** (including OSC 8 hyperlinks) are highlighted, and <kbd>Ctrl</kbd>+click opens them.
   - Background tabs show activity and bell dots.

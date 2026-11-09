@@ -401,6 +401,9 @@ pub struct Settings {
     pub term_font_size: f32,
     pub term_scrollback: usize,
     pub term_copy_on_select: bool,
+    /// Lines scrolled per row of trackpad travel and per mouse wheel notch.
+    pub term_scroll_trackpad: f32,
+    pub term_scroll_wheel: f32,
     pub term_close_on_exit: bool,
     pub term_restore: bool,
     /// Always start in the user's home folder (one file tab, no terminal).
@@ -445,6 +448,9 @@ pub struct SavedPane {
 
 /// See `Settings::bookmark_defaults`.
 const BOOKMARK_DEFAULTS: u32 = 1;
+
+/// Allowed terminal scroll speeds (lines per trackpad row or wheel notch).
+pub const SCROLL_SPEEDS: std::ops::RangeInclusive<f32> = 0.1..=10.0;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -495,6 +501,8 @@ impl Default for Settings {
             term_font_size: crate::fonts::DEFAULT_TERM_SIZE,
             term_scrollback: 10_000,
             term_copy_on_select: false,
+            term_scroll_trackpad: 1.0,
+            term_scroll_wheel: 3.0,
             term_close_on_exit: true,
             term_restore: false,
             start_in_home: true,
@@ -572,6 +580,11 @@ impl Settings {
         self.default_terminal = self.default_terminal.min(self.terminal_profiles.len() - 1);
         if !(6.0..=40.0).contains(&self.term_font_size) {
             self.term_font_size = crate::fonts::DEFAULT_TERM_SIZE;
+        }
+        for (v, default) in [(&mut self.term_scroll_trackpad, 1.0), (&mut self.term_scroll_wheel, 3.0)] {
+            if !SCROLL_SPEEDS.contains(v) {
+                *v = default;
+            }
         }
         if !crate::fonts::UI_SIZES.contains(&self.ui_font_size) {
             self.ui_font_size = crate::fonts::DEFAULT_UI_SIZE;

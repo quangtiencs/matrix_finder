@@ -887,6 +887,8 @@ pub struct PaneUiCtx<'a> {
     pub focused: bool,
     pub term_font_size: f32,
     pub term_copy_on_select: bool,
+    /// Terminal scroll speed: trackpad, mouse wheel.
+    pub term_scroll: [f32; 2],
     /// The quick-filter categories.
     pub quick_filters: &'a [crate::config::QuickFilter],
 }
@@ -927,6 +929,7 @@ pub fn pane_ui(ui: &mut egui::Ui, pane: &mut Pane, side: usize, c: &PaneUiCtx) -
                 theme: tth,
                 font_size: c.term_font_size,
                 copy_on_select: c.term_copy_on_select,
+                scroll: c.term_scroll,
                 active: c.focused,
                 can_split: c.can_split,
                 in_split: c.pane_count > 1,
