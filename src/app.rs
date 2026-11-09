@@ -55,6 +55,15 @@ enum Dialog {
     /// An SFTP server whose host key is not known yet: trust it, or do not connect.
     TrustHostKey { profile: ConnectionProfile, fingerprint: String },
     Message { title: String, text: String },
+    /// Closing terminals that are running programs (named in `programs`).
+    CloseTerminals { target: CloseTarget, programs: Vec<String> },
+}
+
+/// What a confirmed `Dialog::CloseTerminals` closes.
+enum CloseTarget {
+    /// A window of the shown tab, by its view uid.
+    Window(u64),
+    Tabs(Vec<u64>),
 }
 
 enum After {
@@ -437,6 +446,48 @@ impl App {
         self.last_active = self.active;
         self.quick = None;
         pane
+    }
+
+    /// Programs running in the terminals among `panes`, each named once (none when
+    /// closing without asking is set in Settings → Terminal).
+    fn running_programs<'a>(&self, panes: impl IntoIterator<Item = &'a Pane>) -> Vec<String> {
+        let mut names: Vec<String> = Vec::new();
+        if self.cfg.term_confirm_close {
+            for name in panes.into_iter().filter_map(|p| p.tab().term.as_ref()?.running_program()) {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+            }
+        }
+        names
+    }
+
+    /// Close window `side`, first asking when its terminal is running a program.
+    fn request_close_pane(&mut self, side: usize) {
+        if self.panes.len() < 2 {
+            return self.request_close_tabs(&[self.live]);
+        }
+        let programs = self.running_programs(&self.panes[side..=side]);
+        if programs.is_empty() {
+            self.close_pane(side);
+        } else {
+            self.dialog = Some(Dialog::CloseTerminals { target: CloseTarget::Window(self.panes[side].tab().uid), programs });
+        }
+    }
+
+    /// Close tabs `uids`, first asking when their terminals are running programs.
+    fn request_close_tabs(&mut self, uids: &[u64]) {
+        let panes = uids.iter().flat_map(|&uid| match self.strip.tabs.iter().find(|w| w.uid == uid) {
+            _ if uid == self.live => &self.panes[..],
+            Some(w) => &w.panes[..],
+            None => &[],
+        });
+        let programs = self.running_programs(panes);
+        if programs.is_empty() {
+            self.close_tabs(uids);
+        } else {
+            self.dialog = Some(Dialog::CloseTerminals { target: CloseTarget::Tabs(uids.to_vec()), programs });
+        }
     }
 
     /// Close window `side`; the last window closes the tab.
@@ -1394,7 +1445,7 @@ impl App {
             Cmd::Split(dir, terminal) => {
                 let _ = self.split_pane(a, dir, terminal);
             }
-            Cmd::ClosePane => self.close_pane(a),
+            Cmd::ClosePane => self.request_close_pane(a),
             Cmd::TerminalProfile(i) => self.open_terminal_profile(Some(i)),
             Cmd::Rename => {
                 if self.panes[a].tab().marked.len() > 1 {
@@ -1815,8 +1866,8 @@ impl App {
             Action::GoToLastTab => self.strip.go_to(usize::MAX),
             Action::NewTab => self.new_tab(),
             Action::NewTerminalTab => self.new_terminal_here(None, None),
-            Action::CloseTab => self.close_tabs(&[self.live]),
-            Action::CloseWindow => self.close_pane(a),
+            Action::CloseTab => self.request_close_tabs(&[self.live]),
+            Action::CloseWindow => self.request_close_pane(a),
             Action::ReopenTab => self.reopen_closed_tab(),
             Action::FocusWindow(n) => {
                 if let Some(side) = self.layout.leaves().get(usize::from(n)).copied() {
@@ -2458,7 +2509,7 @@ impl App {
         match e {
             TabEvent::NewFiles { at, group } => self.new_files_tab(at, group, None),
             TabEvent::NewTerminal { at, group, profile } => self.new_terminal_tab(at, group, profile, None),
-            TabEvent::Close(uids) => self.close_tabs(&uids),
+            TabEvent::Close(uids) => self.request_close_tabs(&uids),
             TabEvent::Duplicate(uid) => self.duplicate_tab(uid),
             TabEvent::Focus => self.focus_window(),
             TabEvent::MergeIntoShown(uid) => self.merge_tab(uid, self.active, None),
@@ -2758,11 +2809,14 @@ impl App {
         }
     }
 
-    /// Quitting while jobs are running asks first; run once per frame, before input is used.
+    /// Quitting while jobs are running, or programs in terminals, asks first; run once
+    /// per frame, before input is used.
     fn quit_step(&mut self, ctx: &egui::Context) {
         let close = ctx.input(|i| i.viewport().close_requested());
         let asked = crate::chrome::take_native_quit_request();
-        let busy = !self.jobs.is_empty();
+        let jobs = !self.jobs.is_empty();
+        let terms = self.cfg.term_confirm_close && all_panes!(self).any(|p| p.tab().term.as_ref().is_some_and(|t| t.foreground_pid().is_some()));
+        let busy = jobs || terms;
         if close && busy && self.quit != Quit::Go {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
@@ -2776,7 +2830,7 @@ impl App {
             Quit::No if asked => self.quit = Quit::Go,
             // The last job ended while asking: nothing is left to ask about.
             Quit::Asking if !busy => self.quit = Quit::Go,
-            Quit::Stopping(since) if !busy || since.elapsed() > QUIT_WAIT => self.quit = Quit::Go,
+            Quit::Stopping(since) if !jobs || since.elapsed() > QUIT_WAIT => self.quit = Quit::Go,
             _ => {}
         }
         if self.quit == Quit::Go && !close {
@@ -2794,19 +2848,31 @@ impl App {
         crate::chrome::set_quit_guard(busy && self.quit != Quit::Go);
     }
 
-    /// The confirmation for quitting with jobs still running.
+    /// The confirmation for quitting with jobs, or programs in terminals, still running.
     fn quit_dialog(&mut self, ctx: &egui::Context) {
         let th = self.theme;
         let n = self.jobs.len();
+        let programs = self.running_programs(self.panes.iter().chain(self.strip.tabs.iter().flat_map(|w| w.panes.iter())));
         let stopping = matches!(self.quit, Quit::Stopping(_));
         let mut keep = false;
         let mut stop = false;
         egui::Modal::new(egui::Id::new("quit-confirm")).show(ctx, |ui| {
             ui.set_width(420.0);
-            ui.heading(t("Quit while transfers are running?"));
+            ui.heading(if n > 0 { t("Quit while transfers are running?") } else { t("Quit while programs are running?") });
             ui.add_space(6.0);
-            ui.label(format!("{n} {}", t("transfer(s) still running or waiting.")));
-            ui.label(RichText::new(t("Quitting stops them. What has not finished will not be completed; files already finished are kept.")).color(th.weak));
+            if n > 0 {
+                ui.label(format!("{n} {}", t("transfer(s) still running or waiting.")));
+                ui.label(RichText::new(t("Quitting stops them. What has not finished will not be completed; files already finished are kept.")).color(th.weak));
+            }
+            if !programs.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(t("Still running in terminals:"));
+                    ui.label(RichText::new(programs.join(", ")).strong());
+                });
+                if n == 0 {
+                    ui.label(RichText::new(t("Quitting stops them.")).color(th.weak));
+                }
+            }
             ui.add_space(14.0);
             ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if stopping {
@@ -2814,15 +2880,18 @@ impl App {
                     ui.spinner();
                     return;
                 }
-                let b = egui::Button::new(RichText::new(t("Stop and quit")).strong().color(egui::Color32::WHITE)).fill(th.danger).min_size(egui::vec2(96.0, 30.0));
+                let (go, back) = if n > 0 { (t("Stop and quit"), t("Keep transferring")) } else { (t("Quit"), t("Cancel")) };
+                let b = egui::Button::new(RichText::new(go).strong().color(egui::Color32::WHITE)).fill(th.danger).min_size(egui::vec2(96.0, 30.0));
                 stop = ui.add(b).clicked();
-                keep = ui.add(egui::Button::new(t("Keep transferring")).min_size(egui::vec2(96.0, 30.0))).clicked();
+                keep = ui.add(egui::Button::new(back).min_size(egui::vec2(96.0, 30.0))).clicked();
             });
         });
         if keep {
             self.quit = Quit::No;
         }
-        if stop {
+        if stop && n == 0 {
+            self.quit = Quit::Go;
+        } else if stop {
             for j in &self.jobs {
                 j.job.progress.cancel();
             }
@@ -3188,7 +3257,7 @@ impl App {
                     ui.close_menu();
                 }
                 if ui.button(format!("{}\t{}", t("Close tab"), hint(Action::CloseTab))).clicked() {
-                    self.close_tabs(&[self.live]);
+                    self.request_close_tabs(&[self.live]);
                     ui.close_menu();
                 }
                 if ui.add_enabled(!self.closed_tabs.is_empty(), egui::Button::new(format!("{}\t{}", t("Reopen closed tab"), hint(Action::ReopenTab)))).clicked() {
@@ -4064,7 +4133,7 @@ impl App {
             }
             PalItem::Act(act) => match act {
                 Act::NewTab => self.new_tab(),
-                Act::CloseTab => self.close_tabs(&[self.live]),
+                Act::CloseTab => self.request_close_tabs(&[self.live]),
                 Act::SwapPanels => {
                     self.swap_with_other();
                     self.quick = None;
@@ -4398,7 +4467,7 @@ impl App {
                 self.panes[side].tab_mut().clear_search(&lc!(self));
             }
             PaneEvent::DragOver(loc) => self.drag_target = Some(loc),
-            PaneEvent::ClosePane => self.close_pane(side),
+            PaneEvent::ClosePane => self.request_close_pane(side),
             PaneEvent::Drop(pl, target) => self.handle_drop(&pl, target),
             PaneEvent::Sort(k) => {
                 self.active = side;
@@ -4678,6 +4747,19 @@ impl App {
                     ui.label(t("This server's identity has not been seen before. Connect only if this fingerprint matches the one its administrator gave you:"));
                     ui.add(egui::Label::new(RichText::new(fingerprint.as_str()).monospace()).selectable(true));
                 }
+                Dialog::CloseTerminals { target, programs } => {
+                    ui.heading(match target {
+                        CloseTarget::Window(_) => t("Close this window?"),
+                        CloseTarget::Tabs(uids) if uids.len() > 1 => t("Close these tabs?"),
+                        CloseTarget::Tabs(_) => t("Close this tab?"),
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(t("Still running:"));
+                        ui.label(RichText::new(programs.join(", ")).strong());
+                    });
+                    ui.label(RichText::new(t("Closing stops what is still running.")).color(th.weak));
+                }
                 Dialog::Message { title, text } => {
                     ui.heading(title.as_str());
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
@@ -4709,9 +4791,10 @@ impl App {
                     Dialog::Unpack { .. } => t("Extract"),
                     Dialog::OpenWith { .. } => t("Open"),
                     Dialog::ArchivePassword { .. } => t("Unlock"),
+                    Dialog::CloseTerminals { .. } => t("Close"),
                     _ => t("OK"),
                 };
-                let danger = matches!(dialog, Dialog::Delete { trash: false, .. });
+                let danger = matches!(dialog, Dialog::Delete { trash: false, .. } | Dialog::CloseTerminals { .. });
                 let (fill, fg) = if danger { (th.danger, egui::Color32::WHITE) } else { (th.accent, th.on_accent()) };
                 let ok = ui.add(egui::Button::new(RichText::new(ok_label).color(fg).strong()).fill(fill).min_size(egui::vec2(96.0, 30.0)));
                 // Trusting a server takes a deliberate click, not a stray Enter.
@@ -4847,6 +4930,12 @@ impl App {
                 }
             }
             Dialog::Delete { items, trash } => self.do_delete(items, trash),
+            Dialog::CloseTerminals { target: CloseTarget::Window(view), .. } => {
+                if let Some(side) = self.panes.iter().position(|p| p.tab().uid == view) {
+                    self.close_pane(side);
+                }
+            }
+            Dialog::CloseTerminals { target: CloseTarget::Tabs(uids), .. } => self.close_tabs(&uids),
             Dialog::Pack { items, src_dir, name, dest_dir, format, level } => {
                 let dest = PathBuf::from(&dest_dir).join(format!("{}.{}", name.trim(), format.extension()));
                 if dest.exists() {

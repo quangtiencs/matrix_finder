@@ -3291,6 +3291,7 @@ dependencies = [
  "hayro",
  "hdf5-pure",
  "image",
+ "libc",
  "md-5",
  "objc2 0.6.5",
  "open",

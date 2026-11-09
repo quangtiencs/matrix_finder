@@ -950,6 +950,57 @@ fn default_apps_choose_and_reset() {
 /// Colour themes and fonts through the Settings tab, as a user would pick them.
 #[test]
 #[ignore]
+fn terminal_close_asks_while_a_program_runs() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let term = h.state_mut().shot_terminal(&d.home, None, None);
+    let tabs = h.state().strip.tabs.len();
+    let running = |app: &App| app.panes[0].tab().term.as_ref().and_then(|t| t.running_program());
+    term_type(&mut h, 0, term, "sleep 30\n");
+    wait_until(&mut h, 3.0, |app| running(app).is_some());
+    assert_eq!(running(h.state()).as_deref(), Some("sleep"));
+
+    // Closing the tab asks; Cancel keeps it.
+    let live = h.state().live;
+    h.state_mut().request_close_tabs(&[live]);
+    assert!(matches!(&h.state().dialog, Some(Dialog::CloseTerminals { programs, .. }) if programs == &["sleep"]));
+    settle(&mut h, 2);
+    h.get_by_label(&t("Cancel")).click();
+    settle(&mut h, 2);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs);
+
+    // Quitting asks too, naming the program.
+    assert!(matches!(h.state().quit, Quit::No));
+    h.state_mut().quit = Quit::Asking;
+    settle(&mut h, 2);
+    h.get_by_label("sleep");
+    h.get_by_label(&t("Cancel")).click();
+    settle(&mut h, 2);
+    assert!(matches!(h.state().quit, Quit::No));
+
+    // Back at the prompt: closing goes ahead without asking.
+    term_type(&mut h, 0, term, "\x03");
+    wait_until(&mut h, 3.0, |app| running(app).is_none());
+    assert_eq!(running(h.state()), None);
+    let live = h.state().live;
+    h.state_mut().request_close_tabs(&[live]);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs - 1);
+
+    // With the setting off, a running program does not hold closing back.
+    let term = h.state_mut().shot_terminal(&d.home, None, None);
+    term_type(&mut h, 0, term, "sleep 30\n");
+    wait_until(&mut h, 3.0, |app| running(app).is_some());
+    h.state_mut().cfg.term_confirm_close = false;
+    let live = h.state().live;
+    h.state_mut().request_close_tabs(&[live]);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs - 1);
+}
+
+#[test]
+#[ignore]
 fn settings_fonts_and_terminal_themes() {
     let d = demo_env();
     let mut h = app_harness(&settings("Breeze Light", &d), "gnome");

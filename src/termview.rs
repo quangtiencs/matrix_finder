@@ -137,8 +137,11 @@ pub struct TermSession {
     /// Current directory of the shell (tracked on Linux, else the start folder).
     pub cwd: PathBuf,
     cwd_at: Instant,
-    #[allow(dead_code)]
+    #[cfg_attr(not(unix), allow(dead_code))]
     pid: Option<u32>,
+    /// A second handle on the pty, to ask which process group is in the foreground.
+    #[cfg(unix)]
+    pty: Option<std::fs::File>,
     /// argv the session was started with (for restart).
     pub argv: Option<Vec<String>>,
     pub exited: Option<i32>,
@@ -212,6 +215,8 @@ impl TermSession {
         let pid = Some(pty.child().id());
         #[cfg(not(unix))]
         let pid = None;
+        #[cfg(unix)]
+        let pty_file = pty.file().try_clone().ok();
         let (tx, rx) = channel();
         let dirty = Arc::new(AtomicBool::new(true));
         let listener = Listener { tx, ctx: ctx.clone(), dirty: dirty.clone() };
@@ -230,6 +235,8 @@ impl TermSession {
             cwd: dir.to_path_buf(),
             cwd_at: Instant::now(),
             pid,
+            #[cfg(unix)]
+            pty: pty_file,
             argv,
             exited: None,
             activity: false,
@@ -337,6 +344,32 @@ impl TermSession {
         } else {
             title.to_string()
         }
+    }
+
+    /// The program running in the foreground in place of the shell (e.g. "vim"),
+    /// or `None` at the shell's prompt. Unix only: elsewhere always `None`.
+    pub fn running_program(&self) -> Option<String> {
+        let pid = self.foreground_pid()?;
+        Some(process_name(pid).unwrap_or_else(|| self.activity_label()))
+    }
+
+    /// The foreground process group of the terminal when it is not the shell's.
+    /// The shell leads its own session, so at its prompt the two are the same.
+    pub fn foreground_pid(&self) -> Option<u32> {
+        if self.exited.is_some() {
+            return None;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::fd::AsRawFd;
+            let fd = self.pty.as_ref()?.as_raw_fd();
+            // SAFETY: `fd` is a pty descriptor this session owns and keeps open.
+            let pgrp = unsafe { libc::tcgetpgrp(fd) };
+            if pgrp > 0 && Some(pgrp as u32) != self.pid {
+                return Some(pgrp as u32);
+            }
+        }
+        None
     }
 
     /// A short label for the tab.
@@ -1187,6 +1220,26 @@ fn open_link(url: &str, out: &mut TermResponse) {
         }
     }
     let _ = open::that_detached(url);
+}
+
+/// The command name of process `pid`, if the system tells.
+fn process_name(pid: u32) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let mut buf = [0u8; 256];
+        // SAFETY: the buffer is valid for its length; proc_name writes at most that much.
+        let n = unsafe { libc::proc_name(pid as libc::c_int, buf.as_mut_ptr().cast(), buf.len() as u32) };
+        (n > 0).then(|| String::from_utf8_lossy(&buf[..n as usize]).into_owned())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        let _ = pid;
+        None
+    }
 }
 
 fn next_id() -> u64 {

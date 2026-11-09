@@ -206,6 +206,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - Copy & paste with word, line and block selection.
   - **Links** (including OSC 8 hyperlinks) are highlighted, and <kbd>Ctrl</kbd>+click opens them.
   - Background tabs show activity and bell dots.
+  - Closing a window, a tab or the app while a program (not the shell) is running in a terminal asks first and names the program; this can be turned off in *Settings → Terminal*.
   - An **info bar** on every terminal window shows what is running and the folder, shortened to `~/…` (hover over it for the full path). Its buttons open the folder in a file window beside the terminal, copy the path, clear the screen, restart a shell that has exited, change the text size, and split or close the window.
 - **Profiles**: <kbd>F9</kbd> opens the default profile, and the **▾** arrow next to the terminal button lists every profile. A profile combines:
   - **a terminal**: the built-in tab, the native OS terminal, Ghostty, iTerm2, Windows Terminal, PowerShell, Alacritty, Kitty, WezTerm, Konsole, GNOME Terminal, or a custom command with `{dir}` / `{cmd}`

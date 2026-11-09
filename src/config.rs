@@ -405,6 +405,8 @@ pub struct Settings {
     pub term_scroll_trackpad: f32,
     pub term_scroll_wheel: f32,
     pub term_close_on_exit: bool,
+    /// Ask before closing a terminal (window, tab, the app) that is running a program.
+    pub term_confirm_close: bool,
     pub term_restore: bool,
     /// Always start in the user's home folder (one file tab, no terminal).
     pub start_in_home: bool,
@@ -504,6 +506,7 @@ impl Default for Settings {
             term_scroll_trackpad: 1.0,
             term_scroll_wheel: 3.0,
             term_close_on_exit: true,
+            term_confirm_close: true,
             term_restore: false,
             start_in_home: true,
             integrated_titlebar: true,
