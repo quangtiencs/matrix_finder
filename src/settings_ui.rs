@@ -738,6 +738,7 @@ impl App {
                         changed |= toggle_row(ui, th, &mut self.cfg.term_restore, &t("Reopen terminal tabs at start"), &hint);
                     });
                 });
+                changed |= self.agent_settings(ui, th);
             }
             SettingsPage::Backup => {
                 settings_section(ui, th, &t("Backup & sync"), &t("Settings export never includes saved passwords."));
@@ -811,6 +812,78 @@ impl App {
             let scheme = if scheme.is_empty() { self.theme } else { theme::term_by_name(&scheme) };
             crate::termview::preview(ui, scheme, self.cfg.term_font_size, ui.available_width());
             ui.add_space(4.0);
+        });
+        changed
+    }
+
+    /// Settings → Terminal → AI button: a button in the terminals' info bars that
+    /// starts an AI coding agent, and which agent that is.
+    fn agent_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
+        use crate::agents::{self, ALL};
+        let mut changed = false;
+        settings_section(ui, th, &t("AI button"), &t("A button in the terminal's info bar starts an AI coding agent at the prompt. It works while the terminal is idle, with no program running."));
+        if self.cfg.term_agents {
+            self.find_agents(false);
+        }
+        card(ui, th, |ui| {
+            changed |= toggle_row(ui, th, &mut self.cfg.term_agents, &t("Show the AI button"), &t("Off: Matrix Finder does not look for AI coding agents"));
+            let searching = self.agents_rx.is_some();
+            let found = self.agents.clone().unwrap_or_default();
+            let current = agents::pick(&found, &self.cfg.term_agent).map(|f| f.id);
+            ui.add_enabled_ui(self.cfg.term_agents, |ui| {
+                row_line(ui, th);
+                ui.add_space(4.0);
+                ui.label(RichText::new(t("The button starts")).color(th.text));
+                // Automatic, then one row per agent: its logo, name and what was found.
+                let auto_hint = match current {
+                    Some(id) if self.cfg.term_agent.is_empty() => agents::get(id).map(|a| a.name.to_string()).unwrap_or_default(),
+                    _ => String::new(),
+                };
+                let mut rows: Vec<(&str, Option<&'static agents::Agent>)> = vec![("", None)];
+                rows.extend(ALL.iter().map(|a| (a.id, Some(a))));
+                for (id, a) in rows {
+                    let f = a.and_then(|a| found.iter().find(|f| f.id == a.id));
+                    let available = a.is_none() || f.is_some();
+                    let selected = self.cfg.term_agent == id;
+                    let (name, hint) = match (a, f) {
+                        (None, _) => (t("Automatic: the first one installed"), auto_hint.clone()),
+                        (Some(a), _) if searching => (a.name.to_string(), t("Looking…")),
+                        (Some(a), None) => (a.name.to_string(), t("Not found")),
+                        (Some(a), Some(f)) => (a.name.to_string(), f.run.clone()),
+                    };
+                    let row = ui.allocate_ui_with_layout(vec2(ui.available_width(), ROW_H), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.set_min_height(ROW_H);
+                        let (mr, _) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::hover());
+                        let ring = if available { th.weak } else { th.weak.gamma_multiply(0.4) };
+                        ui.painter().circle_stroke(mr.center(), 7.0, Stroke::new(1.3_f32, if selected { th.accent } else { ring }));
+                        if selected {
+                            ui.painter().circle_filled(mr.center(), 4.0, th.accent);
+                        }
+                        ui.add_space(4.0);
+                        let (ir, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
+                        if let Some(a) = a {
+                            agents::paint_logo(ui.painter(), ir.shrink(3.0), a, if f.is_some() { th.text } else { th.weak.gamma_multiply(0.6) });
+                        }
+                        ui.add_space(6.0);
+                        row_label(ui, th, (ui.available_width() - 8.0).max(100.0), ROW_H, &name, &hint);
+                    });
+                    let resp = ui.interact(row.response.rect, ui.id().with(("ai-agent", id)), if available { Sense::click() } else { Sense::hover() });
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, available, selected, &name));
+                    if available && resp.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                    if available && resp.clicked() && !selected {
+                        self.cfg.term_agent = id.to_string();
+                        changed = true;
+                    }
+                }
+                row_line(ui, th);
+                ui.add_space(4.0);
+                if ui.add_enabled(!searching, egui::Button::new(t("Look again"))).on_hover_text(t("After installing or removing an agent")).clicked() {
+                    self.find_agents(true);
+                }
+                ui.add_space(2.0);
+            });
         });
         changed
     }

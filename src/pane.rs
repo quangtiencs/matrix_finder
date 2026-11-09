@@ -863,6 +863,8 @@ pub enum PaneEvent {
     SettingsArea(Rect),
     /// A Transfers window: the area its content goes in (the app draws it).
     TransfersArea(Rect),
+    /// An AI coding agent button in a terminal's info bar.
+    Agent(crate::agents::AgentAct),
 }
 
 #[derive(Clone)]
@@ -891,6 +893,10 @@ pub struct PaneUiCtx<'a> {
     pub term_scroll: [f32; 2],
     /// The quick-filter categories.
     pub quick_filters: &'a [crate::config::QuickFilter],
+    /// The agent the AI button in terminal info bars starts (`None`: no button), and
+    /// every agent found (to switch from its menu).
+    pub agent: Option<&'a crate::agents::Found>,
+    pub agents: &'a [crate::agents::Found],
 }
 
 pub const SIDE_PAD: f32 = 10.0;
@@ -1285,7 +1291,8 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
         ui.add_space(4.0);
 
         // Labels get what the buttons leave.
-        let buttons = 6.0 + if exited.is_some() { 1.0 } else { 0.0 } + if c.pane_count > 1 { 1.0 } else { 0.0 };
+        let agent = c.agent.and_then(|f| crate::agents::get(f.id));
+        let buttons = 6.0 + if exited.is_some() { 1.0 } else { 0.0 } + if c.pane_count > 1 { 1.0 } else { 0.0 } + if agent.is_some() { 1.3 } else { 0.0 };
         let room = (ui.available_width() - buttons * 28.0 - SIDE_PAD).max(40.0);
         let (lr, lresp) = ui.allocate_exact_size(vec2(room, 26.0), Sense::click());
         let name = term.activity_label();
@@ -1332,7 +1339,42 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
             }
         });
 
-        // Buttons.
+        // Buttons: the AI button first, a little apart from the rest. It works only
+        // while the shell waits at its prompt.
+        if let Some(a) = agent {
+            use crate::agents::AgentAct;
+            let idle = term.is_idle();
+            let r = icons::icon_button(ui, 26.0, idle, th, |p, r, col| crate::agents::paint_logo(p, r.shrink(0.5), a, col));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, idle, a.name));
+            let r = r.on_hover_ui(|ui| {
+                ui.label(egui::RichText::new(a.name).strong());
+                ui.label(if idle { t("Start it in this terminal") } else { t("Available when the terminal is idle (no program running)") });
+            });
+            if r.clicked() && idle {
+                ev.push(PaneEvent::Agent(AgentAct::Run(a.id)));
+            }
+            r.context_menu(|ui| {
+                if c.agents.len() > 1 {
+                    for f in c.agents {
+                        let Some(other) = crate::agents::get(f.id) else { continue };
+                        if ui.radio(other.id == a.id, other.name).clicked() {
+                            ev.push(PaneEvent::Agent(AgentAct::Choose(other.id)));
+                            ui.close_menu();
+                        }
+                    }
+                    ui.separator();
+                }
+                if ui.button(t("Hide the AI button")).clicked() {
+                    ev.push(PaneEvent::Agent(AgentAct::HideButton));
+                    ui.close_menu();
+                }
+                if ui.button(t("AI button settings…")).clicked() {
+                    ev.push(PaneEvent::Agent(AgentAct::Settings));
+                    ui.close_menu();
+                }
+            });
+            ui.add_space(8.0);
+        }
         if icons::icon_button(ui, 26.0, true, th, icons::mi_open).on_hover_text(t("Show this folder in a file window")).clicked() {
             match (c.can_split[0], c.can_split[2]) {
                 (true, _) => ev.push(PaneEvent::Command(Cmd::Split(SplitDir::Right, false))),

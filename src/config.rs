@@ -407,6 +407,10 @@ pub struct Settings {
     pub term_close_on_exit: bool,
     /// Ask before closing a terminal (window, tab, the app) that is running a program.
     pub term_confirm_close: bool,
+    /// An AI button in a terminal's info bar that starts an AI coding agent.
+    pub term_agents: bool,
+    /// The agent it starts (`agents::Agent::id`); empty: the first one installed.
+    pub term_agent: String,
     pub term_restore: bool,
     /// Always start in the user's home folder (one file tab, no terminal).
     pub start_in_home: bool,
@@ -507,6 +511,8 @@ impl Default for Settings {
             term_scroll_wheel: 3.0,
             term_close_on_exit: true,
             term_confirm_close: true,
+            term_agents: true,
+            term_agent: String::new(),
             term_restore: false,
             start_in_home: true,
             integrated_titlebar: true,
