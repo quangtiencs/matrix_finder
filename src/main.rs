@@ -68,6 +68,9 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: viewport
             .with_title("Matrix Finder")
+            // Wayland app id / X11 WM_CLASS: matches the .desktop file scripts/install.sh
+            // installs, so the dock shows the app's icon and name.
+            .with_app_id("org.matrixfinder.MatrixFinder")
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([720.0, 420.0])
             .with_drag_and_drop(true),

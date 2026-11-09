@@ -478,6 +478,24 @@ NOT name LIKE '.%' OR (ext = 'md' AND size < 4KB)
 
 ## 🛠️ Build from source
 
+### Install script (macOS, Ubuntu/Debian, Fedora)
+
+`scripts/install.sh` builds Matrix Finder and installs it. It installs the packages and Rust it needs (it asks first), builds, and installs:
+
+- **macOS**: `Matrix Finder.app` in `/Applications` (or `~/Applications`) and a `matrix_finder` command.
+- **Linux**: the `matrix_finder` command plus a menu entry and icons in `~/.local` (`--system` installs for all users under `/usr/local`).
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash   # newest release
+scripts/install.sh                     # this checkout
+scripts/install.sh --version 0.3.0     # a given release (--ref for a branch or commit)
+scripts/install.sh --uninstall         # remove it again (settings are kept)
+```
+
+Run it again to upgrade: the new version replaces the old one in place, and files the old one had but the new one does not are removed. Source downloads and build output are kept in `~/.cache/matrix_finder` (`~/Library/Caches/matrix_finder` on macOS), so upgrades build faster. `--help` lists every option.
+
+### By hand
+
 Requires **Rust 1.85+** and a C/C++ compiler (the RAR reader and libssh2 are written in C/C++).
 
 ```bash
@@ -488,7 +506,7 @@ The binary is written to `target/release/matrix_finder` (`.exe` on Windows).
 
 | Platform | Setup |
 |---|---|
-| 🐧 **Linux** | Install the OpenSSL headers and the X11/Wayland libraries egui needs. On Debian/Ubuntu: `sudo apt install build-essential pkg-config libssl-dev libxkbcommon-x11-0 libgl1` |
+| 🐧 **Linux** | Install a C/C++ compiler, pkg-config, the OpenSSL headers and the X11/Wayland libraries egui needs. Debian/Ubuntu: `sudo apt install build-essential pkg-config libssl-dev libxkbcommon-x11-0 libgl1 libegl1`. Fedora: `sudo dnf install gcc gcc-c++ make pkgconf-pkg-config openssl-devel libxkbcommon-x11 mesa-libGL mesa-libEGL` |
 | 🍎 **macOS** | Install the Xcode command line tools. For SFTP, use Homebrew OpenSSL (`brew install openssl@3`) or build with `--features vendored-openssl` |
 | 🪟 **Windows** | Install the MSVC build tools. SFTP uses the built-in Windows crypto (WinCNG), so OpenSSL is not needed |
 
