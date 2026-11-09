@@ -1833,12 +1833,16 @@ impl App {
                 _ => true,
             });
         });
+        let shortcut_pressed = !actions.is_empty();
         for action in actions {
             self.run_shortcut(ctx, action);
             // It may have opened something, or switched between a terminal and files.
             if self.dialog.is_some() || self.palette.open || self.panes[self.active].tab().is_terminal() != term_mode {
                 return;
             }
+        }
+        if !term_mode && !shortcut_pressed && self.type_to_search(ctx) {
+            return;
         }
         if !term_mode {
             self.file_list_keys(ctx);
@@ -1965,6 +1969,29 @@ impl App {
     }
 
     /// The fixed keys of a file list: they are not shortcuts but how a list works.
+    /// Typing in a file window opens the search box with what was typed: it filters the
+    /// folder as you type, Enter keeps the filter, Esc closes it. Space marks files, so it
+    /// does not start a search.
+    fn type_to_search(&mut self, ctx: &egui::Context) -> bool {
+        if !self.panes[self.active].tab().is_files() {
+            return false;
+        }
+        let typed: String = ctx.input(|i| {
+            // Shortcut keys; Ctrl+Alt is AltGr, which types characters on Windows.
+            let m = i.modifiers;
+            if m.mac_cmd || ((m.ctrl || m.command) && !m.alt) {
+                return String::new();
+            }
+            i.events.iter().filter_map(|e| if let egui::Event::Text(s) = e { Some(s.as_str()) } else { None }).collect()
+        });
+        if typed.is_empty() || typed.starts_with(char::is_whitespace) || typed.chars().any(char::is_control) {
+            return false;
+        }
+        ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
+        self.palette.open_with(&typed);
+        true
+    }
+
     fn file_list_keys(&mut self, ctx: &egui::Context) {
         let keys: Vec<(Key, Modifiers)> = ctx.input(|i| {
             i.events
@@ -5118,6 +5145,7 @@ impl App {
                         ("↑ ↓ PgUp PgDn Home End".to_string(), t("Move cursor (Shift = select)")),
                         ("Enter".to_string(), t("Open folder / archive / file")),
                         ("Space / Insert".to_string(), t("Select item")),
+                        (t("Typing"), t("Search this folder (Enter keeps the filter, Esc closes)")),
                         ("Esc".to_string(), t("Cancel dragging")),
                         (t("Drag & drop"), t("Copy to a folder or the other panel (Shift = move)")),
                         (format!("{copy_paste} ({})", t("terminal")), t("Copy / paste")),

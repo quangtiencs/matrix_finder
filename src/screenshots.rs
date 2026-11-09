@@ -1705,6 +1705,67 @@ fn press_chord(h: &mut Harness<'static, App>, text: &str) {
     key_press(h, c.key, None, m);
 }
 
+/// Typing in a file window opens the search box with the typed text, which filters the
+/// folder; Esc puts the folder back, Enter keeps the filter. Space still marks files.
+#[test]
+#[ignore]
+fn type_to_search_in_a_file_window() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let downloads = d.home.join("Downloads");
+    h.state_mut().shot_pane(0, &downloads, None);
+    h.state_mut().active = 0;
+    settle(&mut h, 3);
+    let names = |app: &App| -> Vec<String> {
+        let tab = app.panes[0].tab();
+        tab.view.iter().map(|&i| tab.entries[i].name.clone()).filter(|n| n != "..").collect()
+    };
+    let all = names(h.state());
+    assert!(all.len() > 2, "{all:?}");
+
+    // Two letters typed in one frame, then more in the open box.
+    push(&mut h, Event::Text("ph".into()));
+    settle(&mut h, 2);
+    assert!(h.state().palette.open);
+    assert_eq!(h.state().palette.query(), "ph");
+    push(&mut h, Event::Text("oto".into()));
+    settle(&mut h, 2);
+    assert_eq!(h.state().palette.query(), "photo");
+    assert_eq!(names(h.state()), ["photo.jpg"], "filtered while typing");
+
+    // Esc: closed, the whole folder again.
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert!(!h.state().palette.open);
+    assert_eq!(names(h.state()), all);
+
+    // Enter keeps the filter.
+    push(&mut h, Event::Text("SHA".into()));
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    assert!(!h.state().palette.open);
+    assert_eq!(h.state().panes[0].tab().filter_text, "SHA");
+    assert_eq!(names(h.state()), ["SHA256SUMS"]);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert_eq!(names(h.state()), all, "Esc in the list turns the filter off");
+
+    // Space marks the file under the cursor instead.
+    h.state_mut().panes[0].tab_mut().cursor = 1;
+    push(&mut h, Event::Key { key: Key::Space, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+    push(&mut h, Event::Text(" ".into()));
+    settle(&mut h, 2);
+    assert!(!h.state().palette.open);
+    assert_eq!(h.state().panes[0].tab().marked.len(), 1);
+
+    // Text that comes with a shortcut does not start a search.
+    h.state_mut().panes[0].tab_mut().marked.clear();
+    h.input_mut().modifiers = Modifiers::COMMAND;
+    push(&mut h, Event::Text("a".into()));
+    settle(&mut h, 1);
+    h.input_mut().modifiers = Modifiers::NONE;
+    settle(&mut h, 1);
+    assert!(!h.state().palette.open);
+}
+
 /// Windows and tabs by keyboard, numbered windows, and keys a terminal keeps. The keys
 /// here are bound in the settings, as the defaults differ by system.
 #[test]
