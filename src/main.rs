@@ -69,8 +69,9 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         viewport: viewport
             .with_title("Matrix Finder")
-            // Wayland app id / X11 WM_CLASS: matches the .desktop file scripts/install.sh
-            // installs, so the dock shows the app's icon and name.
+            // Wayland app id: the name of the .desktop file scripts/install.sh installs, so
+            // the dock shows the app's icon and name. egui applies it only on Wayland; on X11
+            // the window class is the program's name, which the file's StartupWMClass matches.
             .with_app_id("org.matrixfinder.MatrixFinder")
             .with_inner_size([1280.0, 800.0])
             .with_min_inner_size([720.0, 420.0])
