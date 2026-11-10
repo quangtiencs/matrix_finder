@@ -107,8 +107,31 @@ pub fn known_shells() -> Vec<String> {
     v
 }
 
-/// Command line (argv) that starts the profile's shell, runs its startup
-/// script, and leaves an interactive shell open. `None` = terminal default.
+/// Built-in terminal: the command line that starts the profile's shell, as a login
+/// shell like the default one (`None`: the default shell). Its startup script is
+/// typed at the prompt once the shell has started (`startup_lines`), so the shell's
+/// own startup files (PATH, conda, nvm, aliases…) have run by then.
+pub fn shell_argv(p: &TerminalProfile) -> Option<Vec<String>> {
+    let shell = p.shell.trim();
+    if shell.is_empty() {
+        return None;
+    }
+    let base = shell.rsplit(['/', '\\']).next().unwrap_or(shell).to_lowercase();
+    Some(match base.trim_end_matches(".exe") {
+        "pwsh" | "powershell" | "cmd" => vec![shell.to_string()],
+        _ => vec![shell.to_string(), "-l".into()],
+    })
+}
+
+/// The lines of the profile's startup script that the built-in terminal types at
+/// the prompt, one at a time (blank lines left out).
+pub fn startup_lines(p: &TerminalProfile) -> Vec<String> {
+    p.startup.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
+}
+
+/// External terminals: the command line (argv) that starts the profile's shell,
+/// runs its startup script, and leaves an interactive shell open. `None` = the
+/// terminal's default.
 pub fn startup_argv(p: &TerminalProfile) -> Option<Vec<String>> {
     let script = p.startup.trim();
     let shell = p.shell.trim();
@@ -382,6 +405,24 @@ mod tests {
         p.shell = "C:\\Windows\\System32\\cmd.exe".into();
         p.startup = "cd src\ndir".into();
         assert_eq!(startup_argv(&p).unwrap()[1..], ["/K".to_string(), "cd src & dir".to_string()]);
+    }
+
+    #[test]
+    fn builtin_shell_then_typed_script() {
+        let mut p = TerminalProfile::default();
+        assert_eq!(shell_argv(&p), None);
+        p.startup = "  source .venv/bin/activate\n\n  clear  \n".into();
+        // The script never goes on the command line: the default login shell starts.
+        assert_eq!(shell_argv(&p), None);
+        assert_eq!(startup_lines(&p), ["source .venv/bin/activate", "clear"]);
+        p.shell = "/bin/zsh".into();
+        assert_eq!(shell_argv(&p), Some(vec!["/bin/zsh".to_string(), "-l".into()]));
+        p.shell = "pwsh".into();
+        assert_eq!(shell_argv(&p), Some(vec!["pwsh".to_string()]));
+        p.shell = "C:\\Windows\\System32\\cmd.exe".into();
+        assert_eq!(shell_argv(&p), Some(vec!["C:\\Windows\\System32\\cmd.exe".to_string()]));
+        p.startup = String::new();
+        assert!(startup_lines(&p).is_empty());
     }
 
     #[test]

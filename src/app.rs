@@ -2324,9 +2324,10 @@ impl App {
 
     fn spawn_terminal(&self, dir: &Path, profile: Option<usize>) -> Res<TermSession> {
         let prof = profile.or(Some(self.cfg.default_terminal)).and_then(|i| self.cfg.terminal_profiles.get(i));
-        let argv = prof.and_then(terminal::startup_argv);
+        let argv = prof.and_then(terminal::shell_argv);
         let dir = if dir.is_dir() { dir.to_path_buf() } else { dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")) };
         let mut s = TermSession::spawn(&self.egui_ctx, &dir, argv, self.cfg.term_scrollback)?;
+        s.run_at_start(prof.map(terminal::startup_lines).unwrap_or_default());
         s.theme = prof.filter(|p| !p.theme.is_empty()).map(|p| theme::term_by_name(&p.theme));
         s.profile = prof.map(|p| p.name.clone());
         Ok(s)
@@ -2591,11 +2592,12 @@ impl App {
         if r.restart {
             let tab = self.panes[side].tab();
             if let Some(term) = &tab.term {
-                let (dir, argv, th) = (term.cwd.clone(), term.argv.clone(), term.theme);
+                let (dir, argv, th, startup) = (term.cwd.clone(), term.argv.clone(), term.theme, term.startup.clone());
                 let dir = if dir.is_dir() { dir } else { dirs::home_dir().unwrap_or_default() };
                 match TermSession::spawn(&self.egui_ctx, &dir, argv, self.cfg.term_scrollback) {
                     Ok(mut s) => {
                         s.theme = th;
+                        s.run_at_start(startup);
                         self.panes[side].tab_mut().term = Some(Box::new(s));
                     }
                     Err(e) => self.toast(format!("{}: {e}", t("Cannot start terminal")), true),

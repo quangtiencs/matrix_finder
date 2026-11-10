@@ -1089,6 +1089,31 @@ fn terminal_ai_button() {
     assert!(h.query_by_label("Claude Code").is_none());
 }
 
+/// A profile's startup script runs at the prompt of a started shell: what the login
+/// and startup files set up (variables, functions) is there, even when they are slow.
+#[test]
+#[ignore]
+fn terminal_startup_script_after_shell_start() {
+    let d = demo_env();
+    if !Path::new("/bin/zsh").exists() {
+        eprintln!("skipped: no zsh");
+        return;
+    }
+    touch(&d.home.join(".zprofile"), b"export MF_LOGIN=from-zprofile\n");
+    let rc = std::fs::read_to_string(d.home.join(".zshrc")).unwrap_or_default();
+    touch(&d.home.join(".zshrc"), format!("{rc}sleep 1\nmf_rc_fn() {{ echo from-zshrc; }}\n").as_bytes());
+    let out = d.home.join("startup-out.txt");
+    let _ = std::fs::remove_file(&out);
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.terminal_profiles[0].shell = "/bin/zsh".into();
+    cfg.terminal_profiles[0].startup = "mf_rc_fn > ~/startup-out.txt\n\necho \"$MF_LOGIN\" >> ~/startup-out.txt".into();
+    let mut h = app_harness(&cfg, "gnome");
+    let home = d.home.clone();
+    h.state_mut().shot_terminal(&home, None, None);
+    wait_until(&mut h, 10.0, |_| std::fs::read_to_string(&out).is_ok_and(|s| s.lines().count() >= 2));
+    assert_eq!(std::fs::read_to_string(&out).unwrap_or_default(), "from-zshrc\nfrom-zprofile\n");
+}
+
 #[test]
 #[ignore]
 fn settings_fonts_and_terminal_themes() {

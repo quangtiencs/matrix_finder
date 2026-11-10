@@ -52,6 +52,8 @@ struct Listener {
     tx: Sender<TEvent>,
     ctx: egui::Context,
     dirty: Arc<AtomicBool>,
+    /// The program wrote something (unlike `dirty`, not set for the first frame).
+    output: Arc<AtomicBool>,
 }
 
 impl EventListener for Listener {
@@ -59,6 +61,7 @@ impl EventListener for Listener {
         match e {
             TEvent::Wakeup => {
                 self.dirty.store(true, Ordering::Relaxed);
+                self.output.store(true, Ordering::Relaxed);
                 self.ctx.request_repaint();
             }
             TEvent::MouseCursorDirty | TEvent::CursorBlinkingChange => {}
@@ -144,6 +147,16 @@ pub struct TermSession {
     pty: Option<std::fs::File>,
     /// argv the session was started with (for restart).
     pub argv: Option<Vec<String>>,
+    /// The profile's startup script, typed at the prompt line by line (kept for restart).
+    pub startup: Vec<String>,
+    /// Lines of `startup` not typed yet.
+    pending: std::collections::VecDeque<String>,
+    output: Arc<AtomicBool>,
+    /// When the program last wrote something, and whether it has since the last
+    /// startup line was typed (the shell answers each one with a new prompt).
+    last_output: Instant,
+    output_since_line: bool,
+    line_at: Instant,
     pub exited: Option<i32>,
     /// New output while the tab was not visible.
     pub activity: bool,
@@ -219,7 +232,8 @@ impl TermSession {
         let pty_file = pty.file().try_clone().ok();
         let (tx, rx) = channel();
         let dirty = Arc::new(AtomicBool::new(true));
-        let listener = Listener { tx, ctx: ctx.clone(), dirty: dirty.clone() };
+        let output = Arc::new(AtomicBool::new(false));
+        let listener = Listener { tx, ctx: ctx.clone(), dirty: dirty.clone(), output: output.clone() };
         let config = Config { scrolling_history: scrollback.clamp(100, 200_000), kitty_keyboard: false, ..Default::default() };
         let term = Arc::new(FairMutex::new(Term::new(config, &Size { cols: 80, lines: 24 }, listener.clone())));
         let ev = EventLoop::new(term.clone(), listener, pty, true, false).map_err(|e| e.to_string())?;
@@ -238,6 +252,12 @@ impl TermSession {
             #[cfg(unix)]
             pty: pty_file,
             argv,
+            startup: Vec::new(),
+            pending: Default::default(),
+            output,
+            last_output: Instant::now(),
+            output_since_line: false,
+            line_at: Instant::now(),
             exited: None,
             activity: false,
             bell: None,
@@ -260,6 +280,40 @@ impl TermSession {
             links: Vec::new(),
             bold_font: FontId::monospace(14.0),
         })
+    }
+
+    /// Type `lines` (a profile's startup script) at the prompt once the shell has
+    /// started: after its startup files ran, so what they set up is there to use.
+    pub fn run_at_start(&mut self, lines: Vec<String>) {
+        self.pending = lines.iter().cloned().collect();
+        self.startup = lines;
+        self.line_at = Instant::now();
+    }
+
+    /// Type the next startup line when the shell waits at its prompt: it has written
+    /// something (the prompt) since the last line, has been quiet for a moment, and
+    /// no program has the terminal. Lines typed a little early are not lost: the
+    /// terminal keeps them until the shell reads its input.
+    fn type_startup(&mut self, ctx: &egui::Context) {
+        if self.pending.is_empty() || self.exited.is_some() {
+            return;
+        }
+        const QUIET: Duration = Duration::from_millis(250);
+        // A shell that never prints a prompt still gets its script.
+        const NO_PROMPT: Duration = Duration::from_secs(5);
+        let prompt = self.output_since_line || self.line_at.elapsed() > NO_PROMPT;
+        if prompt && self.last_output.elapsed() >= QUIET && self.is_idle() {
+            let line = self.pending.pop_front().unwrap_or_default();
+            if self.run_line(&line) {
+                self.output_since_line = false;
+                self.line_at = Instant::now();
+            } else {
+                self.pending.push_front(line);
+            }
+        }
+        if !self.pending.is_empty() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
     }
 
     pub fn write(&self, bytes: impl Into<Cow<'static, [u8]>>) {
@@ -457,6 +511,11 @@ impl TermSession {
                 _ => {}
             }
         }
+        if self.output.swap(false, Ordering::Relaxed) {
+            self.last_output = Instant::now();
+            self.output_since_line = true;
+        }
+        self.type_startup(ctx);
         // The shell prints a prompt after `cd`, so new output is the moment to look.
         if woke || self.cwd_at.elapsed() > Duration::from_secs(3) {
             self.cwd_at = Instant::now();
