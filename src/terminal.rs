@@ -69,7 +69,7 @@ pub struct TerminalProfile {
 }
 
 /// Colour theme of a new built-in terminal profile.
-pub const DEFAULT_TERM_THEME: &str = "Breeze Light";
+pub const DEFAULT_TERM_THEME: &str = "Breeze Dark";
 
 impl Default for TerminalProfile {
     fn default() -> Self {
