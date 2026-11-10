@@ -213,7 +213,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 - **Profiles**: <kbd>F9</kbd> opens the default profile, and the **▾** arrow next to the terminal button lists every profile. A profile combines:
   - **a terminal**: the built-in tab, the native OS terminal, Ghostty, iTerm2, Windows Terminal, PowerShell, Alacritty, Kitty, WezTerm, Konsole, GNOME Terminal, or a custom command with `{dir}` / `{cmd}`
   - **a shell**: bash, zsh, fish, nu, pwsh, cmd and so on
-  - **a startup script**, for example `source .venv/bin/activate`
+  - **a startup script**, for example `source .venv/bin/activate`. The built-in terminal types it at the prompt once the shell has started, line by line, so whatever your shell's startup files set up (PATH, conda, nvm, aliases, functions) is there to use; restarting the terminal runs it again
   - **a colour theme**: one of 21 schemes (Breeze Dark by default) or the same as the app
 - **Fonts**: JetBrains Mono by default, or any monospaced font you pick in *Settings → Fonts*, with Nerd Font symbols as a fallback, so Powerline, powerlevel10k and starship prompts display correctly.
 
