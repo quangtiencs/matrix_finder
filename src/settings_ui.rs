@@ -1042,20 +1042,24 @@ impl App {
                 }
             });
         });
+        // Only the built-in terminal can type the script once the shell has started.
+        let built_in = p.terminal == TerminalKind::BuiltIn;
         field_row(ui, &t("Startup script"), &mut |ui| {
+            let hint = if built_in { t("Commands to run when the terminal starts, e.g. source .venv/bin/activate") } else { t("Only the built-in terminal runs a startup script") };
             changed |= ui
-                .add(
+                .add_enabled(
+                    built_in,
                     egui::TextEdit::multiline(&mut p.startup)
                         .code_editor()
                         .background_color(th.bg)
                         .desired_rows(2)
                         .desired_width((width - label_w - 8.0).max(160.0))
-                        .hint_text(RichText::new(t("Commands to run when the terminal starts, e.g. source .venv/bin/activate")).color(th.weak)),
+                        .hint_text(RichText::new(hint).color(th.weak)),
                 )
+                .on_disabled_hover_text(t("Only the built-in terminal runs a startup script"))
                 .changed();
         });
         // ---- colours (the other terminals have their own)
-        let built_in = p.terminal == TerminalKind::BuiltIn;
         let current = p.theme.clone();
         if built_in {
             row_line(ui, th);
