@@ -508,6 +508,9 @@ else
     done
     [ -f assets/logo/matrix_finder.svg ] && put assets/logo/matrix_finder.svg "$share/icons/hicolor/scalable/apps/$APP_ID.svg" 644
 
+    # The dock finds this entry by its file name on Wayland (the window's app id is
+    # $APP_ID) and by StartupWMClass on X11, where the window class is the program's
+    # name: egui sets the app id only on Wayland.
     desktop=$(mktemp)
     cat >"$desktop" <<EOF
 [Desktop Entry]
@@ -519,7 +522,7 @@ Exec="$bin_dir/$bin" %f
 Icon=$APP_ID
 Terminal=false
 StartupNotify=true
-StartupWMClass=$APP_ID
+StartupWMClass=$bin
 Categories=System;FileTools;FileManager;
 Keywords=files;folders;file manager;dual panel;commander;terminal;
 Actions=new-window;
