@@ -106,7 +106,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 | 🛟 **Safer copies and moves** | An existing file is only replaced once the new copy is complete. Moves with *Skip* keep the files they skipped, and copying out of an archive follows your *If file exists* choice |
 | 🔐 **Checksum window** | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>, or right-click → *More* → *Checksum…*. Hash files in the background, compare with a pasted value (the algorithm is picked from its length), save checksum files and verify existing ones |
 | ➕ **Right-click → New** | A *New ▸ Folder… / Blank file…* submenu in every context menu: on a file, on the `..` row and on empty space |
-| 🎨 **Breeze Light by default** | Breeze Light is the default theme for the app and for built-in terminal profiles |
+| 🎨 **Breeze Light by default** | Breeze Light is the default theme for the app, and Breeze Dark for built-in terminal profiles |
 | 🏠 **Starts at Home** | The app opens your home folder with no terminal running. To restore the last session instead, turn off *Settings → Files & layout → Open the home folder at start* |
 | ↺ **Reset to defaults** | *Settings → Reset to defaults…* restores every preference (theme, language, UI scale, panels, terminal and safety options) after you confirm. Bookmarks, saved connections, backup and terminal profiles are kept |
 | 👁️ **Quick View stays out of terminals** | While a terminal tab is active, the Quick View panel is hidden so the terminal gets the full width. It comes back when you switch to a file tab, and the setting itself is not changed |
@@ -175,7 +175,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 - **Open with**: <kbd>Enter</kbd> / <kbd>F4</kbd> opens a file with the OS default app, *Open with…* picks any program, and *Show in file manager* reveals it. Remote and in-archive files are fetched to a temp folder first.
 - **Bookmarks** (<kbd>Ctrl</kbd>+<kbd>D</kbd>): Home, Desktop, Documents, Downloads, Music, Pictures and Movies are bookmarked by default.
   - **Two display modes**: a **vertical bar** in the sidebar (the default), or a **horizontal bar** above the tabs, like a browser's bookmarks bar. Bookmarks that don't fit in the horizontal bar go into a **»** menu.
-  - **In a terminal**: choose in Settings → Bookmarks whether a bookmark always opens in a file window (**Go to file only**, the default) or, when a terminal is focused, runs `cd` to the folder in its shell (**File and Terminal**).
+  - **In a terminal**: choose in Settings → Bookmarks whether a bookmark always opens in a file window (**Go to file only**) or, when a terminal is focused, runs `cd` to the folder in its shell (**File and Terminal**, the default).
   - **Icons**: standard folders get their own icons, or the desktop icon theme's when one is in use. You can switch to plain folder icons, or pick an icon for any bookmark.
   - **Folders**: group bookmarks into folders. Folders open and close in the sidebar and open as a menu in the horizontal bar.
   - **Managing bookmarks**: use *Settings → Bookmarks* to rename and reorder bookmarks, change their location and icon, move them into folders, and import or export JSON.
@@ -214,7 +214,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - **a terminal**: the built-in tab, the native OS terminal, Ghostty, iTerm2, Windows Terminal, PowerShell, Alacritty, Kitty, WezTerm, Konsole, GNOME Terminal, or a custom command with `{dir}` / `{cmd}`
   - **a shell**: bash, zsh, fish, nu, pwsh, cmd and so on
   - **a startup script**, for example `source .venv/bin/activate`
-  - **a colour theme**: one of 21 schemes (Breeze Light by default) or the same as the app
+  - **a colour theme**: one of 21 schemes (Breeze Dark by default) or the same as the app
 - **Fonts**: JetBrains Mono by default, or any monospaced font you pick in *Settings → Fonts*, with Nerd Font symbols as a fallback, so Powerline, powerlevel10k and starship prompts display correctly.
 
 </details>

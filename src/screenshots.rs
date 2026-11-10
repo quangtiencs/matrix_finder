@@ -550,7 +550,7 @@ fn settings(theme: &str, demo: &Demo) -> Settings {
     cfg
 }
 
-/// Terminal profiles have their own colour theme (Breeze Light by default).
+/// Terminal profiles have their own colour theme (Breeze Dark by default).
 fn set_terminal_theme(cfg: &mut Settings, theme: &str) {
     for p in &mut cfg.terminal_profiles {
         p.theme = theme.into();

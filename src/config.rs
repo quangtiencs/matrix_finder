@@ -219,9 +219,9 @@ pub enum InstanceMode {
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum BookmarkAction {
     /// Always show the folder in a file window.
-    #[default]
     FilesOnly,
     /// In a terminal window, `cd` the shell to the folder instead.
+    #[default]
     FilesAndTerminal,
 }
 
@@ -483,7 +483,7 @@ impl Default for Settings {
             right_paths: vec![home],
             bookmarks,
             bookmark_bar: BookmarkBar::Vertical,
-            bookmark_action: BookmarkAction::FilesOnly,
+            bookmark_action: BookmarkAction::FilesAndTerminal,
             bookmark_system_icons: true,
             bookmark_defaults: BOOKMARK_DEFAULTS,
             quick_filters: default_quick_filters(),
