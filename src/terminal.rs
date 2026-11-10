@@ -129,53 +129,12 @@ pub fn startup_lines(p: &TerminalProfile) -> Vec<String> {
     p.startup.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from).collect()
 }
 
-/// External terminals: the command line (argv) that starts the profile's shell,
-/// runs its startup script, and leaves an interactive shell open. `None` = the
-/// terminal's default.
-pub fn startup_argv(p: &TerminalProfile) -> Option<Vec<String>> {
-    let script = p.startup.trim();
+/// External terminals: the command line (argv) that starts the profile's shell
+/// (`None`: the terminal's default). They get no startup script: only the built-in
+/// terminal can type it once the shell has started.
+pub fn external_argv(p: &TerminalProfile) -> Option<Vec<String>> {
     let shell = p.shell.trim();
-    if script.is_empty() && shell.is_empty() {
-        return None;
-    }
-    let shell = if shell.is_empty() { default_shell() } else { shell.to_string() };
-    // Accept both Unix and Windows separators (profiles may be shared across OSes).
-    let base = shell.rsplit(['/', '\\']).next().unwrap_or(&shell).to_lowercase();
-    let base = base.trim_end_matches(".exe");
-    Some(match base {
-        "pwsh" | "powershell" => {
-            let mut v = vec![shell.clone(), "-NoExit".into()];
-            if !script.is_empty() {
-                v.push("-Command".into());
-                v.push(script.lines().collect::<Vec<_>>().join("; "));
-            }
-            v
-        }
-        "cmd" => {
-            let mut v = vec![shell.clone()];
-            if !script.is_empty() {
-                v.push("/K".into());
-                v.push(script.lines().collect::<Vec<_>>().join(" & "));
-            }
-            v
-        }
-        "nu" | "nushell" => {
-            let mut v = vec![shell.clone()];
-            if !script.is_empty() {
-                v.push("-e".into());
-                v.push(script.to_string());
-            }
-            v
-        }
-        // POSIX shells and fish: run the script, then replace with an interactive shell.
-        _ => {
-            if script.is_empty() {
-                vec![shell]
-            } else {
-                vec![shell.clone(), "-c".into(), format!("{script}\nexec {} -i", sh_quote(&shell))]
-            }
-        }
-    })
+    (!shell.is_empty()).then(|| vec![shell.to_string()])
 }
 
 /// Quote for POSIX sh.
@@ -210,7 +169,7 @@ fn sv(v: &[&str]) -> Vec<String> {
 }
 
 pub fn open_profile(p: &TerminalProfile, dir: &Path) -> Res<()> {
-    open_terminal_with(p.terminal, &p.custom, dir, startup_argv(p))
+    open_terminal_with(p.terminal, &p.custom, dir, external_argv(p))
 }
 
 pub fn open_terminal_with(kind: TerminalKind, custom: &str, dir: &Path, run: Option<Vec<String>>) -> Res<()> {
@@ -389,22 +348,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn startup_commands_per_shell() {
-        let mut p = TerminalProfile::default();
-        assert_eq!(startup_argv(&p), None);
-        p.shell = "/bin/zsh".into();
-        assert_eq!(startup_argv(&p), Some(vec!["/bin/zsh".to_string()]));
+    fn external_terminals_start_the_shell_only() {
+        let mut p = TerminalProfile { terminal: TerminalKind::Native, ..Default::default() };
+        assert_eq!(external_argv(&p), None);
         p.startup = "source .venv/bin/activate\nclear".into();
-        assert_eq!(
-            startup_argv(&p),
-            Some(vec!["/bin/zsh".into(), "-c".into(), "source .venv/bin/activate\nclear\nexec /bin/zsh -i".into()])
-        );
-        p.shell = "pwsh".into();
-        p.startup = "Set-Location src\nGet-ChildItem".into();
-        assert_eq!(startup_argv(&p), Some(vec!["pwsh".into(), "-NoExit".into(), "-Command".into(), "Set-Location src; Get-ChildItem".into()]));
-        p.shell = "C:\\Windows\\System32\\cmd.exe".into();
-        p.startup = "cd src\ndir".into();
-        assert_eq!(startup_argv(&p).unwrap()[1..], ["/K".to_string(), "cd src & dir".to_string()]);
+        assert_eq!(external_argv(&p), None);
+        p.shell = " /bin/zsh ".into();
+        assert_eq!(external_argv(&p), Some(vec!["/bin/zsh".to_string()]));
     }
 
     #[test]
