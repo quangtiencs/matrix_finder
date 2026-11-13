@@ -119,6 +119,8 @@ pub fn size_limit(name: &str) -> u64 {
         Kind::Document if !crate::textdocs::reads_zip(name) => MAX_IMAGE as u64,
         Kind::Model => crate::model3d::MAX_FILE,
         Kind::Table if matches!(ext_of(name).as_str(), "xls" | "xlsb" | "ods") => LARGE_WORKBOOK,
+        // Model weights of many gigabytes: only their header is read.
+        Kind::Table if crate::table::reads_header_only(name) => u64::MAX,
         _ => LARGE_FILE,
     }
 }
@@ -1130,6 +1132,12 @@ mod animation_tests {
             ("a.npy", Kind::Table),
             ("a.feather", Kind::Table),
             ("a.h5", Kind::Table),
+            ("a.npz", Kind::Table),
+            ("model.safetensors", Kind::Table),
+            ("a.onnx", Kind::Table),
+            ("a.RData", Kind::Table),
+            ("a.rda", Kind::Table),
+            ("a.rds", Kind::Table),
             ("a.gif", Kind::Image),
         ] {
             assert_eq!(classify(name), kind, "{name}");
@@ -1154,6 +1162,12 @@ mod animation_tests {
         assert!(too_large("a.xls", 256 * mb + 1, None));
         assert!(!too_large("a.xls", 256 * mb, None));
         assert!(too_large("a.stl", crate::model3d::MAX_FILE + 1, None));
+        // Only the header is read of these.
+        for name in ["a.safetensors", "a.onnx", "a.npz"] {
+            assert!(!too_large(name, 100 * gb, None), "{name}");
+            assert!(too_large(name, 20 * mb, Some(16 * mb)), "{name}");
+        }
+        assert!(too_large("a.rds", gb + 1, None));
         // Fetched from elsewhere: only text can be shown from its start.
         assert!(too_large("a.parquet", 20 * mb, Some(16 * mb)));
         assert!(too_large("a.mp4", 20 * mb, Some(16 * mb)));

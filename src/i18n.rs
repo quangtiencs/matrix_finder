@@ -115,6 +115,8 @@ mod tests {
             include_str!("certview.rs"),
             include_str!("model3d.rs"),
             include_str!("scidata.rs"),
+            include_str!("tensors.rs"),
+            include_str!("rdata.rs"),
             include_str!("archive.rs"),
             include_str!("shortcuts.rs"),
         ];

@@ -337,7 +337,32 @@ fn np_fields(descr: &str) -> Option<Vec<NpField>> {
     }
 }
 
-pub fn npy_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
+/// The header of a `.npy` file: what is needed to list an array without reading it.
+pub struct NpyHeader {
+    pub fortran: bool,
+    pub shape: Vec<u64>,
+    /// The rest of the header from the value of `'descr'` on.
+    descr: String,
+}
+
+impl NpyHeader {
+    /// The element type for people: `f8`, `U5`, the fields of a structured array, `O`.
+    pub fn dtype_text(&self) -> String {
+        match np_fields(&self.descr) {
+            Some(f) if f.len() == 1 && f[0].name.is_empty() => f[0].text.clone(),
+            Some(f) => format!("({})", f.iter().map(|f| format!("{}: {}", f.name, f.text)).collect::<Vec<_>>().join(", ")),
+            None if self.descr.starts_with('[') => "structured".to_string(),
+            None => np_quoted(&self.descr).first().map_or_else(|| "?".to_string(), |s| s.trim_start_matches(['<', '>', '|', '=']).to_string()),
+        }
+    }
+
+    /// Whether the values can be shown (`O` arrays are pickled Python objects).
+    pub fn readable(&self) -> bool {
+        np_fields(&self.descr).is_some()
+    }
+}
+
+pub fn npy_header<R: Read>(r: &mut R) -> Res<NpyHeader> {
     let mut head = [0u8; 10];
     r.read_exact(&mut head).map_err(|_| t("Not a valid NumPy file."))?;
     if &head[..6] != b"\x93NUMPY" {
@@ -354,15 +379,21 @@ pub fn npy_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
         return Err(t("Not a valid NumPy file."));
     }
     let mut header = vec![0u8; header_len as usize];
-    r.read_exact(&mut header).map_err(es)?;
-    let data_at = r.stream_position().map_err(es)?;
+    r.read_exact(&mut header).map_err(|_| t("This file is cut short."))?;
     let header = String::from_utf8_lossy(&header).into_owned();
     let bad = || t("Not a valid NumPy file.");
     let fortran = np_header_value(&header, "fortran_order").ok_or_else(bad)?.starts_with("True");
     let shape: Vec<u64> = np_group(np_header_value(&header, "shape").ok_or_else(bad)?).ok_or_else(bad)?.trim_matches(['(', ')']).split(',').filter_map(|n| n.trim().parse().ok()).collect();
-    let descr_text = np_header_value(&header, "descr").ok_or_else(bad)?;
+    let descr = np_header_value(&header, "descr").ok_or_else(bad)?.to_string();
+    Ok(NpyHeader { fortran, shape, descr })
+}
+
+pub fn npy_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
+    let NpyHeader { fortran, shape, descr } = npy_header(&mut r)?;
+    let data_at = r.stream_position().map_err(es)?;
+    let bad = || t("Not a valid NumPy file.");
     let shape_text = format!("[{}]", shape.iter().map(u64::to_string).collect::<Vec<_>>().join(" × "));
-    let fields = np_fields(descr_text).ok_or_else(|| t("This array holds Python objects, which are not read for safety."))?;
+    let fields = np_fields(&descr).ok_or_else(|| t("This array holds Python objects, which are not read for safety."))?;
     let item = fields.iter().try_fold(0u64, |sum, f| sum.checked_add(f.size as u64)).filter(|i| *i <= NP_MAX_ITEM).ok_or_else(|| t("The items of this array are too large to preview."))?;
     // The numbers come from the file: they may be anything, and offsets must not overflow.
     shape.iter().try_fold(item, |bytes, n| bytes.checked_mul(*n)).ok_or_else(bad)?;
