@@ -255,7 +255,9 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - **SVG**
   - **Markdown** (rendered or source)
   - **highlighted code** in ~60 languages
-  - **data tables** for Parquet, Avro, Excel/ODS, CSV/TSV, **SQLite**, **JSON Lines**, **NumPy** (`.npy`), **Arrow/Feather** and **HDF5**
+  - **data tables** for Parquet, Avro, Excel/ODS, CSV/TSV, **SQLite**, **JSON Lines**, **NumPy** (`.npy`, `.npz`), **Arrow/Feather** and **HDF5**
+  - **model weights**: **safetensors** and **ONNX** list every tensor with its shape, type and size, and the parameter count; only the header is read, so multi-gigabyte models open at once. ONNX also shows inputs and outputs, operators and metadata
+  - **R data** (`.RData`, `.rda`, `.rds`, packed or not): each object with its class and size, and data frames, matrices and vectors as tables; functions and environments are never run
   - **RTF, EPUB and ODF text** as readable text, with EPUB chapters
   - **fonts** (TTF, OTF, WOFF, WOFF2): a sample sheet with names and properties
   - **3D models** (STL, OBJ, glTF, GLB): drag to turn, scroll to zoom
@@ -621,6 +623,8 @@ src/
 ├── media.rs       HEIC/AVIF decoding, video details and thumbnails
 ├── rawphoto.rs    camera RAW metadata and embedded previews
 ├── scidata.rs     SQLite, JSON Lines, NumPy, Arrow and HDF5 tables
+├── tensors.rs     safetensors, NumPy archives and ONNX models: their tensors
+├── rdata.rs       R data files (RData, RDS)
 ├── textdocs.rs    RTF, EPUB and ODF text
 ├── fontview.rs    font sample sheets
 ├── model3d.rs     STL, OBJ and glTF models and their renderer

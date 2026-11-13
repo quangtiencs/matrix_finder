@@ -69,7 +69,13 @@ pub fn is_table(name: &str) -> bool {
     matches!(
         ext_of(name).as_str(),
         "parquet" | "pq" | "avro" | "xlsx" | "xlsm" | "xlsb" | "xls" | "ods" | "csv" | "tsv" | "sqlite" | "sqlite3" | "db3" | "jsonl" | "ndjson" | "npy" | "feather" | "arrow" | "arrows" | "h5" | "hdf5"
+            | "npz" | "safetensors" | "onnx" | "rdata" | "rda" | "rds"
     )
+}
+
+/// Formats of which only a header or an index is read, so a file of any size opens.
+pub fn reads_header_only(name: &str) -> bool {
+    matches!(ext_of(name).as_str(), "npz" | "safetensors" | "onnx")
 }
 
 pub fn is_csv(name: &str) -> bool {
@@ -93,6 +99,10 @@ pub fn load_path(path: &Path) -> Res<TableData> {
         "npy" => crate::scidata::npy_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
         "feather" | "arrow" | "arrows" => crate::scidata::arrow_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
         "h5" | "hdf5" => crate::scidata::hdf5_from_path(path),
+        "npz" => crate::tensors::npz_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "safetensors" => crate::tensors::safetensors_from(std::fs::File::open(path).map_err(es)?),
+        "onnx" => crate::tensors::onnx_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "rdata" | "rda" | "rds" => crate::rdata::rdata_from(std::fs::File::open(path).map_err(es)?),
         _ => {
             let mut head = Vec::new();
             std::fs::File::open(path).map_err(es)?.take(64 * 1024).read_to_end(&mut head).map_err(es)?;
@@ -126,6 +136,10 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Res<TableData> {
         "npy" => crate::scidata::npy_from(std::io::Cursor::new(bytes)),
         "feather" | "arrow" | "arrows" => crate::scidata::arrow_from(std::io::Cursor::new(bytes)),
         "h5" | "hdf5" => crate::scidata::hdf5_from_bytes(bytes),
+        "npz" => crate::tensors::npz_from(std::io::Cursor::new(bytes)),
+        "safetensors" => crate::tensors::safetensors_from(std::io::Cursor::new(bytes)),
+        "onnx" => crate::tensors::onnx_from(std::io::Cursor::new(bytes)),
+        "rdata" | "rda" | "rds" => crate::rdata::rdata_from(std::io::Cursor::new(bytes)),
         _ => {
             let delim = sniff_delimiter(name, &bytes);
             csv_from(std::io::Cursor::new(bytes), delim)
