@@ -78,7 +78,7 @@ Browse zip, 7z, rar and tar.* like folders, preview the files inside, and create
 <td valign="top">
 
 ### 👁️ Quick View
-Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 languages, plus **Parquet / Avro / Excel / CSV** tables.
+Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 languages, plus **Parquet / Avro / Excel / CSV / NumPy / R** tables and **safetensors / ONNX** model weights.
 
 </td>
 <td valign="top">
@@ -269,7 +269,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
   **Password-protected files:** ZIP (ZipCrypto and AES), 7z and RAR ask for the password when you open, preview or extract something protected. It is checked first, kept in memory until the app closes, and never saved. Protected Office, PDF, ODF and EPUB files show a small *Password protected* message: press <kbd>Enter</kbd> to open them in their own app.
 
-  Files past a size limit are not opened at all, and show a small *Too large to preview* message: 80 MB for images, PDF, notebooks, fonts, certificates and RTF, 256 MB for `.xls`, `.xlsb` and `.ods`, 768 MB for 3D models, and 1 GB for everything else. On a server or inside an archive, only text is previewed past what can be fetched (16 MB and 80 MB).
+  Files past a size limit are not opened at all, and show a small *Too large to preview* message: 80 MB for images, PDF, notebooks, fonts, certificates and RTF, 256 MB for `.xls`, `.xlsb` and `.ods`, 768 MB for 3D models, and 1 GB for everything else. Local safetensors, ONNX and `.npz` files have no limit, since only their headers are read. On a server or inside an archive, only text is previewed past what can be fetched (16 MB and 80 MB).
 - **Search & filter**: one box for files and commands. Start typing in a file window to open it with what you typed, or press <kbd>Ctrl</kbd>+<kbd>F</kbd>. As you type, the active panel is filtered live; <kbd>Enter</kbd> keeps the filter and <kbd>Esc</kbd> closes the box and shows the whole folder again. <kbd>↓</kbd> <kbd>Enter</kbd> searches all subfolders instead. Queries can be plain text, globs, extension lists or an **SQL-like WHERE clause** (see [Quick filter syntax](#filter)).
 - **Quick filters by file type**: the **funnel** button of a file window opens a menu of categories that shows only that kind of file. The built-in categories are Images, Music, Videos, Documents, Spreadsheets, Presentations, Development, Data and Archives, each with its common formats.
   - **While filtering**: folders stay visible, and the filter stays on while you browse into other folders. It works together with the text filter. Click the chip in the address bar or press <kbd>Esc</kbd> to turn it off.
@@ -567,6 +567,7 @@ The tests cover:
 - Markdown parsing and syntax highlighting
 - the treemap layout
 - **checksum digests, list parsing and verification**
+- the NumPy, safetensors, ONNX and R data readers, with cut-short and damaged files
 - translation completeness
 
 Live FTP/SFTP round-trips run against your own servers:
