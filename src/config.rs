@@ -189,7 +189,7 @@ pub fn default_quick_filters() -> Vec<QuickFilter> {
             "Development",
             "rs py js mjs cjs ts tsx jsx java kt kts scala go c h cpp cc cxx hpp hh cs swift m mm rb php pl lua r dart zig nim ex exs erl hs ml clj sh bash zsh fish ps1 bat sql html htm css scss sass less vue svelte json yaml yml toml ini xml gradle cmake mk proto",
         ),
-        QuickFilter::new("Data", "parquet avro arrow feather orc jsonl ndjson ipynb sqlite sqlite3 db h5 hdf5 npy npz pkl pickle"),
+        QuickFilter::new("Data", "parquet avro arrow feather orc jsonl ndjson ipynb sqlite sqlite3 db h5 hdf5 npy npz safetensors onnx rdata rda rds pkl pickle"),
         QuickFilter::new("Archives", "zip rar 7z tar gz tgz bz2 tbz2 xz txz zst lz4 iso dmg cab deb rpm jar"),
     ]
 }
@@ -373,6 +373,10 @@ pub struct Settings {
     pub bookmark_defaults: u32,
     /// The quick-filter categories offered in every file window.
     pub quick_filters: Vec<QuickFilter>,
+    /// Version of the default quick filters this file has seen (adds new
+    /// formats once to the built-in categories of older settings).
+    #[serde(default)]
+    pub quick_filter_defaults: u32,
     pub connections: Vec<ConnectionProfile>,
     pub backups: Vec<BackupProfile>,
     pub quick_view: bool,
@@ -455,6 +459,12 @@ pub struct SavedPane {
 /// See `Settings::bookmark_defaults`.
 const BOOKMARK_DEFAULTS: u32 = 1;
 
+/// See `Settings::quick_filter_defaults`.
+const QUICK_FILTER_DEFAULTS: u32 = 1;
+
+/// Formats added to a built-in quick filter, with the version that added them.
+const QUICK_FILTER_ADDED: &[(u32, &str, &str)] = &[(1, "Data", "safetensors onnx rdata rda rds")];
+
 /// Allowed terminal scroll speeds (lines per trackpad row or wheel notch).
 pub const SCROLL_SPEEDS: std::ops::RangeInclusive<f32> = 0.1..=10.0;
 
@@ -487,6 +497,7 @@ impl Default for Settings {
             bookmark_system_icons: true,
             bookmark_defaults: BOOKMARK_DEFAULTS,
             quick_filters: default_quick_filters(),
+            quick_filter_defaults: QUICK_FILTER_DEFAULTS,
             connections: vec![],
             backups: vec![],
             quick_view: false,
@@ -614,6 +625,25 @@ impl Settings {
             }
             self.bookmark_defaults = BOOKMARK_DEFAULTS;
         }
+        if self.quick_filter_defaults < QUICK_FILTER_DEFAULTS {
+            // Settings saved before these formats were in the built-in categories:
+            // add them once, to the category of that name if it is still there.
+            for &(version, name, exts) in QUICK_FILTER_ADDED {
+                if version <= self.quick_filter_defaults {
+                    continue;
+                }
+                if let Some(q) = self.quick_filters.iter_mut().find(|q| q.name == name) {
+                    let have = q.ext_list();
+                    for e in exts.split_whitespace().filter(|e| !have.iter().any(|h| h == e)) {
+                        if !q.exts.trim().is_empty() {
+                            q.exts.push(' ');
+                        }
+                        q.exts.push_str(e);
+                    }
+                }
+            }
+            self.quick_filter_defaults = QUICK_FILTER_DEFAULTS;
+        }
     }
 
     /// Back to the default preferences. Your data is kept: bookmarks, saved
@@ -624,6 +654,7 @@ impl Settings {
             bookmarks: keep.bookmarks,
             bookmark_defaults: keep.bookmark_defaults,
             quick_filters: keep.quick_filters,
+            quick_filter_defaults: keep.quick_filter_defaults,
             default_apps: keep.default_apps,
             connections: keep.connections,
             backups: keep.backups,
@@ -750,5 +781,28 @@ mod tests {
         s.quick_filters = vec![QuickFilter::new("Raw", "cr2 nef")];
         s.reset_preferences();
         assert_eq!(s.quick_filters.len(), 1);
+    }
+
+    #[test]
+    fn quick_filter_migration() {
+        // Older settings: the Data category without the new formats, plus a filter of your own.
+        let old = r#"{"quick_filters":[{"name":"Data","exts":"parquet npy rds"},{"name":"Raw","exts":"cr2"}]}"#;
+        let mut v: Settings = serde_json::from_str(old).unwrap();
+        assert_eq!(v.quick_filter_defaults, 0);
+        v.normalize();
+        assert_eq!(v.quick_filters[0].exts, "parquet npy rds safetensors onnx rdata rda");
+        assert_eq!(v.quick_filters[1].exts, "cr2");
+        assert_eq!(v.quick_filter_defaults, QUICK_FILTER_DEFAULTS);
+        // Once only: an extension you remove stays removed.
+        v.quick_filters[0].exts = "parquet".into();
+        v.normalize();
+        assert_eq!(v.quick_filters[0].exts, "parquet");
+        // New settings already have them.
+        let mut s = Settings::default();
+        s.normalize();
+        assert_eq!(s.quick_filters, default_quick_filters());
+        for e in ["safetensors", "onnx", "rdata", "rda", "rds"] {
+            assert!(s.quick_filters.iter().any(|q| q.name == "Data" && q.ext_list().iter().any(|x| x == e)), "{e}");
+        }
     }
 }
