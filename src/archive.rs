@@ -59,6 +59,34 @@ fn sevenz_err(e: sevenz_rust2::Error) -> String {
     }
 }
 
+/// A 7z entry whose data stopped short: with a password, almost always a wrong one.
+fn sevenz_short(path: &Path) -> String {
+    if password_for(path).is_some() { wrong_password() } else { crate::i18n::t("This file is cut short.") }
+}
+
+/// Reads all `left` bytes of a 7z entry, or fails. sevenz-rust2 ends an entry early
+/// without an error when its data stops short, which a wrong password does now and then
+/// (about 1 in 200 times): the checksum is only checked once every byte is there.
+struct SevenzWhole<'a> {
+    inner: &'a mut dyn Read,
+    left: u64,
+    short: &'a str,
+}
+
+impl Read for SevenzWhole<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.left == 0 || buf.is_empty() {
+            return Ok(0);
+        }
+        let n = self.inner.read(buf)?;
+        if n == 0 {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, self.short.to_string()));
+        }
+        self.left = self.left.saturating_sub(n as u64);
+        Ok(n)
+    }
+}
+
 fn rar_err(e: unrar::error::UnrarError) -> String {
     use unrar::error::Code;
     match e.code {
@@ -177,8 +205,9 @@ pub fn check_password(path: &Path, password: &str) -> bool {
         }
         Some(ArchiveFormat::SevenZ) => {
             let Ok(mut r) = sevenz_rust2::ArchiveReader::open(path, sevenz_rust2::Password::new(password)) else { return false };
-            let smallest = r.archive().files.iter().filter(|f| f.has_stream()).min_by_key(|f| f.size()).map(|f| f.name().to_string());
-            smallest.is_none_or(|name| r.read_file(&name).is_ok())
+            let smallest = r.archive().files.iter().filter(|f| f.has_stream()).min_by_key(|f| f.size()).map(|f| (f.name().to_string(), f.size()));
+            // All of it: a wrong password can end the data early without an error (see SevenzWhole).
+            smallest.is_none_or(|(name, size)| r.read_file(&name).is_ok_and(|data| data.len() as u64 == size))
         }
         Some(ArchiveFormat::Rar) => {
             let Ok(mut arch) = unrar::Archive::with_password(path, password).open_for_processing() else { return false };
@@ -261,6 +290,38 @@ impl ArchiveFormat {
     /// Formats that compress exactly one file (no container).
     pub fn single_file(self) -> bool {
         matches!(self, ArchiveFormat::Gz | ArchiveFormat::Xz | ArchiveFormat::Zst | ArchiveFormat::Bz2)
+    }
+
+    /// The formats to offer when compressing: the single-file ones only for one file.
+    pub fn offered(one_file: bool) -> Vec<ArchiveFormat> {
+        Self::ALL.into_iter().filter(|f| one_file || !f.single_file()).collect()
+    }
+
+    /// Whether it has a compression level (plain .tar only packs).
+    pub fn compresses(self) -> bool {
+        self != ArchiveFormat::Tar
+    }
+
+    /// What the format is good for, in a line.
+    pub fn blurb(self) -> String {
+        use crate::i18n::t;
+        match self {
+            ArchiveFormat::Zip => t("Opens everywhere, with nothing to install."),
+            ArchiveFormat::SevenZ => t("Usually the smallest; 7-Zip, Keka or The Unarchiver open it."),
+            ArchiveFormat::TarZst => t("Fast to make and to open, using every core."),
+            ArchiveFormat::TarGz => t("The usual choice on Linux and macOS."),
+            ArchiveFormat::TarXz => t("Very small, but slow to make."),
+            ArchiveFormat::TarBz2 => t("An older format, for tools that ask for it."),
+            ArchiveFormat::Tar => t("No compression: everything in one file, quickly."),
+            ArchiveFormat::Gz | ArchiveFormat::Xz | ArchiveFormat::Zst | ArchiveFormat::Bz2 => t("Compresses this one file on its own."),
+            ArchiveFormat::Rar => t("Needs the rar command-line tool."),
+        }
+    }
+
+    /// The format a typed name ends in (`photos.tar.gz`), if any: the longest match.
+    pub fn typed_in(name: &str) -> Option<ArchiveFormat> {
+        let name = name.trim().to_lowercase();
+        Self::ALL.into_iter().filter(|f| name.ends_with(&format!(".{}", f.extension()))).max_by_key(|f| f.extension().len())
     }
 
     pub fn detect(path: &Path) -> Option<ArchiveFormat> {
@@ -622,8 +683,13 @@ fn write_file_from(reader: &mut dyn Read, out: &Path, progress: &Progress) -> Re
         inner: BufWriter::new(f),
         progress,
     };
-    std::io::copy(reader, &mut w).map_err(es)?;
-    w.flush().map_err(es)?;
+    let done = std::io::copy(reader, &mut w).and_then(|_| w.flush());
+    if let Err(e) = done {
+        // No half-written file under the real name.
+        drop(w);
+        let _ = std::fs::remove_file(out);
+        return Err(es(e));
+    }
     Ok(())
 }
 
@@ -690,6 +756,7 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                 .map(|f| f.size())
                 .sum();
             progress.set_total(total);
+            let short = sevenz_short(path);
             let mut err: Option<String> = None;
             r.for_each_entries(|entry, reader| {
                 if progress.cancelled() {
@@ -706,7 +773,8 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                     if entry.is_directory() {
                         let _ = std::fs::create_dir_all(&out);
                     } else if let Some(out) = resolve_out(out, policy) {
-                        if let Err(e) = write_file_from(reader, &out, progress) {
+                        let mut whole = SevenzWhole { inner: reader, left: entry.size(), short: &short };
+                        if let Err(e) = write_file_from(&mut whole, &out, progress) {
                             err = Some(e);
                             return Ok(false);
                         }
@@ -835,10 +903,14 @@ pub fn read_entry(path: &Path, inner: &str, max: usize) -> Res<Vec<u8>> {
         }
         ArchiveFormat::SevenZ => {
             let mut r = sevenz_rust2::ArchiveReader::open(path, sevenz_password(path)).map_err(sevenz_err)?;
-            if r.archive().files.iter().any(|f| f.name() == inner && f.size() > MAX_WHOLE_ENTRY) {
+            let size = r.archive().files.iter().find(|f| f.name() == inner).map(|f| f.size());
+            if size.is_some_and(|s| s > MAX_WHOLE_ENTRY) {
                 return Err(entry_too_large());
             }
             buf = r.read_file(inner).map_err(sevenz_err)?;
+            if size.is_some_and(|s| buf.len() as u64 != s) {
+                return Err(sevenz_short(path));
+            }
             buf.truncate(max);
         }
         ArchiveFormat::Rar => {
@@ -947,6 +1019,17 @@ pub fn collect_items(sources: &[PathBuf], exclude: Option<&GlobSet>, progress: O
             "Cannot read {} item(s), such as {first}. Nothing was archived. Fix the permissions or exclude them.",
             unreadable.len()
         )),
+    }
+}
+
+/// The file name of an archive named `name` in format `fmt`: the extension is added
+/// unless it was typed already.
+pub fn archive_file_name(name: &str, fmt: ArchiveFormat) -> String {
+    let name = name.trim();
+    if ArchiveFormat::typed_in(name) == Some(fmt) {
+        name.to_string()
+    } else {
+        format!("{name}.{}", fmt.extension())
     }
 }
 
@@ -1204,6 +1287,39 @@ mod tests {
         std::fs::write(src.join("a.txt"), b"hello world").unwrap();
         std::fs::write(src.join("sub/b.rs"), b"fn main() {}").unwrap();
         src
+    }
+
+    #[test]
+    fn formats_offered_for_compressing() {
+        use ArchiveFormat as F;
+        // Folders or several files: containers only.
+        let many = ArchiveFormat::offered(false);
+        assert_eq!(many[..3], [F::Zip, F::SevenZ, F::TarZst]);
+        assert!(many.iter().all(|f| !f.single_file()));
+        assert!(many.contains(&F::Rar), "shown, and turned off without the rar tool");
+        // One file: the single-file formats too.
+        let one = ArchiveFormat::offered(true);
+        assert!(one.contains(&F::Gz) && one.contains(&F::Zst));
+        assert_eq!(one.len(), F::ALL.len());
+        // Every format says what it is good for; plain .tar has no level.
+        assert!(F::ALL.iter().all(|f| !f.blurb().is_empty()));
+        assert!(!F::Tar.compresses() && F::TarGz.compresses() && F::Zip.compresses());
+    }
+
+    #[test]
+    fn format_typed_in_the_name() {
+        use ArchiveFormat as F;
+        assert_eq!(ArchiveFormat::typed_in("photos.7z"), Some(F::SevenZ));
+        assert_eq!(ArchiveFormat::typed_in("photos.TAR.GZ"), Some(F::TarGz), "the longest ending wins");
+        assert_eq!(ArchiveFormat::typed_in("notes.gz"), Some(F::Gz));
+        assert_eq!(ArchiveFormat::typed_in("photos"), None);
+        assert_eq!(ArchiveFormat::typed_in("v1.2"), None);
+        // The file name: the extension is added once.
+        assert_eq!(archive_file_name("  photos ", F::Zip), "photos.zip");
+        assert_eq!(archive_file_name("photos.ZIP", F::Zip), "photos.ZIP");
+        assert_eq!(archive_file_name("photos.tar.gz", F::TarGz), "photos.tar.gz");
+        assert_eq!(archive_file_name("photos.gz", F::TarGz), "photos.gz.tar.gz");
+        assert_eq!(archive_file_name("v1.2", F::SevenZ), "v1.2.7z");
     }
 
     #[test]
@@ -1507,6 +1623,31 @@ mod password_tests {
         out.into_inner()
     }
 
+    /// A wrong password that ends the data early, which sevenz-rust2 does not see as an
+    /// error (about 1 in 200 passwords). Made with `sevenz_bytes(false)`; "wrong-91" is such
+    /// a password for it.
+    #[test]
+    fn sevenz_wrong_password_that_cuts_the_data_short() {
+        let bytes = include_bytes!("../assets/testdata/7z-short-with-wrong-password.7z");
+        let (_d, p) = temp_file("a.7z", bytes);
+        // The library on its own reads nothing, without an error.
+        let mut r = sevenz_rust2::ArchiveReader::open(&p, sevenz_rust2::Password::new("wrong-91")).unwrap();
+        assert_eq!(r.read_file("secret.txt").unwrap(), b"");
+        assert!(!check_password(&p, "wrong-91"));
+        assert!(check_password(&p, PASSWORD));
+        remember_password(&p, "wrong-91");
+        assert_eq!(read_entry(&p, "secret.txt", 100).unwrap_err(), wrong_password());
+        let out = crate::media::TempDir::new().unwrap();
+        let e = extract(&p, out.path(), &[], "", Conflict::Overwrite, &Progress::default()).unwrap_err();
+        assert!(e.contains(&wrong_password()), "{e}");
+        assert!(!out.path().join("secret.txt").exists(), "no empty file left behind");
+        remember_password(&p, PASSWORD);
+        assert_eq!(read_entry(&p, "secret.txt", 100).unwrap(), b"top secret");
+        let out = crate::media::TempDir::new().unwrap();
+        extract(&p, out.path(), &[], "", Conflict::Overwrite, &Progress::default()).unwrap();
+        assert_eq!(std::fs::read(out.path().join("secret.txt")).unwrap(), b"top secret");
+    }
+
     #[test]
     fn sevenz_with_and_without_encrypted_file_lists() {
         for (headers, lock) in [(false, Lock::Contents), (true, Lock::Everything)] {
@@ -1522,3 +1663,4 @@ mod password_tests {
         }
     }
 }
+

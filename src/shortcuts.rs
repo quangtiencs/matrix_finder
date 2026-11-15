@@ -177,7 +177,7 @@ const DEFS: &[Def] = &[
     def(A::SplitLeft, "split_left", G::Windows, true, &["Ctrl+Shift+L"], &["Ctrl+Shift+L"], &["Ctrl+Cmd+ArrowLeft"]),
     def(A::SplitUp, "split_up", G::Windows, true, &["Ctrl+Shift+K"], &["Ctrl+Shift+K"], &["Ctrl+Cmd+ArrowUp"]),
     def(A::SwapPanels, "swap_panels", G::Windows, false, &["Ctrl+U"], &["Ctrl+U"], &["Cmd+U"]),
-    def(A::View, "view", G::Files, false, &["F3"], &["F3"], &["F3"]),
+    def(A::View, "view", G::Files, false, &["Shift+F3"], &["Shift+F3"], &["Shift+F3"]),
     def(A::OpenDefault, "open_default", G::Files, false, &["F4"], &["F4"], &["F4"]),
     def(A::NewFile, "new_file", G::Files, false, &["Shift+F4"], &["Shift+F4"], &["Shift+F4"]),
     def(A::NewFolder, "new_folder", G::Files, false, &["F7"], &["F7"], &["F7", "Cmd+Shift+N"]),
@@ -203,7 +203,7 @@ const DEFS: &[Def] = &[
     def(A::ToggleHidden, "toggle_hidden", G::Navigation, false, &["Ctrl+H", "Ctrl+Shift+Period"], &["Ctrl+H", "Alt+Period"], &["Cmd+Shift+Period"]),
     def(A::Palette, "palette", G::App, true, &["Ctrl+K", "Ctrl+Shift+P"], &["Ctrl+K", "Ctrl+Shift+P"], &["Cmd+K", "Cmd+Shift+P"]),
     def(A::OpenTerminal, "open_terminal", G::App, false, &["F9"], &["F9"], &["F9"]),
-    def(A::QuickView, "quick_view", G::App, false, &["Ctrl+Q"], &["Ctrl+Q"], &["Cmd+Y", "Ctrl+Q"]),
+    def(A::QuickView, "quick_view", G::App, false, &["F3", "Ctrl+Q"], &["F3", "Ctrl+Q"], &["F3", "Cmd+Y", "Ctrl+Q"]),
     def(A::Sidebar, "sidebar", G::App, false, &["Ctrl+Backslash"], &["Ctrl+Backslash"], &["Cmd+Alt+S"]),
     def(A::Transfers, "transfers", G::App, true, &["Ctrl+J", "Ctrl+Shift+J"], &["Ctrl+J", "Ctrl+Shift+J"], &["Cmd+J"]),
     def(A::Connect, "connect", G::App, false, &["Ctrl+N"], &["Ctrl+N"], &["Cmd+N"]),
@@ -291,7 +291,7 @@ impl Action {
             A::OpenTerminal => t("Open terminal here"),
             A::QuickView => t("Quick view panel"),
             A::Sidebar => t("Sidebar"),
-            A::Transfers => t("Transfers"),
+            A::Transfers => t("Tasks"),
             A::Connect => t("Connect to server…"),
             A::Backup => t("Backup…"),
             A::Settings => t("Settings…"),
@@ -574,6 +574,23 @@ mod tests {
         ids.sort_unstable();
         ids.dedup();
         assert_eq!(ids.len(), DEFS.len(), "unique ids");
+    }
+
+    /// F3 shows and hides the Quick View panel (Shift+F3: the viewer window) and F4
+    /// opens what is under the cursor, on every system; a terminal keeps both keys.
+    #[test]
+    fn f3_is_quick_view_and_f4_opens() {
+        for os in OSES {
+            let s = defaults_only(os);
+            let at = |key, m| s.action_for(key, None, m, false);
+            assert_eq!(at(Key::F3, Modifiers::NONE), Some(Action::QuickView), "{os:?}");
+            assert_eq!(at(Key::F3, Modifiers::SHIFT), Some(Action::View), "{os:?}");
+            assert_eq!(at(Key::F4, Modifiers::NONE), Some(Action::OpenDefault), "{os:?}");
+            assert_eq!(defaults(Action::QuickView, os)[0], Chord::parse("F3").unwrap(), "{os:?}: F3 is the key shown");
+            assert!(defaults(Action::QuickView, os).len() > 1, "{os:?}: the old keys still work");
+            assert_eq!(s.action_for(Key::F3, None, Modifiers::NONE, true), None, "{os:?}: a terminal gets F3");
+            assert_eq!(s.action_for(Key::F4, None, Modifiers::NONE, true), None, "{os:?}: a terminal gets F4");
+        }
     }
 
     #[test]

@@ -177,36 +177,11 @@ pub fn list_local(dir: &Path) -> Res<Vec<Entry>> {
     Ok(out)
 }
 
-/// Mount points / drives for the drive selector.
-pub fn drives() -> Vec<(String, PathBuf, u64, u64)> {
-    let disks = sysinfo::Disks::new_with_refreshed_list();
-    let mut out: Vec<(String, PathBuf, u64, u64)> = disks
-        .list()
-        .iter()
-        .map(|d| {
-            let mp = d.mount_point().to_path_buf();
-            let name = d.name().to_string_lossy().to_string();
-            let label = if cfg!(windows) || name.is_empty() {
-                mp.to_string_lossy().to_string()
-            } else {
-                format!("{} ({})", mp.to_string_lossy(), name)
-            };
-            (label, mp, d.total_space(), d.available_space())
-        })
-        .collect();
-    out.sort_by(|a, b| a.1.cmp(&b.1));
-    out.dedup_by(|a, b| a.1 == b.1);
-    if out.is_empty() {
-        out.push(("/".into(), PathBuf::from("/"), 0, 0));
-    }
-    out
-}
-
 /// (total, available) bytes of the filesystem holding `path`.
-pub fn free_space(path: &Path, cached: &[(String, PathBuf, u64, u64)]) -> Option<(u64, u64)> {
+pub fn free_space(path: &Path, cached: &[crate::drives::Drive]) -> Option<(u64, u64)> {
     cached
         .iter()
-        .filter(|d| path.starts_with(&d.1))
-        .max_by_key(|d| d.1.as_os_str().len())
-        .map(|d| (d.2, d.3))
+        .filter(|d| path.starts_with(&d.mount))
+        .max_by_key(|d| d.mount.as_os_str().len())
+        .map(|d| (d.total, d.avail))
 }

@@ -568,11 +568,14 @@ fn app_harness(cfg: &Settings, chrome: &str) -> Harness<'static, App> {
         .build_eframe(|cc| App::new(cc, crate::chrome::Chrome::detect(true), None));
     let app = h.state_mut();
     // Only the root file system: the sidebar must not show this machine's volumes.
-    app.drives = crate::vfs::drives().into_iter().filter(|d| d.1 == Path::new("/")).map(|mut d| {
-        d.0 = "/".into();
-        d
-    }).collect();
-    app.drives_at = Instant::now() + Duration::from_secs(3600);
+    fn root() -> Vec<crate::drives::Drive> {
+        crate::drives::list().into_iter().filter(|d| d.mount == Path::new("/")).map(|mut d| {
+            d.label = "/".into();
+            d
+        }).collect()
+    }
+    app.drives = root();
+    app.drive_watch = crate::drives::Watcher::spawn_with(root, Duration::from_secs(3600), Duration::from_secs(3600), None);
     // macOS keeps the settings in ~/Library, which would show up in the demo home folder.
     if let Some(home) = dirs::home_dir() {
         let _ = std::fs::remove_dir_all(home.join("Library"));
@@ -1331,7 +1334,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         for i in 1..=3 {
             let src = d.demo.join(format!("big/video_{i}.mkv")).to_string_lossy().to_string();
             let title = format!("{} 1 {}", t("Copying"), t("item(s)"));
-            app.spawn_job(title, After::Refresh, Some(Location::Local(d.demo.join("out"))), move |p| {
+            app.spawn_job(title, After::Refresh, Some(Location::Local(d.demo.join("out"))), vec![], move |p| {
                 let total: u64 = 1_500_000_000;
                 p.set_total(total);
                 p.set_current(&src);
@@ -1366,7 +1369,6 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         settle(&mut h, 4);
         h.get_by_label("Web-safe (slug)").click();
         settle(&mut h, 4);
-        center_dialog(&mut h, &t("Batch rename"));
         move_to(&mut h, pos2(W / 2.0, H - 20.0));
         shot(&mut h, "batch-rename");
     }
@@ -1518,8 +1520,11 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             app.shot_pane(0, &d.demo, Some(".."));
             app.shot_pane(1, &d.demo.join("data"), Some(".."));
             app.shot_focus(0);
-            let i = app.cfg.quick_filters.iter().position(|q| q.name == "Spreadsheets").unwrap();
-            app.set_quick_filter(Some(i));
+            // Two kinds ticked.
+            for name in ["Spreadsheets", "Data"] {
+                let i = app.cfg.quick_filters.iter().position(|q| q.name == name).unwrap();
+                app.set_quick_filter(Some(i));
+            }
             settle(&mut h, 3);
             let uid = h.state().panes[0].tab().uid;
             h.ctx.memory_mut(|m| m.open_popup(egui::Id::new(("quick-filter", uid))));
@@ -1650,9 +1655,8 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         }
         let iso = std::fs::File::open(d.downloads.join("ubuntu-26.04-desktop.iso")).unwrap();
         let hash = crate::checksum::hash_reader(iso, crate::checksum::Algo::Sha256, |_| true).unwrap();
-        type_into(&mut h, egui::Rect::from_min_max(pos2(W * 0.2, 120.0), pos2(W * 0.85, H * 0.35)), &hash);
+        type_into(&mut h, egui::Rect::from_min_max(pos2(W * 0.2, 80.0), pos2(W, H * 0.4)), &hash);
         settle(&mut h, 8);
-        center_dialog(&mut h, "checksum-window");
         shot(&mut h, "checksum");
     }
 
@@ -1662,7 +1666,6 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         app.shot_pane(0, &d.downloads, Some("SHA256SUMS"));
         app.open_checksum();
         settle(&mut h, 10);
-        center_dialog(&mut h, "checksum-window");
         shot(&mut h, "checksum-verify");
     }
 
@@ -1959,8 +1962,8 @@ fn transfers_open_in_a_tab() {
     let app = h.state();
     assert_eq!(app.strip.tabs.len(), before + 1);
     assert!(app.panes[app.active].tab().transfers);
-    assert_eq!(app.panes[app.active].tab().title(), t("Transfers"));
-    assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new(t("Transfers")))).is_none());
+    assert_eq!(app.panes[app.active].tab().title(), t("Tasks"));
+    assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new(t("Tasks")))).is_none());
 
     // It has no file list for file commands to act on.
     press_chord(&mut h, "F5");
@@ -2025,7 +2028,7 @@ fn transfers_open_in_a_tab() {
 
 /// A job that runs until it is cancelled.
 fn endless_job(app: &mut App) -> std::sync::Arc<ops::Progress> {
-    app.spawn_job("Copying".into(), After::Refresh, None, |p| {
+    app.spawn_job("Copying".into(), After::Refresh, None, vec![], |p| {
         p.set_total(100);
         p.add(25);
         while !p.cancelled() {
@@ -2068,7 +2071,7 @@ fn quitting_with_transfers_asks_first() {
     // Asked, and it can be turned down by button and by Escape.
     request_close(&mut h);
     assert!(h.state().quit == Quit::Asking);
-    h.get_by_label(&t("Keep transferring")).click();
+    h.get_by_label(&t("Keep running")).click();
     settle(&mut h, 2);
     assert!(h.state().quit == Quit::No);
     assert!(!job.cancelled());
@@ -2500,4 +2503,1115 @@ fn quick_view_samples() {
         let img = h.render().unwrap();
         img.save(out.join(format!("{name}.png"))).unwrap();
     }
+}
+
+/// Typing in the address bar suggests the folders that match: arrows pick one, Enter
+/// opens it, Tab completes it, a click opens it, Esc puts the address back.
+#[test]
+#[ignore]
+fn address_bar_suggestions() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.home, None);
+    h.state_mut().active = 0;
+    settle(&mut h, 3);
+    // HOME is the demo home, so "~" works as typed.
+    let home = "~";
+    let type_address = |h: &mut Harness<'static, App>, text: &str| {
+        h.state_mut().panes[0].tab_mut().editing_path = true;
+        h.state_mut().panes[0].tab_mut().focus_path = true;
+        settle(h, 2);
+        key_press(h, Key::A, None, Modifiers::COMMAND);
+        push(h, Event::Text(text.into()));
+        settle(h, 2);
+        for _ in 0..50 {
+            if !h.state().panes[0].tab().complete.items.is_empty() {
+                break;
+            }
+            settle(h, 1);
+        }
+    };
+    let names = |h: &Harness<'static, App>| -> Vec<String> { h.state().panes[0].tab().complete.items.iter().map(|s| s.name.clone()).collect() };
+
+    type_address(&mut h, &format!("{home}/Do"));
+    assert_eq!(names(&h), ["Documents", "Downloads"]);
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        settle(&mut h, 2);
+        h.render().unwrap().save(Path::new(&out).join("address-suggestions.png")).unwrap();
+    }
+    key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    assert_eq!(h.state().panes[0].tab().complete.sel, Some(1));
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 3);
+    assert!(!h.state().panes[0].tab().editing_path);
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(d.home.join("Downloads")));
+
+    // Tab completes the only match and goes on with the folders inside it.
+    type_address(&mut h, &format!("{home}/Pro"));
+    assert_eq!(names(&h), ["Projects"]);
+    key_press(&mut h, Key::Tab, None, Modifiers::NONE);
+    assert_eq!(h.state().panes[0].tab().path_text, format!("{home}/Projects/"));
+    assert!(h.state().panes[0].tab().editing_path, "Tab keeps the keyboard in the address bar");
+    for _ in 0..50 {
+        if names(&h) == ["matrix_finder"] {
+            break;
+        }
+        settle(&mut h, 1);
+    }
+    assert_eq!(names(&h), ["matrix_finder"]);
+    // A click on a suggestion opens it.
+    let row = h.state().panes[0].tab().complete.rows[0];
+    move_to(&mut h, row.center());
+    button(&mut h, row.center(), PointerButton::Primary, true, Modifiers::NONE);
+    button(&mut h, row.center(), PointerButton::Primary, false, Modifiers::NONE);
+    settle(&mut h, 3);
+    assert!(!h.state().panes[0].tab().editing_path);
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(d.home.join("Projects/matrix_finder")));
+
+    // Esc: no list, the address is put back.
+    let before = h.state().panes[0].tab().path_text.clone();
+    type_address(&mut h, &format!("{home}/D"));
+    assert!(!names(&h).is_empty());
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert!(!h.state().panes[0].tab().editing_path);
+    assert!(h.state().panes[0].tab().complete.items.is_empty());
+    assert_eq!(h.state().panes[0].tab().path_text, before);
+}
+
+/// Mount a small disk image (macOS) and make it the only other drive in the sidebar.
+fn mount_test_image(dir: &Path, name: &str) -> PathBuf {
+    let img = dir.join(format!("{name}.dmg"));
+    if !img.exists() {
+        let ok = std::process::Command::new("hdiutil").args(["create", "-size", "4m", "-fs", "HFS+", "-volname", name]).arg(&img).output().unwrap();
+        assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+    }
+    let ok = std::process::Command::new("hdiutil").arg("attach").arg(&img).output().unwrap();
+    assert!(ok.status.success(), "{}", String::from_utf8_lossy(&ok.stderr));
+    let mount = PathBuf::from("/Volumes").join(name);
+    std::fs::create_dir_all(mount.join("photos")).unwrap();
+    mount
+}
+
+fn wait_for(h: &mut Harness<'static, App>, what: &str, done: impl Fn(&App) -> bool) {
+    for _ in 0..300 {
+        if done(h.state()) {
+            return;
+        }
+        settle(h, 1);
+    }
+    panic!("timed out: {what}");
+}
+
+/// The eject button of the sidebar: refused while a transfer uses the drive, explains
+/// which program holds it, and ejects it, sending the windows on it home. A drive
+/// unmounted elsewhere leaves the sidebar by itself. macOS only: it mounts a disk image.
+#[test]
+#[ignore]
+fn eject_drives_from_the_sidebar() {
+    if !cfg!(target_os = "macos") {
+        return;
+    }
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let name = format!("MFDrive{}", std::process::id());
+    let mount = PathBuf::from("/Volumes").join(&name);
+    let lister = {
+        let mount = mount.clone();
+        move || -> Vec<crate::drives::Drive> {
+            crate::drives::list().into_iter().filter(|x| x.mount == Path::new("/") || x.mount == mount).map(|mut x| {
+                if x.mount == Path::new("/") {
+                    x.label = "/".into();
+                }
+                x
+            }).collect()
+        }
+    };
+    h.state_mut().drive_watch = crate::drives::Watcher::spawn_with(lister, Duration::from_millis(200), Duration::from_secs(3600), None);
+    let images = crate::media::TempDir::new().unwrap();
+    assert_eq!(mount_test_image(images.path(), &name), mount);
+    let home = d.home.clone();
+    let has = |app: &App, m: &Path| app.drives.iter().any(|x| x.mount == m);
+    wait_for(&mut h, "the drive shows up", |app| has(app, &mount));
+    h.state_mut().shot_pane(0, &mount.join("photos"), None);
+    h.state_mut().active = 0;
+    settle(&mut h, 3);
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        let row = h.state().drive_rows.iter().find_map(|r| r.2).unwrap();
+        move_to(&mut h, row.center());
+        h.render().unwrap().save(Path::new(&out).join("eject-button.png")).unwrap();
+    }
+    let click_eject = |h: &mut Harness<'static, App>| {
+        let r = h.state().drive_rows.iter().find(|(m, _, _)| *m == mount).and_then(|r| r.2).expect("an eject button");
+        move_to(h, r.center());
+        button(h, r.center(), PointerButton::Primary, true, Modifiers::NONE);
+        button(h, r.center(), PointerButton::Primary, false, Modifiers::NONE);
+    };
+    let last_toast = |app: &App| app.toasts.last().map(|t| (t.text.clone(), t.error));
+
+    // 1. A transfer that uses the drive: refused, nothing is run.
+    let app = h.state_mut();
+    app.spawn_job("Copying".into(), After::Refresh, None, vec![mount.join("photos")], |p| {
+        while !p.cancelled() {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        Err("Cancelled".into())
+    });
+    app.jobs[0].job.progress.release();
+    click_eject(&mut h);
+    let (text, error) = last_toast(h.state()).unwrap();
+    assert!(error && text.contains(&t("A task is using this drive. Wait for it to finish, or cancel it.")), "{text}");
+    assert!(h.state().ejecting.is_empty() && has(h.state(), &mount));
+    for j in &h.state().jobs {
+        j.job.progress.cancel();
+    }
+    wait_for(&mut h, "the transfer stops", |app| app.jobs.is_empty());
+
+    // 2. Another program has a folder open there: it is named, and the drive stays.
+    let mut busy = std::process::Command::new("sleep").arg("60").current_dir(&mount).spawn().unwrap();
+    click_eject(&mut h);
+    assert_eq!(h.state().ejecting.len(), 1, "ejecting in the background");
+    wait_for(&mut h, "the eject fails", |app| app.ejecting.is_empty());
+    let (text, error) = last_toast(h.state()).unwrap();
+    assert!(error && text.contains("sleep"), "{text}");
+    assert!(has(h.state(), &mount));
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(mount.join("photos")), "the window stays on the drive");
+    busy.kill().unwrap();
+    busy.wait().unwrap();
+
+    // 3. Ejected: gone from the sidebar and the system, the window goes home.
+    click_eject(&mut h);
+    wait_for(&mut h, "the eject finishes", |app| app.ejecting.is_empty());
+    let (text, error) = last_toast(h.state()).unwrap();
+    assert!(!error && text.contains(&name), "{text}");
+    assert!(!has(h.state(), &mount));
+    assert!(!mount.exists());
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(home.clone()));
+    settle(&mut h, 15);
+    assert!(!has(h.state(), &mount), "the watcher agrees");
+
+    // 4. Unmounted elsewhere: the sidebar follows, and the window on it goes home.
+    mount_test_image(images.path(), &name);
+    wait_for(&mut h, "the drive is back", |app| has(app, &mount));
+    h.state_mut().shot_pane(0, &mount.join("photos"), None);
+    settle(&mut h, 3);
+    let ok = std::process::Command::new("hdiutil").arg("detach").arg(&mount).output().unwrap();
+    assert!(ok.status.success());
+    wait_for(&mut h, "the drive leaves the sidebar", |app| !has(app, &mount));
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(home));
+}
+
+/// The Drives section of the sidebar: by default only with more than one drive (the
+/// system's own mounts do not count), always or never by the setting, and each drive
+/// shown by its name, not its path.
+#[test]
+#[ignore]
+fn drives_section_follows_the_setting() {
+    use egui::accesskit::Role;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let root = crate::drives::list().into_iter().find(|x| x.mount == Path::new("/")).unwrap();
+    let mut data = root.clone();
+    data.mount = PathBuf::from("/System/Volumes/Data");
+    data.system = true;
+    let usb = crate::drives::Drive {
+        label: "/Volumes/KINGSTON (KINGSTON)".into(),
+        name: "KINGSTON".into(),
+        system: false,
+        mount: PathBuf::from("/Volumes/KINGSTON"),
+        total: 32 << 30,
+        avail: 20 << 30,
+        fs: "msdos".into(),
+        device: "KINGSTON".into(),
+        removable: true,
+        ejectable: true,
+    };
+    let now = std::sync::Arc::new(std::sync::Mutex::new(vec![root.clone(), data.clone()]));
+    let n2 = now.clone();
+    h.state_mut().drive_watch = crate::drives::Watcher::spawn_with(move || n2.lock().unwrap().clone(), Duration::from_millis(50), Duration::from_secs(3600), None);
+    let rows = |h: &Harness<'static, App>| h.state().drive_rows.iter().map(|r| r.1.clone()).collect::<Vec<_>>();
+    let wait_rows = |h: &mut Harness<'static, App>, want: &[&str]| {
+        for _ in 0..100 {
+            if rows(h) == want {
+                return;
+            }
+            settle(h, 1);
+        }
+        assert_eq!(rows(h), want);
+    };
+    let root_name = root.name.clone();
+    assert!(!root_name.is_empty());
+
+    // One drive (the Data volume is the system's): no Drives section.
+    assert_eq!(h.state().cfg.sidebar_drives, crate::config::SidebarDrives::WhenSeveral);
+    wait_rows(&mut h, &[]);
+    // A USB drive is plugged in: both, by name.
+    now.lock().unwrap().push(usb.clone());
+    wait_rows(&mut h, &[&root_name, "KINGSTON"]);
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("drives-by-name.png")).unwrap();
+    }
+    // Never, picked in Settings → Files & layout.
+    h.state_mut().open_settings(SettingsPage::Files);
+    settle(&mut h, 4);
+    scroll_settings(&mut h, 600.0);
+    h.get_by_role_and_label(Role::RadioButton, &t("Never")).click();
+    settle(&mut h, 3);
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("drives-setting.png")).unwrap();
+    }
+    assert_eq!(h.state().cfg.sidebar_drives, crate::config::SidebarDrives::Never);
+    assert_eq!(Settings::load().sidebar_drives, crate::config::SidebarDrives::Never, "saved");
+    wait_rows(&mut h, &[]);
+    // Always: also with one drive.
+    h.get_by_role_and_label(Role::RadioButton, &t("Always")).click();
+    settle(&mut h, 3);
+    now.lock().unwrap().pop();
+    wait_rows(&mut h, &[&root_name]);
+    // Back to the default: hidden again with one drive.
+    h.get_by_role_and_label(Role::RadioButton, &t("Only when there is more than one drive")).click();
+    settle(&mut h, 3);
+    wait_rows(&mut h, &[]);
+}
+
+/// F3 shows and hides Quick View, Shift+F3 opens the viewer window, and F4 opens a
+/// folder (or "..", or a folder inside an archive) in the same window instead of
+/// handing it to the system's file manager.
+#[test]
+#[ignore]
+fn f3_quick_view_and_f4_opens_folders_here() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, None);
+    h.state_mut().active = 0;
+    settle(&mut h, 3);
+    let put_cursor = |h: &mut Harness<'static, App>, name: &str| {
+        let tab = h.state_mut().panes[0].tab_mut();
+        let at = tab.view.iter().position(|&i| tab.entries[i].name == name).unwrap_or_else(|| panic!("no {name}"));
+        tab.cursor = at;
+        settle(h, 1);
+    };
+    let loc = |h: &Harness<'static, App>| h.state().panes[0].tab().loc.clone();
+
+    // F3: Quick View on, and off again.
+    let before = h.state().cfg.quick_view;
+    put_cursor(&mut h, "notes.txt");
+    key_press(&mut h, Key::F3, None, Modifiers::NONE);
+    assert_eq!(h.state().cfg.quick_view, !before);
+    key_press(&mut h, Key::F3, None, Modifiers::NONE);
+    assert_eq!(h.state().cfg.quick_view, before);
+    assert!(h.state().viewer.is_none(), "F3 alone opens no viewer window");
+    // Shift+F3: the viewer window.
+    key_press(&mut h, Key::F3, None, Modifiers::SHIFT);
+    assert_eq!(h.state().viewer.as_ref().map(|v| v.name.clone()).as_deref(), Some("notes.txt"));
+    h.state_mut().viewer = None;
+    settle(&mut h, 1);
+
+    // F4 on a folder: opened here.
+    put_cursor(&mut h, "docs");
+    key_press(&mut h, Key::F4, None, Modifiers::NONE);
+    settle(&mut h, 3);
+    assert_eq!(loc(&h), Location::Local(d.demo.join("docs")));
+    // F4 on "..": back up.
+    put_cursor(&mut h, "..");
+    key_press(&mut h, Key::F4, None, Modifiers::NONE);
+    settle(&mut h, 3);
+    assert_eq!(loc(&h), Location::Local(d.demo.clone()));
+    // F4 on a folder inside an archive: opened here too.
+    h.state_mut().shot_pane(0, &d.demo, None);
+    settle(&mut h, 2);
+    let zip = d.demo.join("bundle.zip");
+    h.state_mut().navigate_active(Location::Archive { file: zip.clone(), inner: String::new() });
+    settle(&mut h, 5);
+    put_cursor(&mut h, "images");
+    key_press(&mut h, Key::F4, None, Modifiers::NONE);
+    settle(&mut h, 5);
+    assert_eq!(loc(&h), Location::Archive { file: zip, inner: "images".into() });
+}
+
+/// The sidebar button sits just before the "Matrix Finder" menu: at the top of the
+/// sidebar while it is shown, at the left of the top bar while it is hidden. The
+/// menu's View submenu turns the sidebar on and off too.
+#[test]
+#[ignore]
+fn sidebar_button_next_to_the_app_menu() {
+    use egui::accesskit::Role;
+    let d = demo_env();
+    for (theme, chrome) in [("Adwaita Light", "gnome"), ("macOS Light", "mac"), ("Windows 11 Light", "windows")] {
+        let mut h = app_harness(&settings(theme, &d), chrome);
+        let rect = |h: &Harness<'static, App>, label: &str| {
+            let r = h.get_by_role_and_label(Role::Button, label).bounding_box().unwrap_or_else(|| panic!("{chrome}: no box for {label:?}"));
+            egui::Rect::from_min_max(pos2(r.x0 as f32, r.y0 as f32), pos2(r.x1 as f32, r.y1 as f32))
+        };
+        let brand = |h: &Harness<'static, App>| {
+            let r = h.get_by_label_contains("Matrix Finder").bounding_box().unwrap();
+            egui::Rect::from_min_max(pos2(r.x0 as f32, r.y0 as f32), pos2(r.x1 as f32, r.y1 as f32))
+        };
+        let next_to = |b: egui::Rect, s: egui::Rect, what: &str| {
+            assert!(s.right() <= b.left() + 1.0 && b.left() - s.right() <= 10.0, "{chrome} {what}: button at {s:?}, menu at {b:?}");
+            assert!((s.center().y - b.center().y).abs() <= 2.0, "{chrome} {what}: same row ({s:?} / {b:?})");
+        };
+
+        // Shown: in the sidebar, after the menu.
+        assert!(h.state().cfg.show_sidebar);
+        let (b, s) = (brand(&h), rect(&h, &t("Hide sidebar")));
+        next_to(b, s, "shown");
+        assert!(s.right() <= h.state().cfg.sidebar_width + 1.0, "{chrome}: inside the sidebar ({s:?})");
+        assert!(h.query_by_role_and_label(Role::Button, &t("Show sidebar")).is_none());
+        h.get_by_role_and_label(Role::Button, &t("Hide sidebar")).click();
+        settle(&mut h, 3);
+        assert!(!h.state().cfg.show_sidebar, "{chrome}: hidden");
+        assert!(!Settings::load().show_sidebar, "{chrome}: saved");
+        if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+            h.render().unwrap().save(Path::new(&out).join(format!("sidebar-hidden-{chrome}.png"))).unwrap();
+        }
+
+        // Hidden: in the top bar, after the menu, and it brings the sidebar back.
+        let (b, s) = (brand(&h), rect(&h, &t("Show sidebar")));
+        next_to(b, s, "hidden");
+        assert!(h.query_by_role_and_label(Role::Button, &t("Hide sidebar")).is_none());
+        h.get_by_role_and_label(Role::Button, &t("Show sidebar")).click();
+        settle(&mut h, 3);
+        assert!(h.state().cfg.show_sidebar, "{chrome}: shown again");
+        assert!(Settings::load().show_sidebar, "{chrome}: saved");
+        if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+            h.render().unwrap().save(Path::new(&out).join(format!("sidebar-shown-{chrome}.png"))).unwrap();
+        }
+        // Only one such button: none left at the right end of the top bar.
+        assert_eq!(h.query_all_by_label_contains(&t("Sidebar")).count() + h.query_all_by_label_contains("sidebar").count(), 1, "{chrome}");
+
+        // The app menu: View → Sidebar, checked while shown; it hides and shows the sidebar.
+        for want in [false, true] {
+            h.get_by_label_contains("Matrix Finder").click();
+            settle(&mut h, 2);
+            // Submenus open on hover.
+            h.get_by_role_and_label(Role::Button, &t("View")).hover();
+            settle(&mut h, 3);
+            let item = h.get_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar")))));
+            assert_eq!(item.toggled() == Some(egui::accesskit::Toggled::True), !want, "{chrome}: the item shows the state");
+            if !want {
+                if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+                    h.render().unwrap().save(Path::new(&out).join(format!("sidebar-menu-{chrome}.png"))).unwrap();
+                }
+            }
+            h.get_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar"))))).click();
+            settle(&mut h, 3);
+            assert_eq!(h.state().cfg.show_sidebar, want, "{chrome}: from the menu");
+            assert_eq!(Settings::load().show_sidebar, want, "{chrome}: saved");
+            assert!(h.query_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar"))))).is_none(), "{chrome}: the menu closes");
+        }
+    }
+}
+
+/// A press and release of the left button at `p`.
+fn click_at(h: &mut Harness<'static, App>, p: Pos2) {
+    move_to(h, p);
+    button(h, p, PointerButton::Primary, true, Modifiers::NONE);
+    button(h, p, PointerButton::Primary, false, Modifiers::NONE);
+    settle(h, 2);
+}
+
+/// Checksum and Batch rename open in a tab of their own (no floating window), do their
+/// work there, and leave with their tab.
+#[test]
+#[ignore]
+fn checksum_and_batch_rename_open_in_tabs() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let dir = d.demo.join("out").join("tool-tabs");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("Báo cáo A.TXT"), "alpha").unwrap();
+    std::fs::write(dir.join("Báo cáo B.TXT"), "beta").unwrap();
+    h.state_mut().shot_pane(0, &dir, Some("Báo cáo A.TXT"));
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let tabs = h.state().strip.tabs.len();
+    let files_tab = h.state().live;
+    // A button is in sight: above the bottom of the window's card (the status bar is below).
+    let in_sight = |h: &Harness<'static, App>, label: &str| {
+        let b = h.get_by_role_and_label(egui::accesskit::Role::Button, label).bounding_box().unwrap();
+        assert!(b.y1 as f32 <= H - 36.0, "{label:?} is cut off at the bottom ({b:?})");
+    };
+    let names = || {
+        let mut v: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    };
+
+    // Checksum: a new tab with the hash in it.
+    h.state_mut().run_cmd(Cmd::Checksum);
+    settle(&mut h, 3);
+    assert_eq!(h.state().strip.tabs.len(), tabs + 1, "a tab of its own");
+    assert_ne!(h.state().live, files_tab, "and it is shown");
+    assert_eq!(h.state().panes.len(), 1);
+    assert!(h.state().panes[0].tab().checksum.is_some());
+    assert!(!h.state().panes[0].tab().is_files());
+    assert_eq!(h.state().panes[0].tab().title(), t("Checksum"));
+    assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new("checksum-window"))).is_none(), "no floating window");
+    let want = crate::checksum::hash_reader(&b"alpha"[..], crate::checksum::Algo::Sha256, |_| true).unwrap();
+    for _ in 0..100 {
+        if h.query_by_label(&want).is_some() {
+            break;
+        }
+        settle(&mut h, 1);
+    }
+    assert!(h.query_by_label(&want).is_some(), "the hash is shown in the tab");
+    in_sight(&h, &t("Save checksum file…"));
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("checksum-tab.png")).unwrap();
+    }
+    let checksum_tab = h.state().live;
+    h.state_mut().request_close_tabs(&[checksum_tab]);
+    settle(&mut h, 3);
+    assert_eq!(h.state().strip.tabs.len(), tabs, "closed with its tab");
+    assert_eq!(h.state().live, files_tab);
+
+    // Batch rename: a new tab; renaming there changes the folder, undo puts it back.
+    h.state_mut().shot_mark(0, &["Báo cáo A.TXT", "Báo cáo B.TXT"]);
+    h.state_mut().run_cmd(Cmd::BatchRename);
+    settle(&mut h, 3);
+    assert_eq!(h.state().strip.tabs.len(), tabs + 1);
+    assert!(h.state().panes[0].tab().renamer.is_some());
+    assert_eq!(h.state().panes[0].tab().title(), t("Batch rename"));
+    h.get_by_label("Web-safe (slug)").click();
+    settle(&mut h, 3);
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("rename-tab.png")).unwrap();
+    }
+    in_sight(&h, &t("Rename"));
+    h.get_by_role_and_label(egui::accesskit::Role::Button, &t("Rename")).click();
+    settle(&mut h, 3);
+    assert_eq!(names(), ["bao-cao-a.txt", "bao-cao-b.txt"]);
+    in_sight(&h, &t("Undo last rename"));
+    h.get_by_label(&t("Undo last rename")).click();
+    settle(&mut h, 3);
+    assert_eq!(names(), ["Báo cáo A.TXT", "Báo cáo B.TXT"]);
+    let rename_tab = h.state().live;
+    h.state_mut().request_close_tabs(&[rename_tab]);
+    settle(&mut h, 3);
+    assert_eq!(h.state().strip.tabs.len(), tabs);
+    assert_eq!(h.state().live, files_tab);
+}
+
+/// The Copy dialog: the "To" field suggests folders while a path is typed (archives
+/// cannot take files, so they are left out), and its folder tree (with OK and Cancel)
+/// picks one.
+#[test]
+#[ignore]
+fn copy_dialog_suggests_folders_and_has_a_tree() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let dir = d.demo.join("out").join("copy-to");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("alpha")).unwrap();
+    std::fs::create_dir_all(dir.join("beta").join("inner")).unwrap();
+    std::fs::write(dir.join("src.txt"), "copy me").unwrap();
+    std::fs::copy(d.demo.join("bundle.zip"), dir.join("bundle.zip")).unwrap();
+    let docs = d.home.join("Documents");
+    let _ = std::fs::remove_file(docs.join("src.txt"));
+    h.state_mut().shot_pane(0, &dir, Some("src.txt"));
+    h.state_mut().shot_pane(1, &d.home, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let dst = |h: &Harness<'static, App>| match &h.state().dialog {
+        Some(Dialog::Transfer { dst, .. }) => Some(dst.clone()),
+        _ => None,
+    };
+    let names = |h: &Harness<'static, App>| -> Vec<String> { h.state().dialog_path.complete.items.iter().map(|s| s.name.clone()).collect() };
+    let wait_names = |h: &mut Harness<'static, App>, want: &[&str]| {
+        for _ in 0..60 {
+            if names(h) == want {
+                return;
+            }
+            settle(h, 1);
+        }
+        assert_eq!(names(h), want);
+    };
+
+    // Typing a path: its folders, not the zip.
+    key_press(&mut h, Key::F5, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert_eq!(dst(&h), Some(d.home.display().to_string()));
+    key_press(&mut h, Key::A, None, Modifiers::COMMAND);
+    push(&mut h, Event::Text(format!("{}/", dir.display())));
+    settle(&mut h, 2);
+    wait_names(&mut h, &["alpha", "beta"]);
+    settle(&mut h, 2);
+    assert_eq!(h.state().dialog_path.complete.rows.len(), 2, "the list is shown");
+    let width = |h: &Harness<'static, App>| h.ctx.memory(|m| m.area_rect(egui::Id::new("dialog"))).map(|r| r.width());
+    let w0 = width(&h);
+    settle(&mut h, 10);
+    assert_eq!(width(&h), w0, "the dialog keeps its width");
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("copy-suggestions.png")).unwrap();
+    }
+    // ↓ ↓ Enter takes "beta" and goes on with the folders in it; the dialog stays.
+    key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    assert_eq!(h.state().dialog_path.complete.sel, Some(1));
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert_eq!(dst(&h), Some(format!("{}/beta/", dir.display())), "Enter on a suggestion fills it in");
+    wait_names(&mut h, &["inner"]);
+    // A click on a suggestion fills it in too.
+    let row = h.state().dialog_path.complete.rows[0];
+    click_at(&mut h, row.center());
+    assert_eq!(dst(&h), Some(format!("{}/beta/inner/", dir.display())));
+    // Esc closes the list only.
+    wait_names(&mut h, &[]);
+    key_press(&mut h, Key::Backspace, None, Modifiers::NONE);
+    key_press(&mut h, Key::Backspace, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    wait_names(&mut h, &["inner"]);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(names(&h).is_empty(), "Esc closes the list");
+    assert!(dst(&h).is_some(), "and leaves the dialog open");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")), "typing goes on in the field");
+    // Enter with no suggestion chosen copies.
+    key_press(&mut h, Key::A, None, Modifiers::COMMAND);
+    push(&mut h, Event::Text(format!("{}/beta", dir.display())));
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(dst(&h).is_none(), "copying");
+    wait_until(&mut h, 5.0, |_| dir.join("beta").join("src.txt").exists());
+    assert!(dir.join("beta").join("src.txt").exists());
+
+    // The folder tree: opens at the folder in the field. A click chooses a folder, OK
+    // takes it; Cancel and Esc leave the field as it was.
+    let tree = dialog_tree;
+    key_press(&mut h, Key::F5, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    let r = open_dialog_tree(&mut h, &docs);
+    assert_eq!(tree(&h).unwrap().1, Some(d.home.clone()), "the folder in the field is chosen");
+    assert_eq!(h.state().dialog_path.tree_of(egui::Id::new("dialog-dst")).unwrap().current(), Some(d.home.as_path()));
+    // Small: well inside the window.
+    let (ok, cancel) = tree(&h).unwrap().2.expect("OK and Cancel");
+    assert!(ok.bottom() < H - 40.0 && cancel.right() < ok.left(), "Cancel, then OK: {cancel:?} {ok:?}");
+    click_at(&mut h, r.center());
+    assert_eq!(tree(&h).map(|t| t.1), Some(Some(docs.clone())), "a click chooses a folder and leaves the tree open");
+    assert_eq!(dst(&h), Some(d.home.display().to_string()), "the field is not changed yet");
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("copy-tree.png")).unwrap();
+    }
+    // Cancel: nothing changes.
+    click_at(&mut h, cancel.center());
+    assert!(tree(&h).is_none(), "Cancel closes the tree");
+    assert_eq!(dst(&h), Some(d.home.display().to_string()));
+    assert!(dst(&h).is_some(), "the dialog stays");
+    // Esc: the same.
+    open_dialog_tree(&mut h, &docs);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(tree(&h).is_none(), "Esc closes the tree");
+    assert_eq!(dst(&h), Some(d.home.display().to_string()), "and only the tree");
+    // ↓ chooses the next folder, Enter takes it (and does not copy yet).
+    open_dialog_tree(&mut h, &docs);
+    let rows: Vec<PathBuf> = tree(&h).unwrap().0.into_iter().map(|r| r.0).collect();
+    let below = rows[rows.iter().position(|p| *p == d.home).unwrap() + 1].clone();
+    key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    settle(&mut h, 1);
+    assert_eq!(tree(&h).unwrap().1, Some(below.clone()));
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(tree(&h).is_none());
+    assert_eq!(dst(&h), Some(below.display().to_string()), "Enter takes the folder chosen");
+    // OK takes the folder clicked.
+    key_press(&mut h, Key::A, None, Modifiers::COMMAND);
+    push(&mut h, Event::Text(d.home.display().to_string()));
+    settle(&mut h, 2);
+    let r = open_dialog_tree(&mut h, &docs);
+    click_at(&mut h, r.center());
+    let ok = tree(&h).unwrap().2.unwrap().0;
+    click_at(&mut h, ok.center());
+    assert!(tree(&h).is_none(), "OK closes the tree");
+    assert_eq!(dst(&h), Some(docs.display().to_string()));
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")), "the field has the keyboard back");
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    wait_until(&mut h, 5.0, |_| docs.join("src.txt").exists());
+    assert!(docs.join("src.txt").exists());
+    let _ = std::fs::remove_file(docs.join("src.txt"));
+}
+
+/// The address bar's folder tree: opens at the folder shown, a chevron opens a folder,
+/// a click chooses one and OK (or Enter) goes there, Esc or a click elsewhere closes it.
+#[test]
+#[ignore]
+fn address_bar_folder_tree() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.home, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let rows = |h: &Harness<'static, App>| -> Vec<(PathBuf, egui::Rect)> { h.state().panes[0].tab().tree.as_ref().map(|t| t.rows.clone()).unwrap_or_default() };
+    let wait_row = |h: &mut Harness<'static, App>, p: &Path| -> egui::Rect {
+        for _ in 0..60 {
+            if let Some(r) = rows(h).iter().find(|r| r.0 == p) {
+                return r.1;
+            }
+            settle(h, 1);
+        }
+        if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+            h.render().unwrap().save(Path::new(&out).join("address-tree-fail.png")).unwrap();
+        }
+        panic!("no row for {}: {:?}", p.display(), rows(h).iter().map(|r| (r.0.clone(), r.1)).collect::<Vec<_>>());
+    };
+    // The address bar of the window on the left.
+    let open = |h: &mut Harness<'static, App>| {
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree")).min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0)).unwrap().click();
+        settle(h, 3);
+        assert!(h.state().panes[0].tab().tree.is_some(), "the tree opens");
+    };
+
+    open(&mut h);
+    let projects = d.home.join("Projects");
+    wait_row(&mut h, &projects);
+    let mf = projects.join("matrix_finder");
+    assert!(!rows(&h).iter().any(|r| r.0 == mf), "closed folders do not show their subfolders");
+    // The chevron opens a folder.
+    let chev = h.state().panes[0].tab().tree.as_ref().unwrap().toggles.iter().find(|r| r.0 == projects).expect("a chevron").1;
+    click_at(&mut h, chev.center());
+    assert!(h.state().panes[0].tab().tree.is_some(), "the chevron leaves the tree open");
+    let r = wait_row(&mut h, &mf);
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("address-tree.png")).unwrap();
+    }
+    // A click on a folder chooses it, OK goes there.
+    click_at(&mut h, r.center());
+    assert!(h.state().panes[0].tab().tree.is_some(), "a click leaves the tree open");
+    assert_eq!(h.state().panes[0].tab().tree.as_ref().unwrap().selected(), Some(mf.as_path()));
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(d.home.clone()), "and goes nowhere yet");
+    let ok = h.state().panes[0].tab().tree.as_ref().unwrap().buttons.expect("OK and Cancel").0;
+    click_at(&mut h, ok.center());
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().tree.is_none(), "OK closes the tree");
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(mf.clone()));
+
+    // Opened again: at the new folder, its parents open.
+    open(&mut h);
+    wait_row(&mut h, &mf);
+    assert_eq!(h.state().panes[0].tab().tree.as_ref().unwrap().current(), Some(mf.as_path()));
+    // ← goes to the folder holding it, Enter goes there; the file list's keys are left alone.
+    let cursor = h.state().panes[0].tab().cursor;
+    key_press(&mut h, Key::ArrowLeft, None, Modifiers::NONE);
+    settle(&mut h, 1);
+    if h.state().panes[0].tab().tree.as_ref().unwrap().selected() == Some(mf.as_path()) {
+        // It was open (it has subfolders): the first ← closed it.
+        key_press(&mut h, Key::ArrowLeft, None, Modifiers::NONE);
+        settle(&mut h, 1);
+    }
+    assert_eq!(h.state().panes[0].tab().tree.as_ref().unwrap().selected(), Some(projects.as_path()));
+    key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    key_press(&mut h, Key::ArrowUp, None, Modifiers::NONE);
+    settle(&mut h, 1);
+    assert_eq!(h.state().panes[0].tab().cursor, cursor, "the arrows move in the tree, not in the list");
+    assert_eq!(h.state().panes[0].tab().tree.as_ref().unwrap().selected(), Some(projects.as_path()));
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().tree.is_none());
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(projects.clone()), "Enter goes to the folder chosen");
+    // Esc closes it.
+    open(&mut h);
+    wait_row(&mut h, &projects);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().tree.is_none(), "Esc closes the tree");
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(projects.clone()));
+    // So does a click elsewhere.
+    open(&mut h);
+    click_at(&mut h, pos2(W * 0.6, H - 60.0));
+    assert!(h.state().panes[0].tab().tree.is_none(), "a click elsewhere closes the tree");
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(projects));
+}
+
+/// An open folder tree as a test sees it: its rows, the folder chosen, and its OK and
+/// Cancel buttons.
+type TreeSeen = (Vec<(PathBuf, egui::Rect)>, Option<PathBuf>, Option<(egui::Rect, egui::Rect)>);
+
+/// The folder tree of the dialog's folder field, while it is open.
+fn dialog_tree(h: &Harness<'static, App>) -> Option<TreeSeen> {
+    h.state().dialog_path.tree_of(egui::Id::new("dialog-dst")).map(|t| (t.rows.clone(), t.selected().map(Path::to_path_buf), t.buttons))
+}
+
+/// Open the dialog's folder tree (the lowest "Folder tree" button: the address bars have
+/// one too) and wait for the row of `p`.
+fn open_dialog_tree(h: &mut Harness<'static, App>, p: &Path) -> egui::Rect {
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree")).max_by(|a, b| a.bounding_box().unwrap().y0.total_cmp(&b.bounding_box().unwrap().y0)).unwrap().click();
+    settle(h, 3);
+    for _ in 0..60 {
+        if let Some(r) = dialog_tree(h).and_then(|t| t.0.iter().find(|r| r.0 == p).map(|r| r.1)) {
+            return r;
+        }
+        settle(h, 1);
+    }
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("dialog-tree-fail.png")).unwrap();
+    }
+    panic!("no tree row for {}", p.display());
+}
+
+fn suggestion_names(h: &Harness<'static, App>) -> Vec<String> {
+    h.state().dialog_path.complete.items.iter().map(|s| s.name.clone()).collect()
+}
+
+/// The Compress dialog: the formats to choose from (the single-file ones only for one
+/// file), a format typed at the end of the name is chosen, "Save to" suggests folders and
+/// has the folder tree, and the file it will make is shown (with a warning when one is
+/// there already). Plain .tar has no level.
+#[test]
+#[ignore]
+fn compress_dialog() {
+    use egui::accesskit::Role;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let dir = d.demo.join("out").join("pack");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("photos").join("2024")).unwrap();
+    std::fs::write(dir.join("photos").join("a.txt"), "a").unwrap();
+    std::fs::write(dir.join("notes.txt"), "notes").unwrap();
+    let dest = dir.join("dest");
+    std::fs::create_dir_all(dest.join("inner")).unwrap();
+    std::fs::write(dest.join("photos.zip"), "taken").unwrap();
+    h.state_mut().shot_pane(0, &dir, Some("photos"));
+    h.state_mut().shot_pane(1, &dest, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let pack = |h: &Harness<'static, App>| match &h.state().dialog {
+        Some(Dialog::Pack { name, dest_dir, format, .. }) => Some((name.clone(), dest_dir.clone(), *format)),
+        _ => None,
+    };
+    let chip = |h: &Harness<'static, App>, ext: &str| h.query_all_by_role_and_label(Role::Button, &format!(".{ext}")).next().map(|n| n.bounding_box().unwrap());
+    let has_text = |h: &Harness<'static, App>, s: &str| h.query_by_label(s).is_some();
+    let taken = t("A file with this name is already there: choose another name.");
+
+    // A folder: no single-file formats; the other window is where it goes.
+    h.state_mut().run_cmd(Cmd::Pack);
+    settle(&mut h, 3);
+    assert_eq!(pack(&h), Some(("photos".into(), dest.display().to_string(), ArchiveFormat::Zip)));
+    assert!(chip(&h, "zip").is_some() && chip(&h, "7z").is_some() && chip(&h, "tar.zst").is_some());
+    assert!(chip(&h, "gz").is_none() && chip(&h, "xz").is_none(), "single-file formats are for one file");
+    assert!(has_text(&h, &ArchiveFormat::Zip.blurb()), "what the format is good for");
+    let makes = |h: &Harness<'static, App>, name: &str, dir: &Path| h.query_all_by_label(name).count() >= 1 && h.query_by_label(&dir.display().to_string()).is_some();
+    assert!(makes(&h, "photos.zip", &dest), "the file it makes");
+    assert!(has_text(&h, &taken), "a warning: photos.zip is there already");
+    assert_eq!(h.query_all_by_role(Role::Slider).count(), 1, "the level");
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("compress-dialog.png")).unwrap();
+    }
+    // Enter while the name is taken keeps the dialog.
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(pack(&h).is_some(), "not made over the file that is there");
+    // A click on a format chooses it.
+    let r = chip(&h, "7z").unwrap();
+    click_at(&mut h, pos2(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32));
+    assert_eq!(pack(&h).unwrap().2, ArchiveFormat::SevenZ);
+    assert!(!has_text(&h, &taken));
+    assert!(makes(&h, "photos.7z", &dest));
+    // .tar has no level.
+    let r = chip(&h, "tar").unwrap();
+    click_at(&mut h, pos2(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32));
+    assert_eq!(pack(&h).unwrap().2, ArchiveFormat::Tar);
+    assert_eq!(h.query_all_by_role(Role::Slider).count(), 0, "no level for .tar");
+    // A format typed in the name is chosen, and not added twice.
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("pack-name")));
+    settle(&mut h, 1);
+    key_press(&mut h, Key::A, None, Modifiers::COMMAND);
+    push(&mut h, Event::Text("album.tar.gz".into()));
+    settle(&mut h, 2);
+    assert_eq!(pack(&h).unwrap().2, ArchiveFormat::TarGz);
+    assert!(makes(&h, "album.tar.gz", &dest));
+
+    // Save to: folders that match what is typed.
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("dialog-dst")));
+    settle(&mut h, 1);
+    key_press(&mut h, Key::A, None, Modifiers::COMMAND);
+    push(&mut h, Event::Text(format!("{}/", dir.display())));
+    for _ in 0..60 {
+        if suggestion_names(&h) == ["dest", "photos"] {
+            break;
+        }
+        settle(&mut h, 1);
+    }
+    assert_eq!(suggestion_names(&h), ["dest", "photos"], "folders only");
+    // Enter on a suggestion fills it in, and does not compress yet.
+    key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert_eq!(pack(&h).map(|p| p.1), Some(format!("{}/dest/", dir.display())));
+    // And the folder tree, at the folder typed: choose "inner", OK.
+    let r = open_dialog_tree(&mut h, &dest.join("inner"));
+    assert_eq!(dialog_tree(&h).unwrap().1, Some(dest.clone()), "open at the folder typed");
+    click_at(&mut h, r.center());
+    let ok = dialog_tree(&h).unwrap().2.unwrap().0;
+    click_at(&mut h, ok.center());
+    assert!(dialog_tree(&h).is_none());
+    assert_eq!(pack(&h).map(|p| p.1), Some(dest.join("inner").display().to_string()));
+    // Enter compresses.
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(pack(&h).is_none());
+    let made = dest.join("inner").join("album.tar.gz");
+    wait_until(&mut h, 10.0, |a| a.jobs.is_empty() && made.exists());
+    let listed = archive::list(&made).unwrap();
+    assert!(listed.iter().any(|e| e.path == "photos/a.txt"), "{:?}", listed.iter().map(|e| &e.path).collect::<Vec<_>>());
+
+    // One file: the single-file formats too.
+    h.state_mut().shot_pane(0, &dir, Some("notes.txt"));
+    settle(&mut h, 2);
+    h.state_mut().run_cmd(Cmd::Pack);
+    settle(&mut h, 3);
+    let r = chip(&h, "gz").expect(".gz for one file");
+    click_at(&mut h, pos2(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32));
+    assert_eq!(pack(&h).unwrap().2, ArchiveFormat::Gz);
+    assert!(makes(&h, "notes.gz", &dest));
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(pack(&h).is_none(), "Esc closes the dialog");
+}
+
+/// A large compression shows its progress: in the status bar, the toolbar's gauge and
+/// the Tasks tab, and it can be paused there.
+#[test]
+#[ignore]
+fn compress_progress_shows_in_tasks() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let dir = d.demo.join("out").join("pack-progress");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // 64 MB that does not compress much.
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let bytes: Vec<u8> = (0..64 << 20)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as u8
+        })
+        .collect();
+    std::fs::write(dir.join("big.bin"), &bytes).unwrap();
+    h.state_mut().shot_pane(0, &dir, Some("big.bin"));
+    h.state_mut().shot_pane(1, &dir, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+
+    h.state_mut().run_cmd(Cmd::Pack);
+    settle(&mut h, 3);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    h.step();
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().jobs.len(), 1);
+    let job = h.state().jobs[0].job.progress.clone();
+    // Paused once it has begun, so that it is caught part way.
+    let t0 = Instant::now();
+    while job.done() == 0 && t0.elapsed() < Duration::from_secs(10) {
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    job.pause();
+    settle(&mut h, 2);
+    let f = job.fraction().expect("the size is known");
+    assert!(f > 0.0 && f < 1.0, "part way: {f}");
+    let title = format!("{} big.zip", t("Compressing"));
+    assert!(h.query_all_by_label(&title).count() >= 1, "the status bar shows it");
+    assert_eq!(h.state().transfers_gauge().map(|g| g.1), Some(true), "the gauge shows it paused");
+    // The Tasks tab: the job with its progress bar, paused.
+    h.state_mut().open_transfers();
+    settle(&mut h, 3);
+    assert_eq!(h.state().panes[h.state().active].tab().title(), t("Tasks"));
+    assert!(h.query_all_by_label(&title).count() >= 2, "listed in Tasks");
+    assert!(h.query_all_by_label_contains(&t("Paused")).count() >= 2, "paused, in the status bar and in Tasks");
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("compress-progress.png")).unwrap();
+    }
+    job.resume();
+    wait_until(&mut h, 60.0, |a| a.jobs.is_empty());
+    assert!(h.state().history.iter().any(|j| j.ok && j.title == title), "finished");
+    assert!(dir.join("big.zip").exists());
+}
+
+/// The Extract dialog's "Extract to" field suggests folders and has the folder tree.
+#[test]
+#[ignore]
+fn extract_dialog_suggests_folders_and_has_a_tree() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, Some("bundle.zip"));
+    h.state_mut().shot_pane(1, &d.home, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let dest = |h: &Harness<'static, App>| match &h.state().dialog {
+        Some(Dialog::Unpack { dest, .. }) => Some(dest.clone()),
+        _ => None,
+    };
+    h.state_mut().run_cmd(Cmd::ExtractOther);
+    settle(&mut h, 3);
+    assert_eq!(dest(&h), Some(d.home.join("bundle").display().to_string()));
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")));
+    key_press(&mut h, Key::A, None, Modifiers::COMMAND);
+    push(&mut h, Event::Text(format!("{}/Doc", d.home.display())));
+    for _ in 0..60 {
+        if suggestion_names(&h) == ["Documents"] {
+            break;
+        }
+        settle(&mut h, 1);
+    }
+    assert_eq!(suggestion_names(&h), ["Documents"]);
+    // The tree, at the home folder (the folder typed is not there).
+    let docs = d.home.join("Documents");
+    let r = open_dialog_tree(&mut h, &docs);
+    click_at(&mut h, r.center());
+    let ok = dialog_tree(&h).unwrap().2.unwrap().0;
+    click_at(&mut h, ok.center());
+    assert_eq!(dest(&h), Some(docs.display().to_string()));
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(dest(&h).is_none());
+}
+
+/// Extract to a folder typed as `~/…` (as the suggestions fill it in) goes to the home
+/// folder, and a relative one to the archive's folder, never to a folder named "~".
+#[test]
+#[ignore]
+fn extract_to_home_and_relative_folders() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let (home_out, rel_out) = (d.home.join("extract-tilde"), d.demo.join("extract-rel"));
+    for p in [&home_out, &rel_out] {
+        let _ = std::fs::remove_dir_all(p);
+    }
+    h.state_mut().shot_pane(0, &d.demo, Some("bundle.zip"));
+    h.state_mut().shot_pane(1, &d.home, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    for (typed, want) in [("~/extract-tilde/", &home_out), ("extract-rel", &rel_out)] {
+        h.state_mut().run_cmd(Cmd::ExtractOther);
+        settle(&mut h, 3);
+        match &mut h.state_mut().dialog {
+            Some(Dialog::Unpack { dest, .. }) => *dest = typed.to_string(),
+            _ => panic!("no Extract dialog"),
+        }
+        settle(&mut h, 2);
+        key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+        settle(&mut h, 2);
+        assert!(h.state().dialog.is_none(), "{typed}: extracting");
+        wait_until(&mut h, 10.0, |a| a.jobs.is_empty() && want.join("images").is_dir());
+        assert!(want.join("images").is_dir(), "{typed} → {}", want.display());
+    }
+    assert!(!Path::new("~").exists() && !Path::new("extract-rel").exists(), "nothing in the working folder");
+}
+
+/// Relative paths are taken from the window's folder (address bar, Copy to), and a
+/// bookmark kept as `~/…` is the folder in the home folder.
+#[test]
+#[ignore]
+fn relative_and_home_paths() {
+    let d = demo_env();
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.bookmarks = vec![Bookmark::new("Docs", "~/Documents")];
+    let mut h = app_harness(&cfg, "gnome");
+    let dir = d.demo.join("out").join("relative");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("a.txt"), "a").unwrap();
+    h.state_mut().shot_pane(0, &dir, Some("a.txt"));
+    h.state_mut().shot_pane(1, &d.home, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    // Copy to "sub": the folder copied from holds it.
+    h.state_mut().run_cmd(Cmd::Copy);
+    settle(&mut h, 2);
+    match &mut h.state_mut().dialog {
+        Some(Dialog::Transfer { dst, .. }) => *dst = "sub".into(),
+        _ => panic!("no Copy dialog"),
+    }
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 2);
+    assert!(h.state().dialog.is_none(), "copying");
+    wait_until(&mut h, 10.0, |a| a.jobs.is_empty() && dir.join("sub/a.txt").exists());
+    assert!(dir.join("sub/a.txt").exists());
+    // The address bar: "sub" goes into this window's folder.
+    h.state_mut().handle_pane_event(0, PaneEvent::NavigateText("sub".into()));
+    settle(&mut h, 2);
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(dir.join("sub")));
+    // Nothing relative is read from where the app was started.
+    h.state_mut().handle_pane_event(0, PaneEvent::NavigateText("src".into()));
+    settle(&mut h, 2);
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(dir.join("sub")), "no folder src in sub");
+    // The bookmark "~/Documents": opens the home folder's, and counts as that folder's
+    // bookmark (the star takes it away instead of adding another).
+    let b = h.state().cfg.bookmarks[0].clone();
+    h.state_mut().open_bookmark(&b);
+    settle(&mut h, 2);
+    let docs = d.home.join("Documents");
+    assert_eq!(h.state().panes[0].tab().loc, Location::Local(docs.clone()));
+    h.state_mut().toggle_bookmark(docs.display().to_string(), "Documents".into());
+    assert!(h.state().cfg.bookmarks.is_empty(), "{:?}", h.state().cfg.bookmarks.iter().map(|b| &b.path).collect::<Vec<_>>());
+}
+
+/// The quick filter menu ticks several categories: a click ticks or unticks one and the
+/// menu stays open; the file list shows the kinds ticked, and the chip names them.
+#[test]
+#[ignore]
+fn quick_filter_ticks_several_kinds() {
+    use egui::accesskit::Role;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let dir = d.demo.join("out").join("quick-kinds");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    for f in ["a.jpg", "b.mp4", "c.mp3", "d.txt"] {
+        std::fs::write(dir.join(f), b"x").unwrap();
+    }
+    h.state_mut().shot_pane(0, &dir, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let shown = |h: &Harness<'static, App>| -> Vec<String> {
+        let tab = h.state().panes[0].tab();
+        tab.view.iter().map(|&i| &tab.entries[i]).filter(|e| !e.is_parent).map(|e| e.name.clone()).collect()
+    };
+    let menu_open = |h: &Harness<'static, App>| h.ctx.memory(|m| m.is_popup_open(egui::Id::new(("quick-filter", h.state().panes[0].tab().uid))));
+    let funnel = |h: &mut Harness<'static, App>| {
+        h.query_all_by_role_and_label(Role::Button, &t("Quick filter")).min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0)).unwrap().click();
+        settle(h, 2);
+    };
+    let tick = |h: &mut Harness<'static, App>, name: &str| {
+        let b = h.get_by_role_and_label(Role::CheckBox, &t(name)).bounding_box().unwrap();
+        click_at(h, pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32));
+    };
+
+    funnel(&mut h);
+    assert!(menu_open(&h));
+    tick(&mut h, "Images");
+    assert!(menu_open(&h), "the menu stays open for more");
+    assert_eq!(shown(&h), ["sub", "a.jpg"]);
+    tick(&mut h, "Videos");
+    assert_eq!(shown(&h), ["sub", "a.jpg", "b.mp4"], "both kinds");
+    assert_eq!(h.state().panes[0].tab().quick.as_ref().unwrap().names, ["Images", "Videos"]);
+    assert!(h.query_by_label(&format!("{}, {}", t("Images"), t("Videos"))).is_some(), "the chip names them");
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("quick-filter-menu.png")).unwrap();
+    }
+    // Unticking one leaves the other.
+    tick(&mut h, "Images");
+    assert_eq!(shown(&h), ["sub", "b.mp4"]);
+    // A click outside closes the menu; the filter stays.
+    click_at(&mut h, pos2(W * 0.6, H - 60.0));
+    assert!(!menu_open(&h));
+    assert_eq!(shown(&h), ["sub", "b.mp4"]);
+    // The palette ticks too.
+    let i = h.state().cfg.quick_filters.iter().position(|q| q.name == "Music").unwrap();
+    h.state_mut().set_quick_filter(Some(i));
+    settle(&mut h, 2);
+    assert_eq!(shown(&h), ["sub", "b.mp4", "c.mp3"]);
+    // Show all files turns it off and closes the menu.
+    funnel(&mut h);
+    h.get_by_label(&t("Show all files")).click();
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().quick.is_none());
+    assert!(!menu_open(&h));
+    assert_eq!(shown(&h), ["sub", "a.jpg", "b.mp4", "c.mp3", "d.txt"]);
 }

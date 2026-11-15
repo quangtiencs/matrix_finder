@@ -109,6 +109,8 @@ pub struct TabInfo {
     pub settings: bool,
     /// The focused window is the Transfers window.
     pub transfers: bool,
+    /// The focused window is a tool (Checksum, Batch rename): its icon.
+    pub tool: Option<fn(&egui::Painter, Rect, egui::Color32)>,
     /// A terminal of the tab rang the bell / printed something while hidden.
     pub bell: bool,
     pub activity: bool,
@@ -836,6 +838,8 @@ fn tab_item(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, w:
         icons::transfers(&p, icon_r, if selected { th.accent } else { th.weak });
     } else if inf.disk_usage {
         icons::bars(&p, icon_r, if selected { th.accent } else { th.weak });
+    } else if let Some(icon) = inf.tool {
+        icon(&p, icon_r, if selected { th.accent } else { th.weak });
     } else {
         match inf.term {
             Some(exited) => {
@@ -850,7 +854,7 @@ fn tab_item(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, w:
     } else if inf.activity && !selected {
         p.circle_filled(icon_r.right_top() + vec2(1.0, 0.0), 3.0, th.accent);
     }
-    let closable = strip.tabs.len() > 1 || inf.term.is_some() || inf.disk_usage || inf.settings || inf.transfers || inf.cells.len() > 1;
+    let closable = strip.tabs.len() > 1 || inf.term.is_some() || inf.disk_usage || inf.settings || inf.transfers || inf.tool.is_some() || inf.cells.len() > 1;
     let show_x = closable && !tab.pinned && (selected || resp.hovered()) && w > 70.0;
     if !tab.pinned {
         let text_w = w - 26.0 - if show_x { 20.0 } else { 6.0 };

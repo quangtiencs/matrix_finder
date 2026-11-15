@@ -37,6 +37,23 @@ fn file_name(profile: &BackupProfile, date: &str) -> String {
     )
 }
 
+/// A folder or file of a profile: `~` stands for the home folder (as the folder fields
+/// suggest it), so a profile can say `~/Documents`.
+fn profile_path(text: &str, home: Option<&Path>) -> PathBuf {
+    crate::pathfield::typed_dir(text, home, None).unwrap_or_else(|| PathBuf::from(text.trim()))
+}
+
+/// The local paths a profile's backup reads (its sources).
+pub fn source_paths(profile: &BackupProfile) -> Vec<PathBuf> {
+    let home = dirs::home_dir();
+    profile.sources.iter().map(|s| profile_path(s, home.as_deref())).collect()
+}
+
+/// The folder a profile's backups go in.
+pub fn destination_path(profile: &BackupProfile) -> PathBuf {
+    profile_path(&profile.destination, dirs::home_dir().as_deref())
+}
+
 /// Run a backup. Returns the path of the created archive.
 pub fn run(profile: &BackupProfile, p: &Progress) -> Res<String> {
     if profile.sources.is_empty() {
@@ -45,14 +62,14 @@ pub fn run(profile: &BackupProfile, p: &Progress) -> Res<String> {
     if profile.format.single_file() {
         return Err("Choose a container format (zip, 7z, tar.*) for backups".into());
     }
-    let sources: Vec<PathBuf> = profile.sources.iter().map(PathBuf::from).collect();
+    let sources = source_paths(profile);
     for s in &sources {
         if !s.exists() {
             return Err(format!("Source does not exist: {}", s.display()));
         }
     }
     let excludes = build_globset(&profile.excludes)?;
-    let dest_dir = PathBuf::from(&profile.destination);
+    let dest_dir = destination_path(profile);
     std::fs::create_dir_all(&dest_dir).map_err(es)?;
     let date = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
     let dest = dest_dir.join(file_name(profile, &date));
@@ -125,17 +142,23 @@ pub struct BackupUi {
     new_exclude: String,
     restore_file: String,
     restore_dest: String,
+    /// Suggestions and the folder tree of the folder fields.
+    pub paths: crate::pathfield::PathField,
 }
 
 impl BackupUi {
+    #[allow(clippy::too_many_arguments)]
     pub fn ui(
         &mut self,
         ctx: &egui::Context,
         profiles: &mut Vec<BackupProfile>,
         current_dir: Option<&Path>,
+        drives: &[crate::drives::Drive],
+        show_hidden: bool,
         theme: &Theme,
         t: &dyn Fn(&str) -> String,
     ) -> Option<BackupAction> {
+        let opts = |width: f32, hint: Option<String>| crate::pathfield::Opts { base: current_dir, show_hidden, drives, width, hint };
         let mut action = None;
         let mut open = self.open;
         egui::Window::new(t("Backup"))
@@ -223,8 +246,9 @@ impl BackupUi {
                                     p.sources.remove(i);
                                 }
                                 ui.horizontal(|ui| {
-                                    ui.add(egui::TextEdit::singleline(&mut self.new_source).hint_text(t("Folder or file path")).desired_width(240.0));
-                                    if ui.button(t("Add")).clicked() && !self.new_source.trim().is_empty() {
+                                    let r = self.paths.show(ui, &mut self.new_source, egui::Id::new("bk-source"), opts(272.0, Some(t("Folder or file path"))), theme);
+                                    let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                                    if (ui.button(t("Add")).clicked() || enter) && !self.new_source.trim().is_empty() {
                                         p.sources.push(self.new_source.trim().to_string());
                                         self.new_source.clear();
                                     }
@@ -275,7 +299,7 @@ impl BackupUi {
 
                             ui.label(t("Destination"));
                             ui.horizontal(|ui| {
-                                ui.add(egui::TextEdit::singleline(&mut p.destination).desired_width(300.0));
+                                self.paths.show(ui, &mut p.destination, egui::Id::new("bk-destination"), opts(332.0, None), theme);
                                 if ui.button(t("Browse…")).clicked() {
                                     if let Some(d) = rfd::FileDialog::new().pick_folder() {
                                         p.destination = d.to_string_lossy().to_string();
@@ -340,7 +364,7 @@ impl BackupUi {
                 });
                 ui.horizontal(|ui| {
                     ui.label(t("Restore to"));
-                    ui.add(egui::TextEdit::singleline(&mut self.restore_dest).desired_width(280.0));
+                    self.paths.show(ui, &mut self.restore_dest, egui::Id::new("bk-restore-to"), opts(312.0, None), theme);
                     if ui.button("…").clicked() {
                         if let Some(f) = rfd::FileDialog::new().pick_folder() {
                             self.restore_dest = f.to_string_lossy().to_string();
@@ -348,11 +372,18 @@ impl BackupUi {
                     }
                     let ok = !self.restore_file.is_empty() && !self.restore_dest.is_empty();
                     if ui.add_enabled(ok, egui::Button::new(format!("⟲ {}", t("Restore")))).clicked() {
-                        action = Some(BackupAction::Restore(PathBuf::from(&self.restore_file), PathBuf::from(&self.restore_dest)));
+                        // `~` and relative paths, as the fields suggest them (relative: from the
+                        // current folder).
+                        let home = dirs::home_dir();
+                        let path = |s: &str| crate::pathfield::typed_dir(s, home.as_deref(), current_dir).unwrap_or_else(|| PathBuf::from(s.trim()));
+                        action = Some(BackupAction::Restore(path(&self.restore_file), path(&self.restore_dest)));
                     }
                 });
             });
         self.open = open;
+        if !open {
+            self.paths.reset();
+        }
         action
     }
 }
@@ -388,6 +419,16 @@ mod tests {
         assert!(!Path::new(&out).exists(), "rotation should delete the older backup");
         assert!(Path::new(&out2).exists());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn paths_with_the_home_folder() {
+        let home = Some(Path::new("/home/me"));
+        assert_eq!(profile_path("~/Documents", home), PathBuf::from("/home/me/Documents"));
+        assert_eq!(profile_path(" ~ ", home), PathBuf::from("/home/me"));
+        assert_eq!(profile_path("/data/x", home), PathBuf::from("/data/x"));
+        assert_eq!(profile_path("~old", home), PathBuf::from("~old"), "a folder called that, not someone's home");
+        assert_eq!(profile_path("~/x", None), PathBuf::from("~/x"));
     }
 
     #[test]

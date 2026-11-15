@@ -194,6 +194,16 @@ pub fn default_quick_filters() -> Vec<QuickFilter> {
     ]
 }
 
+/// `base`, or `base 2`, `base 3`… when a quick filter already has that name: the menu
+/// tells its categories apart by name.
+pub fn unused_quick_filter_name(all: &[QuickFilter], base: &str) -> String {
+    let taken = |n: &str| all.iter().any(|q| q.name == n);
+    if !taken(base) {
+        return base.to_string();
+    }
+    (2..).map(|i| format!("{base} {i}")).find(|n| !taken(n)).unwrap_or_default()
+}
+
 /// Where bookmarks are shown.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum BookmarkBar {
@@ -202,6 +212,16 @@ pub enum BookmarkBar {
     Vertical,
     /// A bar above the tabs, like a browser's bookmarks bar.
     Horizontal,
+}
+
+/// When the sidebar lists the drives.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum SidebarDrives {
+    Always,
+    /// Only with more than one drive (the system's own mounts aside).
+    #[default]
+    WhenSeveral,
+    Never,
 }
 
 /// What starting Matrix Finder again does (e.g. `matrix_finder ~/src` in a terminal)
@@ -391,6 +411,8 @@ pub struct Settings {
     /// "theme", "system", "matrix", "adwaita", "breeze", "macos", "windows" or "icons:<theme>".
     pub icon_pack: String,
     pub show_disk_usage: bool,
+    /// When the sidebar lists the drives.
+    pub sidebar_drives: SidebarDrives,
     /// Changed keyboard shortcuts: action id → its keys. The others use the defaults of the
     /// operating system (see `shortcuts`).
     pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
@@ -510,6 +532,7 @@ impl Default for Settings {
             confirm_dnd: true,
             icon_pack: "theme".into(),
             show_disk_usage: false,
+            sidebar_drives: SidebarDrives::default(),
             shortcuts: Default::default(),
             default_apps: Default::default(),
             terminal_profiles: vec![TerminalProfile::default()],
@@ -781,6 +804,27 @@ mod tests {
         s.quick_filters = vec![QuickFilter::new("Raw", "cr2 nef")];
         s.reset_preferences();
         assert_eq!(s.quick_filters.len(), 1);
+    }
+
+    #[test]
+    fn new_quick_filters_get_their_own_names() {
+        let mut all = vec![QuickFilter::new("Images", "jpg")];
+        assert_eq!(unused_quick_filter_name(&all, "New filter"), "New filter");
+        all.push(QuickFilter::new("New filter", ""));
+        assert_eq!(unused_quick_filter_name(&all, "New filter"), "New filter 2");
+        all.push(QuickFilter::new("New filter 2", ""));
+        assert_eq!(unused_quick_filter_name(&all, "New filter"), "New filter 3");
+    }
+
+    #[test]
+    fn sidebar_drives_setting() {
+        // Older settings: drives only when there are several.
+        let v: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(v.sidebar_drives, SidebarDrives::WhenSeveral);
+        assert_eq!(Settings::default().sidebar_drives, SidebarDrives::WhenSeveral);
+        let s = Settings { sidebar_drives: SidebarDrives::Never, ..Default::default() };
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
+        assert_eq!(back.sidebar_drives, SidebarDrives::Never);
     }
 
     #[test]

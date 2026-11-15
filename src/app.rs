@@ -1,7 +1,6 @@
 //! The main application: layout, keyboard handling, dialogs and background jobs.
 use crate::archive::{self, ArchiveFormat};
 use crate::backup::{self, BackupAction, BackupUi};
-use crate::checksum::ChecksumUi;
 use crate::config::{Bookmark, ConnectionProfile, Protocol, Settings};
 use crate::diskusage::DuAction;
 use crate::i18n::{self, t};
@@ -76,6 +75,8 @@ struct RunningJob {
     job: Job,
     after: After,
     dest: Option<Location>,
+    /// Local files and folders the job reads or writes (a drive in use is not ejected).
+    paths: Vec<PathBuf>,
     /// Smoothed transfer speed in bytes/s and the last (time, bytes) sample.
     speed: f64,
     sample: (Instant, u64),
@@ -108,6 +109,9 @@ struct FinishedJob {
     at: String,
 }
 
+/// A drive being ejected: mount point, name, and the result to come.
+type Ejecting = (PathBuf, String, Receiver<Result<(), String>>);
+
 struct Toast {
     text: String,
     error: bool,
@@ -134,6 +138,7 @@ impl ClosedView {
             (_, Some(d)) => ClosedView::DiskUsage(d.path.clone(), d.depth),
             _ if tab.settings => ClosedView::Settings,
             _ if tab.transfers => ClosedView::Transfers,
+            // A Checksum or Batch rename tool comes back as the folder it worked in.
             _ => ClosedView::Files(tab.loc.clone()),
         }
     }
@@ -165,8 +170,10 @@ pub struct App {
     active: usize,
     remotes: HashMap<u64, (String, SharedRemote)>,
     next_remote: u64,
-    drives: Vec<(String, PathBuf, u64, u64)>,
-    drives_at: Instant,
+    drives: Vec<crate::drives::Drive>,
+    /// Keeps `drives` up to date off the UI thread.
+    drive_watch: crate::drives::Watcher,
+    ejecting: Vec<Ejecting>,
     jobs: Vec<RunningJob>,
     dialog: Option<Dialog>,
     dialog_focus: bool,
@@ -184,14 +191,17 @@ pub struct App {
     palette: Palette,
     history: Vec<FinishedJob>,
     quit: Quit,
-    renamer: BatchRename,
-    checksum: ChecksumUi,
     /// Valid drop target under the pointer this frame (for the drag ghost).
     drag_target: Option<Location>,
     shift_down: bool,
     pane_rects: Vec<(usize, egui::Rect)>,
+    /// The drives shown in the sidebar: mount point, name, and where its eject button was drawn.
+    drive_rows: Vec<(PathBuf, String, Option<egui::Rect>)>,
     /// Exact destination of a drag & drop awaiting confirmation.
     dialog_dst: Option<Location>,
+    /// The suggestions and folder tree of a dialog's folder field (Copy / Move to,
+    /// Compress's Save to, Extract to).
+    dialog_path: crate::pathfield::PathField,
     logo_large: Option<egui::TextureHandle>,
     icon_key: String,
     icon_previews: HashMap<String, icons::IconSet>,
@@ -209,6 +219,8 @@ pub struct App {
     default_app_types: Vec<String>,
     /// Text in that page's "add a file type" field.
     default_app_new: String,
+    /// Suggestions and the folder tree of the bookmarks' Location fields.
+    bookmark_paths: crate::pathfield::PathField,
     /// That page is asking whether to reset all its choices.
     confirm_reset_apps: bool,
     /// The shortcut Settings waits for a key press for: the action, and which of its keys to replace.
@@ -312,8 +324,9 @@ impl App {
             last_active: 0,
             remotes: HashMap::new(),
             next_remote: 1,
-            drives: crate::vfs::drives(),
-            drives_at: Instant::now(),
+            drives: crate::drives::list(),
+            drive_watch: crate::drives::Watcher::spawn(&cc.egui_ctx),
+            ejecting: Vec::new(),
             jobs: vec![],
             dialog: None,
             dialog_focus: false,
@@ -331,12 +344,12 @@ impl App {
             palette: Palette::default(),
             history: vec![],
             quit: Quit::No,
-            renamer: BatchRename::default(),
-            checksum: ChecksumUi::default(),
             drag_target: None,
             shift_down: false,
             pane_rects: Vec::new(),
+            drive_rows: Vec::new(),
             dialog_dst: None,
+            dialog_path: Default::default(),
             logo_large: None,
             icon_key: String::new(),
             icon_previews: HashMap::new(),
@@ -354,6 +367,7 @@ impl App {
             last_used_tab: None,
             default_app_types: vec![],
             default_app_new: String::new(),
+            bookmark_paths: Default::default(),
             confirm_reset_apps: false,
             profile_sel: 0,
             font_search: String::new(),
@@ -543,8 +557,8 @@ impl App {
             let t = p.tab();
             let path = match &t.term {
                 Some(term) => Some(term.cwd.clone()),
-                // Settings and Transfers windows are not reopened as a folder.
-                None if t.settings || t.transfers => None,
+                // Settings, Transfers and tool windows are not reopened as a folder.
+                None if t.settings || t.transfers || t.is_tool() => None,
                 None => t.loc.local_path().map(|p| p.to_path_buf()),
             };
             (path, t.is_terminal())
@@ -612,14 +626,17 @@ impl App {
 
     /// Start a background job. File operations (`After::Refresh`) go through the
     /// transfer queue; quick "open this file" downloads start immediately.
-    fn spawn_job<F>(&mut self, title: String, after: After, dest: Option<Location>, f: F)
+    /// `sources` are the local paths it reads; the destination is added to them.
+    fn spawn_job<F>(&mut self, title: String, after: After, dest: Option<Location>, sources: Vec<PathBuf>, f: F)
     where
         F: FnOnce(&ops::Progress) -> Res<String> + Send + 'static,
     {
         let queued = matches!(after, After::Refresh);
         let job = Job::spawn(title, queued, f);
         let now = Instant::now();
-        self.jobs.push(RunningJob { job, after, dest, speed: 0.0, sample: (now, 0), started_running: (!queued).then_some(now) });
+        let mut paths = sources;
+        paths.extend(dest.as_ref().and_then(local_file_of));
+        self.jobs.push(RunningJob { job, after, dest, paths, speed: 0.0, sample: (now, 0), started_running: (!queued).then_some(now) });
         self.schedule_jobs();
     }
 
@@ -649,7 +666,7 @@ impl App {
         // A Transfers or terminal window has no folder to go to: use a file window of
         // this tab, or a new tab.
         let tab = self.panes[self.active].tab();
-        if tab.transfers || tab.is_terminal() {
+        if tab.transfers || tab.is_terminal() || tab.is_tool() {
             match self.panes.iter().position(|p| p.tab().is_files()) {
                 Some(side) => self.active = side,
                 None => {
@@ -684,6 +701,12 @@ impl App {
         } else {
             PathBuf::from(text)
         };
+        // Callers make relative paths whole (from the window's folder); one left over would
+        // be read from wherever the app was started.
+        if !expanded.is_absolute() {
+            self.toast(format!("{}: {}", t("Folder not found"), expanded.display()), true);
+            return None;
+        }
         if expanded.is_file() && archive::is_archive(&expanded) {
             return Some(Location::Archive { file: expanded, inner: String::new() });
         }
@@ -769,7 +792,7 @@ impl App {
     }
 
     fn open_bookmark(&mut self, b: &Bookmark) {
-        let Some(loc) = self.parse_location_text(&b.path) else { return };
+        let Some(loc) = self.parse_location_text(&bookmark_target(&b.path)) else { return };
         // Settings → Bookmarks: in a terminal window, `cd` the shell to a local folder.
         if self.cfg.bookmark_action == crate::config::BookmarkAction::FilesAndTerminal {
             if let (Location::Local(dir), Some(term)) = (&loc, self.panes[self.active].tab_mut().term.as_mut()) {
@@ -832,14 +855,14 @@ impl App {
     /// Right-click menu of a bookmark (sidebar and bookmarks bar).
     fn bookmark_menu(&mut self, ui: &mut egui::Ui, b: &Bookmark, remove: &mut Option<String>) {
         if ui.button(t("Open in new tab")).clicked() {
-            if let Some(loc) = self.parse_location_text(&b.path) {
+            if let Some(loc) = self.parse_location_text(&bookmark_target(&b.path)) {
                 let (at, group) = self.next_slot();
                 self.new_files_tab(at, group, Some(loc));
             }
             ui.close_menu();
         }
         if ui.button(t("Open in other panel")).clicked() {
-            if let Some(loc) = self.parse_location_text(&b.path) {
+            if let Some(loc) = self.parse_location_text(&bookmark_target(&b.path)) {
                 let o = self.other_or_split();
                 self.panes[o].tab_mut().navigate(loc, &lc!(self));
             }
@@ -860,7 +883,7 @@ impl App {
         let Some(f) = self.cfg.bookmarks.get(i).cloned() else { return };
         if ui.button(t("Open all in new tabs")).clicked() {
             for b in &f.children {
-                if let Some(loc) = self.parse_location_text(&b.path) {
+                if let Some(loc) = self.parse_location_text(&bookmark_target(&b.path)) {
                     let at = self.strip.tabs.len();
                     self.new_files_tab(at, None, Some(loc));
                 }
@@ -881,9 +904,10 @@ impl App {
     /// One bookmark row in the sidebar.
     fn sidebar_bookmark(&mut self, ui: &mut egui::Ui, b: &Bookmark, active: &str, remove: &mut Option<String>) {
         let th = self.theme;
-        let resp = side_row(ui, th, b.path == active, &b.name, None, |p, r| self.bookmark_icon(p, r, b)).on_hover_text(&b.path);
-        if std::path::Path::new(&b.path).is_dir() {
-            self.sidebar_drop_target(ui, resp.rect, Location::Local(PathBuf::from(&b.path)));
+        let target = bookmark_target(&b.path);
+        let resp = side_row(ui, th, target == active, &b.name, None, |p, r| self.bookmark_icon(p, r, b)).on_hover_text(&b.path);
+        if std::path::Path::new(&target).is_dir() {
+            self.sidebar_drop_target(ui, resp.rect, Location::Local(PathBuf::from(&target)));
         }
         if resp.clicked() {
             self.open_bookmark(b);
@@ -950,7 +974,7 @@ impl App {
         let popup = egui::Id::new(("bookmark-folder", i));
         let open = b.folder && ui.memory(|m| m.is_popup_open(popup));
         let p = ui.painter();
-        if !b.folder && b.path == active {
+        if !b.folder && bookmark_target(&b.path) == active {
             p.rect_filled(rect, 7.0, th.selection);
         } else if resp.hovered() || open {
             p.rect_filled(rect, 7.0, th.hover());
@@ -978,8 +1002,9 @@ impl App {
             });
             resp.context_menu(|ui| self.bookmark_folder_menu(ui, i));
         } else {
-            if std::path::Path::new(&b.path).is_dir() {
-                self.sidebar_drop_target(ui, rect, Location::Local(PathBuf::from(&b.path)));
+            let target = bookmark_target(&b.path);
+            if std::path::Path::new(&target).is_dir() {
+                self.sidebar_drop_target(ui, rect, Location::Local(PathBuf::from(&target)));
             }
             if resp.clicked() {
                 self.open_bookmark(b);
@@ -1100,7 +1125,10 @@ impl App {
         let mut edit: Option<BmEdit> = None;
         let sys = self.cfg.bookmark_system_icons;
         let n = self.cfg.bookmarks.len();
-        let row = |ui: &mut egui::Ui, b: &mut Bookmark, at: (usize, Option<usize>), count: usize, edit: &mut Option<BmEdit>, changed: &mut bool| {
+        let mut paths = std::mem::take(&mut self.bookmark_paths);
+        let (drives, show_hidden) = (&self.drives, self.cfg.show_hidden);
+        let home = dirs::home_dir();
+        let mut row = |ui: &mut egui::Ui, b: &mut Bookmark, at: (usize, Option<usize>), count: usize, edit: &mut Option<BmEdit>, changed: &mut bool| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if at.1.is_some() {
@@ -1134,7 +1162,8 @@ impl App {
                 }
                 *changed |= ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(if b.folder { 200.0 } else { 130.0 }).hint_text(t("Name"))).changed();
                 if !b.folder {
-                    *changed |= ui.add(egui::TextEdit::singleline(&mut b.path).desired_width(path_w).hint_text(t("Location"))).changed();
+                    let o = crate::pathfield::Opts { base: home.as_deref(), show_hidden, drives, width: path_w, hint: Some(t("Location")) };
+                    *changed |= paths.show(ui, &mut b.path, egui::Id::new(("bm-path", at)), o, th).changed();
                     // Folder to keep it in.
                     let cur = at.1.and_then(|_| folders.iter().find(|(i, _)| *i == at.0)).map(|(_, n)| n.clone()).unwrap_or_else(|| "—".into());
                     egui::ComboBox::from_id_salt(("bm-folder", at.0, at.1)).width(110.0).selected_text(cur).show_ui(ui, |ui| {
@@ -1181,6 +1210,7 @@ impl App {
                 }
             }
         }
+        self.bookmark_paths = paths;
         if let Some(e) = edit {
             apply_bookmark_edit(&mut self.cfg.bookmarks, e);
             changed = true;
@@ -1190,7 +1220,7 @@ impl App {
             if ui.button(format!("+ {}", t("Add current folder"))).clicked() {
                 let loc = self.panes[self.active].tab().loc.clone();
                 let path = loc.display(|id| self.remote_label(id));
-                if !Bookmark::leaves(&self.cfg.bookmarks).any(|b| b.path == path) {
+                if !Bookmark::leaves(&self.cfg.bookmarks).any(|b| bookmark_target(&b.path) == path) {
                     self.cfg.bookmarks.push(Bookmark::new(loc.short_name(), path));
                     changed = true;
                 }
@@ -1201,7 +1231,7 @@ impl App {
             }
             if ui.button(t("Add standard folders")).on_hover_text(t("Desktop, Documents, Downloads, Music, Pictures and Movies, if they are missing")).clicked() {
                 for b in crate::config::system_bookmarks() {
-                    if !Bookmark::leaves(&self.cfg.bookmarks).any(|x| x.path == b.path) {
+                    if !Bookmark::leaves(&self.cfg.bookmarks).any(|x| bookmark_target(&x.path) == bookmark_target(&b.path)) {
                         self.cfg.bookmarks.push(b);
                         changed = true;
                     }
@@ -1333,7 +1363,8 @@ impl App {
         let items = vec![ops::Item { name: e.name.clone(), is_dir: false, size: e.size }];
         let dst = Endpoint::Local(tmp);
         let after = if with_dialog { After::OpenWithDialog(target) } else { After::OpenFile(target) };
-        self.spawn_job(format!("{} {}", t("Opening"), e.name), after, None, move |p| {
+        let sources = local_file_of(&loc).into_iter().collect();
+        self.spawn_job(format!("{} {}", t("Opening"), e.name), after, None, sources, move |p| {
             ops::transfer(src, items, dst, false, Conflict::Overwrite, p)
         });
     }
@@ -1411,16 +1442,15 @@ impl App {
         match cmd {
             Cmd::Open => self.open_cursor(),
             Cmd::OpenDefault => {
-                let Some(e) = cursor.filter(|e| !e.is_parent) else { return };
+                let Some(e) = cursor else { return };
+                // A folder (or "..") opens here, as Enter does; a file in its default app.
+                if e.is_dir || e.is_parent {
+                    self.open_cursor();
+                    return;
+                }
                 match &loc {
-                    Location::Local(d) if !e.is_dir => self.open_file(&d.join(&e.name)),
-                    Location::Local(d) => {
-                        if let Err(err) = terminal::open_default(&d.join(&e.name)) {
-                            self.toast(err, true);
-                        }
-                    }
-                    _ if !e.is_dir => self.open_via_temp(&e, false),
-                    _ => {}
+                    Location::Local(d) => self.open_file(&d.join(&e.name)),
+                    _ => self.open_via_temp(&e, false),
                 }
             }
             Cmd::OpenWith => {
@@ -1434,6 +1464,7 @@ impl App {
             Cmd::View => {
                 self.viewer = self.preview_for_cursor(a);
             }
+            Cmd::QuickView => self.toggle_quick_view(),
             Cmd::Copy | Cmd::Move => {
                 if sel.is_empty() {
                     return;
@@ -1557,7 +1588,7 @@ impl App {
                 let tab = self.panes[a].tab_mut();
                 tab.invalidate_archive_cache();
                 tab.reload(&lc!(self));
-                self.drives = crate::vfs::drives();
+                self.drive_watch.refresh();
             }
             Cmd::CalcSizes => self.calc_sizes(),
             Cmd::SelectAll => self.panes[a].tab_mut().mark_all(),
@@ -1565,7 +1596,9 @@ impl App {
     }
 
     fn toggle_bookmark(&mut self, path: String, name: String) {
-        if Bookmark::remove_path(&mut self.cfg.bookmarks, &path) {
+        // A bookmark kept as `~/…` is the same folder.
+        let stored = Bookmark::leaves(&self.cfg.bookmarks).find(|b| bookmark_target(&b.path) == path).map(|b| b.path.clone()).unwrap_or_else(|| path.clone());
+        if Bookmark::remove_path(&mut self.cfg.bookmarks, &stored) {
             self.toast(format!("{}: {name}", t("Bookmark removed")), false);
         } else {
             self.cfg.bookmarks.push(Bookmark::new(name.clone(), path));
@@ -1676,7 +1709,7 @@ impl App {
         let items: Vec<ops::Item> = items.iter().map(|e| ops::Item { name: e.name.clone(), is_dir: e.is_dir, size: e.size }).collect();
         self.panes[a].tab_mut().marked.clear();
         let what = if items.len() == 1 { items[0].name.clone() } else { format!("{} {}", items.len(), t("item(s)")) };
-        self.spawn_job(format!("{} {what}", t("Deleting")), After::Refresh, Some(loc), move |p| ops::delete(src, items, trash, p));
+        self.spawn_job(format!("{} {what}", t("Deleting")), After::Refresh, Some(loc), vec![], move |p| ops::delete(src, items, trash, p));
     }
 
     fn show_properties(&mut self) {
@@ -1776,6 +1809,23 @@ impl App {
     fn handle_keys(&mut self, ctx: &egui::Context) {
         if self.dialog.is_some() {
             return;
+        }
+        // The address bar's folder tree takes its keys first (↑ ↓ ← → Enter Esc).
+        if let Some(side) = self.panes.iter().position(|p| p.tab().tree.is_some()) {
+            let res = self.panes[side].tab_mut().tree.as_mut().and_then(|t| t.keys(ctx));
+            let handled = res.is_some();
+            match res {
+                Some(crate::foldertree::Popup::Picked(p)) => {
+                    self.panes[side].tab_mut().tree = None;
+                    self.active = side;
+                    self.panes[side].tab_mut().navigate(Location::Local(p), &lc!(self));
+                }
+                Some(crate::foldertree::Popup::Closed) => self.panes[side].tab_mut().tree = None,
+                _ => {}
+            }
+            if handled {
+                return;
+            }
         }
         if let Some((action, slot)) = self.shortcut_capture {
             self.capture_shortcut(ctx, action, slot);
@@ -2068,20 +2118,24 @@ impl App {
         for p in all_panes!(self) {
             let tab = p.tab_mut();
             // An edited category applies at once; a deleted one turns off.
-            if let Some(name) = tab.quick.as_ref().map(|q| q.name.clone()) {
-                tab.quick = quick.iter().find(|q| q.name == name).map(crate::pane::QuickActive::of);
+            if let Some(names) = tab.quick.as_ref().map(|q| q.names.clone()) {
+                tab.quick = crate::pane::QuickActive::from_names(&names, quick);
             }
             tab.rebuild_view(&c);
         }
     }
 
-    /// Quick filter of the focused file window: category `i`, or off.
+    /// Quick filter of the focused file window: tick or untick category `i`, or (None)
+    /// show all files.
     fn set_quick_filter(&mut self, i: Option<usize>) {
-        let q = i.and_then(|i| self.cfg.quick_filters.get(i)).map(crate::pane::QuickActive::of);
         let a = self.active;
         if !self.panes[a].tab().is_files() {
             return;
         }
+        let q = match i.and_then(|i| self.cfg.quick_filters.get(i)) {
+            Some(f) => crate::pane::QuickActive::toggle(self.panes[a].tab().quick.as_ref(), &f.name, &self.cfg.quick_filters),
+            None => None,
+        };
         let c = lc!(self);
         self.panes[a].tab_mut().set_quick(q, &c);
     }
@@ -2089,7 +2143,7 @@ impl App {
     /// Settings → Quick filters: the categories and their extensions.
     fn quick_filter_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
         let mut changed = false;
-        ui.label(RichText::new(t("The funnel button of a file window shows one kind of file. Folders stay visible, and the filter stays on while you browse.")).size(12.0).color(th.weak));
+        ui.label(RichText::new(t("The funnel button of a file window shows only the kinds of file you tick (one or several). Folders stay visible, and the filter stays on while you browse. Add your own lists here.")).size(12.0).color(th.weak));
         ui.add_space(6.0);
         let mut frame = card_frame(th).begin(ui);
         {
@@ -2137,7 +2191,8 @@ impl App {
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
             if ui.button(format!("+ {}", t("New quick filter"))).clicked() {
-                self.cfg.quick_filters.push(crate::config::QuickFilter::new(&t("New filter"), ""));
+                let name = crate::config::unused_quick_filter_name(&self.cfg.quick_filters, &t("New filter"));
+                self.cfg.quick_filters.push(crate::config::QuickFilter::new(&name, ""));
                 changed = true;
             }
             if ui.button(t("Restore the built-in filters")).on_hover_text(t("Adds the built-in categories that are missing and resets their extensions")).clicked() {
@@ -2234,7 +2289,7 @@ impl App {
                         let t = p.tab();
                         match &t.term {
                             Some(s) => format!("{}  ·  {}", t.title(), s.cwd.display()),
-                            None if t.transfers => t.title(),
+                            None if t.transfers || t.is_tool() => t.title(),
                             None => t.loc.display(|id| self.remote_label(id)),
                         }
                     })
@@ -2250,6 +2305,11 @@ impl App {
                     disk_usage: focused.is_some_and(|t| t.is_disk_usage()),
                     settings: focused.is_some_and(|t| t.settings),
                     transfers: focused.is_some_and(|t| t.transfers),
+                    tool: focused.and_then(|t| match (&t.checksum, &t.renamer) {
+                        (Some(_), _) => Some(icons::mi_checksum as fn(&egui::Painter, egui::Rect, egui::Color32)),
+                        (_, Some(_)) => Some(icons::mi_rename as fn(&egui::Painter, egui::Rect, egui::Color32)),
+                        _ => None,
+                    }),
                     bell,
                     activity,
                     cells: if panes.len() > 1 { crate::tabs::layout_cells(layout, active) } else { Vec::new() },
@@ -2840,6 +2900,99 @@ impl App {
 
     // ------------------------------------------------------------ jobs
 
+    /// Ejects a drive in the background. Refused while a transfer uses it; previews of
+    /// its files are closed first, and windows showing it go home once it is gone.
+    fn eject_drive(&mut self, d: crate::drives::Drive) {
+        let mount = d.mount.clone();
+        if !d.ejectable || self.ejecting.iter().any(|e| e.0 == mount) {
+            return;
+        }
+        let name = d.name.clone();
+        if self.jobs.iter().any(|j| j.paths.iter().any(|p| crate::drives::on_drive(p, &mount))) {
+            self.toast(format!("{} {name}: {}", t("Could not eject"), t("A task is using this drive. Wait for it to finish, or cancel it.")), true);
+            return;
+        }
+        let hashing = all_panes!(self).any(|p| p.tab().checksum.as_ref().is_some_and(|c| c.reads_under(&mount)));
+        if hashing {
+            self.toast(format!("{} {name}: {}", t("Could not eject"), t("A Checksum tab is reading files on this drive. Wait for it to finish, or close the tab.")), true);
+            return;
+        }
+        // Let go of what this app reads there.
+        let shown = mount.to_string_lossy().to_string();
+        if self.quick.as_ref().is_some_and(|q| q.key.contains(&shown)) {
+            self.quick = None;
+        }
+        if self.viewer.as_ref().is_some_and(|q| q.key.contains(&shown)) {
+            self.viewer = None;
+        }
+        for p in all_panes!(self) {
+            let tab = p.tab_mut();
+            if local_file_of(&tab.loc).is_some_and(|p| crate::drives::on_drive(&p, &mount)) {
+                tab.dir_sizes = None;
+            }
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::drives::eject(&d));
+        });
+        self.ejecting.push((mount, name, rx));
+    }
+
+    /// Windows showing the drive at `mount` go to the home folder; with `only_gone`, only
+    /// those whose folder no longer exists (the drive went away by itself).
+    fn leave_drive(&mut self, mount: &Path, only_gone: bool) {
+        let home = Location::Local(dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")));
+        let lc = lc!(self);
+        for p in all_panes!(self) {
+            let tab = p.tab_mut();
+            if !tab.is_files() {
+                continue;
+            }
+            let Some(path) = local_file_of(&tab.loc) else { continue };
+            if crate::drives::on_drive(&path, mount) && (!only_gone || !path.exists()) {
+                tab.navigate(home.clone(), &lc);
+            }
+        }
+    }
+
+    /// New drive lists from the watcher, and ejects that finished.
+    fn poll_drives(&mut self, ctx: &egui::Context) {
+        if let Some(new) = self.drive_watch.poll() {
+            let gone = crate::drives::removed(&self.drives, &new);
+            self.drives = new;
+            for mount in gone {
+                self.leave_drive(&mount, true);
+            }
+        }
+        if self.ejecting.is_empty() {
+            return;
+        }
+        ctx.request_repaint_after(Duration::from_millis(100));
+        let mut done = Vec::new();
+        self.ejecting.retain(|(mount, name, rx)| match rx.try_recv() {
+            Ok(r) => {
+                done.push((mount.clone(), name.clone(), r));
+                false
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => true,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                done.push((mount.clone(), name.clone(), Err(t("The drive could not be ejected."))));
+                false
+            }
+        });
+        for (mount, name, result) in done {
+            match result {
+                Ok(()) => {
+                    self.drives.retain(|d| d.mount != mount);
+                    self.leave_drive(&mount, false);
+                    self.toast(format!("{}: {name}", t("Ejected")), false);
+                }
+                Err(e) => self.toast(format!("{} {name}: {e}", t("Could not eject")), true),
+            }
+            self.drive_watch.refresh();
+        }
+    }
+
     fn poll_jobs(&mut self, ctx: &egui::Context) {
         // Speed sampling (exponential moving average over ~0.5 s windows).
         let now = Instant::now();
@@ -2952,10 +3105,10 @@ impl App {
         let mut stop = false;
         egui::Modal::new(egui::Id::new("quit-confirm")).show(ctx, |ui| {
             ui.set_width(420.0);
-            ui.heading(if n > 0 { t("Quit while transfers are running?") } else { t("Quit while programs are running?") });
+            ui.heading(if n > 0 { t("Quit while tasks are running?") } else { t("Quit while programs are running?") });
             ui.add_space(6.0);
             if n > 0 {
-                ui.label(format!("{n} {}", t("transfer(s) still running or waiting.")));
+                ui.label(format!("{n} {}", t("task(s) still running or waiting.")));
                 ui.label(RichText::new(t("Quitting stops them. What has not finished will not be completed; files already finished are kept.")).color(th.weak));
             }
             if !programs.is_empty() {
@@ -2970,11 +3123,11 @@ impl App {
             ui.add_space(14.0);
             ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), 32.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if stopping {
-                    ui.label(t("Stopping transfers…"));
+                    ui.label(t("Stopping tasks…"));
                     ui.spinner();
                     return;
                 }
-                let (go, back) = if n > 0 { (t("Stop and quit"), t("Keep transferring")) } else { (t("Quit"), t("Cancel")) };
+                let (go, back) = if n > 0 { (t("Stop and quit"), t("Keep running")) } else { (t("Quit"), t("Cancel")) };
                 let b = egui::Button::new(RichText::new(go).strong().color(egui::Color32::WHITE)).fill(th.danger).min_size(egui::vec2(96.0, 30.0));
                 stop = ui.add(b).clicked();
                 keep = ui.add(egui::Button::new(back).min_size(egui::vec2(96.0, 30.0))).clicked();
@@ -3029,7 +3182,7 @@ impl App {
             if self.jobs.is_empty() && self.history.is_empty() {
                 ui.add_space(40.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new(t("No transfers yet")).color(th.text));
+                    ui.label(RichText::new(t("No tasks yet")).color(th.text));
                     ui.label(
                         RichText::new(t("Copy (F5), move (F6), compress or extract: progress shows up here while you keep browsing."))
                             .size(11.5)
@@ -3087,7 +3240,10 @@ impl App {
                     let line = if is_q {
                         t("Waiting in queue…")
                     } else if p.is_paused() {
-                        format!("{} · {}", t("Paused"), human_size(p.done()))
+                        match p.fraction() {
+                            Some(f) => format!("{} · {:.0}% · {} / {}", t("Paused"), f * 100.0, human_size(p.done()), human_size(p.total())),
+                            None => format!("{} · {}", t("Paused"), human_size(p.done())),
+                        }
                     } else {
                         let mut parts = vec![];
                         if let Some(f) = p.fraction() {
@@ -3183,16 +3339,73 @@ impl App {
         if sel.is_empty() {
             return;
         }
-        if let [one] = sel.as_slice() {
-            if !one.is_dir && crate::checksum::is_checksum_file(&one.name) {
-                if let Err(e) = self.checksum.start_verify(&self.egui_ctx, dir.join(&one.name)) {
+        let mut tool = crate::checksum::ChecksumUi::default();
+        match sel.as_slice() {
+            [one] if !one.is_dir && crate::checksum::is_checksum_file(&one.name) => {
+                if let Err(e) = tool.start_verify(&self.egui_ctx, dir.join(&one.name)) {
                     self.toast(e, true);
+                    return;
                 }
-                return;
+            }
+            _ => {
+                let paths = sel.iter().map(|e| dir.join(&e.name)).collect();
+                tool.start_files(&self.egui_ctx, dir.clone(), paths);
             }
         }
-        let paths = sel.iter().map(|e| dir.join(&e.name)).collect();
-        self.checksum.start_files(&self.egui_ctx, dir, paths);
+        self.open_tool(Tab::checksum_tool(tool, dir));
+    }
+
+    /// Show a tool (Checksum, Batch rename) in a new tab next to the shown one.
+    fn open_tool(&mut self, tab: Tab) {
+        let (at, group) = self.next_slot();
+        self.insert_workspace(at, Workspace::single(Pane::from_tab(tab)), group);
+    }
+
+    /// A Checksum or Batch rename window: the app draws the tool into the space left for it.
+    fn tool_view(&mut self, ui: &mut egui::Ui, side: usize) {
+        let th = self.theme;
+        // A click anywhere in it focuses the window.
+        if ui.rect_contains_pointer(ui.max_rect()) && ui.input(|i| i.pointer.any_pressed()) {
+            self.active = side;
+        }
+        let (mut saved, mut action) = (None, None);
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 14, right: 14, top: 6, bottom: 10 }).show(ui, |ui| {
+            let tab = self.panes[side].tab_mut();
+            if let Some(c) = tab.checksum.as_mut() {
+                saved = c.ui(ui, th);
+            } else if let Some(r) = tab.renamer.as_mut() {
+                action = r.ui(ui, th);
+            }
+        });
+        if let Some(dir) = saved {
+            self.refresh_location(&Location::Local(dir));
+        }
+        match action {
+            Some(RenameAction::Apply(loc, pairs)) => match self.run_rename(&loc, &pairs) {
+                Ok(done) => {
+                    self.toast(format!("{} {} {}", t("Renamed"), done.len(), t("item(s)")), false);
+                    if let Some(r) = self.panes[side].tab_mut().renamer.as_mut() {
+                        r.applied(loc.clone(), done);
+                    }
+                    self.refresh_location(&loc);
+                }
+                Err(e) => {
+                    self.toast(e, true);
+                    self.refresh_location(&loc);
+                }
+            },
+            Some(RenameAction::Undo(loc, back)) => match self.run_rename(&loc, &back) {
+                Ok(_) => {
+                    self.toast(t("Rename undone"), false);
+                    if let Some(r) = self.panes[side].tab_mut().renamer.as_mut() {
+                        r.undone(&back);
+                    }
+                    self.refresh_location(&loc);
+                }
+                Err(e) => self.toast(e, true),
+            },
+            None => {}
+        }
     }
 
     // ------------------------------------------------------------ batch rename
@@ -3217,7 +3430,9 @@ impl App {
         let existing = tab.entries.iter().filter(|e| !e.is_parent).map(|e| e.name.clone()).collect();
         let parent = tab.loc.short_name_raw();
         let loc = tab.loc.clone();
-        self.renamer.start(loc, parent, items, existing);
+        let mut tool = BatchRename::default();
+        tool.start(loc.clone(), parent, items, existing);
+        self.open_tool(Tab::rename_tool(tool, loc));
     }
 
     fn run_rename(&mut self, loc: &Location, pairs: &[(String, String)]) -> Res<Vec<(String, String)>> {
@@ -3244,7 +3459,8 @@ impl App {
         }
         let what = if list.len() == 1 { list[0].name.clone() } else { format!("{} {}", list.len(), t("item(s)")) };
         let title = format!("{} {what} → {}", if mv { t("Moving") } else { t("Copying") }, dst_loc.short_name());
-        self.spawn_job(title, After::Refresh, Some(dst_loc.clone()), move |p| ops::transfer(src, list, dst_ep, mv, policy, p));
+        let sources = local_file_of(src_loc).into_iter().collect();
+        self.spawn_job(title, After::Refresh, Some(dst_loc.clone()), sources, move |p| ops::transfer(src, list, dst_ep, mv, policy, p));
     }
 
     /// Items dropped onto a folder (panel, folder row, breadcrumb or sidebar).
@@ -3453,6 +3669,11 @@ impl App {
                 }
             });
             ui.menu_button(t("View"), |ui| {
+                if ui.checkbox(&mut self.cfg.show_sidebar.clone(), format!("{}\t{}", t("Sidebar"), hint(Action::Sidebar))).clicked() {
+                    self.cfg.show_sidebar = !self.cfg.show_sidebar;
+                    self.save_cfg();
+                    ui.close_menu();
+                }
                 if ui.checkbox(&mut self.cfg.quick_view.clone(), format!("{}\t{}", t("Quick view panel"), hint(Action::QuickView))).clicked() {
                     self.toggle_quick_view();
                     ui.close_menu();
@@ -3569,7 +3790,7 @@ impl App {
                     self.run_cmd(Cmd::DiskUsage);
                     ui.close_menu();
                 }
-                if ui.button(format!("⇅ {}\t{}", t("Transfers"), hint(Action::Transfers))).clicked() {
+                if ui.button(format!("⇅ {}\t{}", t("Tasks"), hint(Action::Transfers))).clicked() {
                     self.open_transfers();
                     ui.close_menu();
                 }
@@ -3698,6 +3919,18 @@ impl App {
         menu.response.on_hover_text(t("Menu"));
     }
 
+    /// The sidebar button, just before the app menu (in the sidebar, or in the top
+    /// bar while the sidebar is hidden).
+    fn sidebar_toggle(&mut self, ui: &mut egui::Ui) {
+        let label = if self.cfg.show_sidebar { t("Hide sidebar") } else { t("Show sidebar") };
+        let resp = tool_icon(ui, self.theme, &format!("{label} ({})", hint(Action::Sidebar)), false, sidebar_icon);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+        if resp.clicked() {
+            self.cfg.show_sidebar = !self.cfg.show_sidebar;
+            self.save_cfg();
+        }
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui) {
         let th = self.theme;
         // Empty parts of the bar move the window.
@@ -3710,6 +3943,7 @@ impl App {
             if !self.cfg.show_sidebar {
                 ui.add_space(self.chrome.left_inset());
                 self.chrome.inline_buttons(ui, th, true);
+                self.sidebar_toggle(ui);
                 self.brand_menu(ui);
             }
 
@@ -3770,7 +4004,7 @@ impl App {
                 let tr_shown = self.panes[self.active].tab().transfers;
                 let gauge = self.transfers_gauge();
                 let time = ui.input(|i| i.time) as f32;
-                let tr = tool_icon(ui, th, &format!("{} ({})", t("Transfers"), hint(Action::Transfers)), tr_shown, |p, r, c| match gauge {
+                let tr = tool_icon(ui, th, &format!("{} ({})", t("Tasks"), hint(Action::Transfers)), tr_shown, |p, r, c| match gauge {
                     Some((fraction, paused)) => icons::progress_pie(p, r, if paused { c } else { th.accent }, fraction, time),
                     None => icons::transfers(p, r, c),
                 });
@@ -3827,10 +4061,6 @@ impl App {
                 if tool_icon(ui, th, &format!("{} ({})", t("Quick view panel"), hint(Action::QuickView)), self.cfg.quick_view, icons::eye).clicked() {
                     self.toggle_quick_view();
                 }
-                if tool_icon(ui, th, &format!("{} ({})", t("Sidebar"), hint(Action::Sidebar)), self.cfg.show_sidebar, sidebar_icon).clicked() {
-                    self.cfg.show_sidebar = !self.cfg.show_sidebar;
-                    self.save_cfg();
-                }
                 if self.connecting.is_some() {
                     ui.add_space(6.0);
                     ui.label(RichText::new(t("Connecting…")).small().color(th.weak));
@@ -3853,6 +4083,7 @@ impl App {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.set_height(30.0);
+                self.sidebar_toggle(ui);
                 self.brand_menu(ui);
             });
         } else {
@@ -3860,6 +4091,7 @@ impl App {
                 ui.set_height(self.chrome.row_height());
                 ui.add_space(self.chrome.left_inset());
                 self.chrome.inline_buttons(ui, th, true);
+                self.sidebar_toggle(ui);
                 self.brand_menu(ui);
             });
         }
@@ -3870,13 +4102,41 @@ impl App {
                 self.sidebar_bookmarks(ui, &active_disp);
                 ui.add_space(12.0);
             }
-            section_title(ui, th, &t("Drives"));
-            for (label, mp, total, avail) in self.drives.clone() {
+            // Drives: by the "Drives in the sidebar" setting, without the system's own mounts.
+            let shown: Vec<crate::drives::Drive> = crate::drives::sidebar(&self.drives, self.cfg.sidebar_drives).into_iter().cloned().collect();
+            if !shown.is_empty() {
+                section_title(ui, th, &t("Drives"));
+            }
+            let mut eject = None;
+            self.drive_rows.clear();
+            for d in shown.iter().cloned() {
+                let (mp, total, avail) = (d.mount.clone(), d.total, d.avail);
                 let sel = active_loc.local_path().is_some_and(|p| p == mp);
                 let frac = if total > 0 { 1.0 - avail as f32 / total as f32 } else { 0.0 };
-                let name = drive_name(&label, &mp);
+                let name = d.name.clone();
                 let bar = (total > 0 && self.cfg.show_disk_usage).then_some(frac);
-                let resp = side_row(ui, th, sel, &name, bar, |p, r| icons::drive_icon(p, r, th));
+                let button = if d.ejectable { 26.0 } else { 0.0 };
+                let resp = side_row_with(ui, th, sel, &name, bar, button, |p, r| icons::drive_icon(p, r, th));
+                self.drive_rows.push((mp.clone(), name.clone(), None));
+                if d.ejectable {
+                    // The eject button at the end of the row; a spinner while it ejects.
+                    let r = egui::Rect::from_center_size(egui::pos2(resp.rect.right() - 16.0, resp.rect.top() + 15.0), egui::vec2(22.0, 22.0));
+                    if let Some(row) = self.drive_rows.last_mut() {
+                        row.2 = Some(r);
+                    }
+                    if self.ejecting.iter().any(|e| e.0 == mp) {
+                        egui::Spinner::new().size(13.0).color(th.weak).paint_at(ui, r.shrink(4.0));
+                    } else {
+                        let b = ui.interact(r, ui.id().with(("eject", &mp)), egui::Sense::click());
+                        if b.hovered() {
+                            ui.painter().rect_filled(r, 5.0, if sel { th.bg } else { th.hover() });
+                        }
+                        icons::eject(ui.painter(), r.shrink(5.0), if b.hovered() { th.text } else { th.weak });
+                        if b.on_hover_text(format!("{} {name}", t("Eject"))).clicked() {
+                            eject = Some(d.clone());
+                        }
+                    }
+                }
                 self.sidebar_drop_target(ui, resp.rect, Location::Local(mp.clone()));
                 let resp = resp
                     .on_hover_text(format!("{}\n{} {} / {}", mp.display(), human_size(avail), t("free"), human_size(total)));
@@ -3888,10 +4148,19 @@ impl App {
                         self.open_disk_usage(mp.clone());
                         ui.close_menu();
                     }
+                    if d.ejectable && ui.add_enabled(!self.ejecting.iter().any(|e| e.0 == mp), egui::Button::new(t("Eject"))).clicked() {
+                        eject = Some(d.clone());
+                        ui.close_menu();
+                    }
                 });
             }
+            if let Some(d) = eject {
+                self.eject_drive(d);
+            }
 
-            ui.add_space(12.0);
+            if !shown.is_empty() {
+                ui.add_space(12.0);
+            }
             section_title(ui, th, &t("Network"));
             let open: Vec<(u64, String)> = self.remotes.iter().map(|(k, v)| (*k, v.0.clone())).collect();
             for (id, label) in open {
@@ -3947,7 +4216,7 @@ impl App {
             ui.spacing_mut().item_spacing.x = 8.0;
             if let Some(rj) = self.jobs.iter().find(|j| !j.job.progress.is_queued()).or(self.jobs.first()) {
                 let p = rj.job.progress.clone();
-                if ui.add(egui::Button::new(RichText::new(t("Transfers")).size(12.0)).small()).on_hover_text(hint(Action::Transfers)).clicked() {
+                if ui.add(egui::Button::new(RichText::new(t("Tasks")).size(12.0)).small()).on_hover_text(hint(Action::Transfers)).clicked() {
                     open_transfers = true;
                 }
                 if p.is_paused() {
@@ -3998,7 +4267,7 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let hints: [(&str, String, Cmd); 7] = [
-                        (hint(Action::View), t("View"), Cmd::View),
+                        (hint(Action::QuickView), t("Quick view"), Cmd::QuickView),
                         (hint(Action::OpenDefault), t("Open"), Cmd::OpenDefault),
                         (hint(Action::Copy), t("Copy"), Cmd::Copy),
                         (hint(Action::Move), t("Move"), Cmd::Move),
@@ -4106,7 +4375,7 @@ impl App {
             (Act::ToggleHints, t("Key hints"), ""),
             (Act::Connect, t("Connect to server…"), hint(Action::Connect)),
             (Act::Backup, t("Backup…"), hint(Action::Backup)),
-            (Act::Transfers, t("Transfers"), hint(Action::Transfers)),
+            (Act::Transfers, t("Tasks"), hint(Action::Transfers)),
             (Act::Settings, t("Settings…"), hint(Action::Settings)),
             (Act::Shortcuts, t("Keyboard shortcuts"), hint(Action::Help)),
             (Act::Bookmarks, t("Manage bookmarks…"), ""),
@@ -4134,18 +4403,20 @@ impl App {
             }
         }
         if self.panes[self.active].tab().is_files() {
+            let on = self.panes[self.active].tab().quick.clone();
             for (i, q) in self.cfg.quick_filters.iter().enumerate() {
-                v.push(E::new(format!("{}: {}", t("Quick filter"), t(&q.name)), "", PalItem::QuickFilter(Some(i))));
+                let tick = if on.as_ref().is_some_and(|a| a.has(&q.name)) { " ✓" } else { "" };
+                v.push(E::new(format!("{}: {}{tick}", t("Quick filter"), t(&q.name)), "", PalItem::QuickFilter(Some(i))));
             }
             if self.panes[self.active].tab().quick.is_some() {
                 v.push(E::new(format!("{}: {}", t("Quick filter"), t("Show all files")), "", PalItem::QuickFilter(None)));
             }
         }
         for b in Bookmark::leaves(&self.cfg.bookmarks) {
-            v.push(E::new(format!("{}: {}", t("Bookmark"), b.name), "", PalItem::Go(b.path.clone())));
+            v.push(E::new(format!("{}: {}", t("Bookmark"), b.name), "", PalItem::Go(bookmark_target(&b.path))));
         }
-        for (label, mp, _, _) in &self.drives {
-            v.push(E::new(format!("{}: {}", t("Drive"), drive_name(label, mp)), "", PalItem::Go(mp.to_string_lossy().to_string())));
+        for d in self.drives.iter().filter(|d| !d.system) {
+            v.push(E::new(format!("{}: {}", t("Drive"), d.name), "", PalItem::Go(d.mount.to_string_lossy().to_string())));
         }
         for c in &self.cfg.connections {
             v.push(E::new(format!("{}: {}", t("Connect"), c.name), "", PalItem::Connect(c.clone())));
@@ -4366,12 +4637,13 @@ impl App {
         let mut events: Vec<(usize, PaneEvent)> = vec![];
         let mut settings_areas = Vec::new();
         let mut transfers_areas = Vec::new();
+        let mut tool_areas = Vec::new();
         for &(side, r) in &rects {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::top_down(egui::Align::Min)));
             child.set_clip_rect(r.intersect(ui.clip_rect()));
             let bookmarked = {
                 let loc = self.panes[side].tab().loc.display(|id| self.remote_label(id));
-                Bookmark::leaves(&self.cfg.bookmarks).any(|b| b.path == loc)
+                Bookmark::leaves(&self.cfg.bookmarks).any(|b| bookmark_target(&b.path) == loc)
             };
             let window_number = if self.panes.len() > 1 { self.layout.leaves().iter().position(|l| *l == side).map_or(0, |i| i + 1) } else { 0 };
             let ctx = PaneUiCtx {
@@ -4398,6 +4670,7 @@ impl App {
                 match e {
                     PaneEvent::SettingsArea(r) => settings_areas.push((side, r)),
                     PaneEvent::TransfersArea(r) => transfers_areas.push((side, r)),
+                    PaneEvent::ToolArea(r) => tool_areas.push((side, r)),
                     e => events.push((side, e)),
                 }
             }
@@ -4413,6 +4686,12 @@ impl App {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::top_down(egui::Align::Min)));
             child.set_clip_rect(r.intersect(ui.clip_rect()));
             self.transfers_view(&mut child, side);
+        }
+        // And Checksum / Batch rename windows.
+        for (side, r) in tool_areas {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::top_down(egui::Align::Min)));
+            child.set_clip_rect(r.intersect(ui.clip_rect()));
+            self.tool_view(&mut child, side);
         }
         self.window_drop_zones(ui, &rects);
         for (side, e) in events {
@@ -4544,6 +4823,8 @@ impl App {
             }
             PaneEvent::NavigateText(text) => {
                 self.active = side;
+                // A relative path is taken from the window's folder.
+                let text = crate::pathfield::resolve_typed(&text, dirs::home_dir().as_deref(), self.panes[side].tab().loc.local_path());
                 if let Some(loc) = self.parse_location_text(&text) {
                     self.navigate_active(loc);
                 }
@@ -4572,7 +4853,7 @@ impl App {
             }
             PaneEvent::Term(r) => self.handle_term_response(side, r),
             PaneEvent::Agent(a) => self.agent_act(side, a),
-            PaneEvent::SettingsArea(_) | PaneEvent::TransfersArea(_) => {}
+            PaneEvent::SettingsArea(_) | PaneEvent::TransfersArea(_) | PaneEvent::ToolArea(_) => {}
             PaneEvent::QuickFilter(i) => {
                 self.active = side;
                 self.set_quick_filter(i);
@@ -4615,6 +4896,13 @@ impl App {
         let th = self.theme;
         let mut close = false;
         let mut confirmed = false;
+        // The folder field of Copy / Move, Compress and Extract: its suggestions and tree
+        // take their keys before the dialog does.
+        let dst_id = egui::Id::new("dialog-dst");
+        if let Dialog::Transfer { dst, .. } | Dialog::Pack { dest_dir: dst, .. } | Dialog::Unpack { dest: dst, .. } = &mut dialog {
+            self.dialog_path.keys(ctx, dst, dst_id);
+        }
+        let home = dirs::home_dir();
         let focus = std::mem::take(&mut self.dialog_focus);
         let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
             ui.set_min_width(440.0);
@@ -4625,14 +4913,15 @@ impl App {
                 }
             };
             match &mut dialog {
-                Dialog::Transfer { mv, items, dst, policy, .. } => {
+                Dialog::Transfer { src, mv, items, dst, policy } => {
                     ui.heading(format!("{} {}", if *mv { t("Move") } else { t("Copy") }, what(items)));
                     if items.len() > 1 {
                         ui.label(RichText::new(preview_names(items)).color(th.weak));
                     }
                     ui.add_space(4.0);
                     ui.label(t("To:"));
-                    let r = ui.add(egui::TextEdit::singleline(dst).desired_width(f32::INFINITY));
+                    let o = crate::pathfield::Opts { base: src.local_path(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
+                    let r = self.dialog_path.show(ui, dst, dst_id, o, th);
                     focus_edit(&r);
                     ui.horizontal(|ui| {
                         ui.label(t("If file exists:"));
@@ -4674,43 +4963,97 @@ impl App {
                         ui.colored_label(th.danger, t("Files will be permanently deleted!"));
                     }
                 }
-                Dialog::Pack { items, name, dest_dir, format, level, .. } => {
+                Dialog::Pack { items, src_dir, name, dest_dir, format, level } => {
+                    ui.set_width(520.0);
                     ui.heading(format!("{} {}", t("Compress"), what(items)));
                     if items.len() > 1 {
-                        ui.label(RichText::new(preview_names(items)).color(th.weak));
+                        ui.add(egui::Label::new(RichText::new(preview_names(items)).color(th.weak)).truncate());
                     }
-                    egui::Grid::new("pack").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
-                        ui.label(t("Archive name"));
-                        ui.horizontal(|ui| {
-                            let r = ui.add(egui::TextEdit::singleline(name).desired_width(260.0));
-                            focus_edit(&r);
-                            ui.label(format!(".{}", format.extension()));
-                        });
-                        ui.end_row();
-                        ui.label(t("Format"));
-                        egui::ComboBox::from_id_salt("pack-fmt").selected_text(format.label()).width(220.0).show_ui(ui, |ui| {
-                            let rar = archive::rar_cli().is_some();
-                            for f in ArchiveFormat::ALL {
-                                let enabled = f != ArchiveFormat::Rar || rar;
-                                ui.add_enabled_ui(enabled, |ui| {
-                                    ui.selectable_value(format, f, f.label());
-                                });
+                    ui.add_space(8.0);
+                    // The format: a row of choices, and what the one chosen is good for.
+                    let one_file = items.len() == 1 && !items[0].is_dir;
+                    let rar = archive::rar_cli().is_some();
+                    ui.label(RichText::new(t("Format")).strong());
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+                        for f in ArchiveFormat::offered(one_file) {
+                            let enabled = f != ArchiveFormat::Rar || rar;
+                            let r = format_chip(ui, th, f, *format == f, enabled);
+                            if r.clicked() && enabled {
+                                *format = f;
                             }
-                        });
-                        ui.end_row();
-                        ui.label(t("Level"));
-                        ui.add(egui::Slider::new(level, 1..=9).text(t("1 = fastest, 9 = smallest")));
-                        ui.end_row();
-                        ui.label(t("Save to"));
-                        ui.add(egui::TextEdit::singleline(dest_dir).desired_width(300.0));
-                        ui.end_row();
+                        }
                     });
-                    if format.single_file() && (items.len() != 1 || items[0].is_dir) {
-                        ui.colored_label(th.marked, t("This format compresses a single file. Use .tar.* for folders."));
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(format.blurb()).size(12.0).color(th.weak));
+                    ui.add_space(10.0);
+                    let label_w = 96.0;
+                    let row_label = |ui: &mut egui::Ui, text: String| {
+                        ui.allocate_ui_with_layout(egui::vec2(label_w, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.set_min_width(label_w);
+                            ui.label(text);
+                        });
+                    };
+                    ui.horizontal(|ui| {
+                        row_label(ui, t("Name"));
+                        let ext = format!(".{}", format.extension());
+                        let ext_w = ui.fonts(|f| f.layout_no_wrap(ext.clone(), egui::FontId::proportional(14.0), th.weak).size().x);
+                        let w = ui.available_width() - ext_w - ui.spacing().item_spacing.x - 8.0;
+                        let r = ui.add(egui::TextEdit::singleline(name).id(egui::Id::new("pack-name")).margin(egui::Margin::symmetric(4, 2)).desired_width(w));
+                        focus_edit(&r);
+                        // A format typed at the end of the name is chosen.
+                        if r.changed() {
+                            if let Some(f) = ArchiveFormat::typed_in(name).filter(|f| (one_file || !f.single_file()) && (*f != ArchiveFormat::Rar || rar)) {
+                                *format = f;
+                            }
+                        }
+                        let typed = ArchiveFormat::typed_in(name) == Some(*format);
+                        ui.label(RichText::new(ext).color(if typed { th.surface } else { th.weak }));
+                    });
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        row_label(ui, t("Save to"));
+                        let o = crate::pathfield::Opts { base: Some(src_dir.as_path()), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
+                        self.dialog_path.show(ui, dest_dir, dst_id, o, th);
+                    });
+                    if format.compresses() {
+                        ui.add_space(4.0);
+                        ui.horizontal(|ui| {
+                            row_label(ui, t("Compression"));
+                            ui.label(RichText::new(t("Faster")).size(12.0).color(th.weak));
+                            ui.spacing_mut().slider_width = 220.0;
+                            ui.add(egui::Slider::new(level, 1..=9).show_value(false)).on_hover_text(format!("{} {level}", t("Level")));
+                            ui.label(RichText::new(t("Smaller")).size(12.0).color(th.weak));
+                        });
                     }
-                    if *format == ArchiveFormat::Rar && archive::rar_cli().is_none() {
-                        ui.colored_label(th.marked, t("RAR creation needs the 'rar' command-line tool."));
-                    }
+                    // Where it goes, and what happens next.
+                    ui.add_space(10.0);
+                    let dest = pack_dest(dest_dir, name, *format, home.as_deref(), src_dir);
+                    let exists = dest.as_ref().is_some_and(|d| d.exists());
+                    egui::Frame::NONE.fill(th.bg).corner_radius(8).inner_margin(egui::Margin::symmetric(10, 8)).show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        // The file's name, and the folder it goes in (long paths are cut, not the name).
+                        ui.horizontal(|ui| {
+                            let (ir, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                            icons::mi_archive(ui.painter(), ir, th.weak);
+                            let file = dest.as_ref().and_then(|d| d.file_name()).map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| t("Choose where to save it"));
+                            ui.add(egui::Label::new(RichText::new(file).color(th.strong()).strong()).truncate());
+                        });
+                        if let Some(dir) = dest.as_ref().and_then(|d| d.parent()) {
+                            let dir = dir.display().to_string();
+                            ui.add(egui::Label::new(RichText::new(&dir).size(12.0).color(th.text)).truncate()).on_hover_text(dir);
+                        }
+                        let (note, color) = if exists {
+                            (t("A file with this name is already there: choose another name."), th.danger)
+                        } else if *format == ArchiveFormat::Rar && !rar {
+                            (t("RAR creation needs the 'rar' command-line tool."), th.marked)
+                        } else if format.single_file() && !one_file {
+                            (t("This format compresses a single file. Use .tar.* for folders."), th.marked)
+                        } else {
+                            (format!("{} ({})", t("It runs in the background: its progress bar is in Tasks"), hint(Action::Transfers)), th.weak)
+                        };
+                        ui.label(RichText::new(note).size(12.0).color(color));
+                    });
                 }
                 Dialog::Unpack { archive, dest, selection, .. } => {
                     ui.heading(t("Extract"));
@@ -4719,7 +5062,8 @@ impl App {
                         ui.label(format!("{} {}", selection.len(), t("selected item(s)")));
                     }
                     ui.label(t("Extract to:"));
-                    let r = ui.add(egui::TextEdit::singleline(dest).desired_width(f32::INFINITY));
+                    let o = crate::pathfield::Opts { base: archive.parent(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
+                    let r = self.dialog_path.show(ui, dest, dst_id, o, th);
                     focus_edit(&r);
                 }
                 Dialog::ArchivePassword { file, password, wrong, checking, .. } => {
@@ -4908,6 +5252,9 @@ impl App {
         if modal.should_close() {
             close = true;
         }
+        if close || confirmed {
+            self.dialog_path.reset();
+        }
         if confirmed {
             if let Some(next) = self.confirm_dialog(dialog) {
                 self.dialog = Some(next);
@@ -4952,7 +5299,8 @@ impl App {
                 }
                 let dst_loc = match known.into_iter().find(|l| l.display(|id| self.remote_label(id)) == dst) {
                     Some(l) => l,
-                    None => match self.parse_location_text(&dst) {
+                    // A relative path is taken from the folder copied from.
+                    None => match self.parse_location_text(&crate::pathfield::resolve_typed(&dst, dirs::home_dir().as_deref(), src.local_path())) {
                         Some(l) => l,
                         None => return Some(Dialog::Transfer { src, mv, items, dst, policy }),
                     },
@@ -5035,23 +5383,28 @@ impl App {
             }
             Dialog::CloseTerminals { target: CloseTarget::Tabs(uids), .. } => self.close_tabs(&uids),
             Dialog::Pack { items, src_dir, name, dest_dir, format, level } => {
-                let dest = PathBuf::from(&dest_dir).join(format!("{}.{}", name.trim(), format.extension()));
+                let Some(dest) = pack_dest(&dest_dir, &name, format, dirs::home_dir().as_deref(), &src_dir) else {
+                    return Some(Dialog::Pack { items, src_dir, name, dest_dir, format, level });
+                };
                 if dest.exists() {
                     self.toast(format!("{}: {}", t("Already exists"), dest.display()), true);
                     return Some(Dialog::Pack { items, src_dir, name, dest_dir, format, level });
                 }
                 let sources: Vec<PathBuf> = items.iter().map(|e| src_dir.join(&e.name)).collect();
                 let title = format!("{} {}", t("Compressing"), dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
-                let dest_dir_loc = Location::Local(PathBuf::from(&dest_dir));
-                self.spawn_job(title, After::Refresh, Some(dest_dir_loc), move |p| {
+                let dest_dir_loc = Location::Local(dest.parent().map(Path::to_path_buf).unwrap_or_default());
+                self.spawn_job(title, After::Refresh, Some(dest_dir_loc), vec![src_dir.clone()], move |p| {
                     archive::create(&sources, None, &dest, format, level, &[], p)?;
                     Ok(dest.to_string_lossy().to_string())
                 });
             }
             Dialog::Unpack { archive, dest, selection, strip } => {
-                let dest = PathBuf::from(dest.trim());
+                // `~` and relative paths, as the field suggests them (relative: from the archive's folder).
+                let Some(dest) = crate::pathfield::typed_dir(&dest, dirs::home_dir().as_deref(), archive.parent()) else {
+                    return Some(Dialog::Unpack { archive, dest, selection, strip });
+                };
                 let title = format!("{} {}", t("Extracting"), archive.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
-                self.spawn_job(title, After::Refresh, Some(Location::Local(dest.clone())), move |p| {
+                self.spawn_job(title, After::Refresh, Some(Location::Local(dest.clone())), vec![archive.clone()], move |p| {
                     archive::extract(&archive, &dest, &selection, &strip, Conflict::Overwrite, p)?;
                     Ok(dest.to_string_lossy().to_string())
                 });
@@ -5328,7 +5681,7 @@ impl App {
         for (parent, items) in groups {
             let d = dst.clone();
             let title = format!("{} {} {}", t("Copying"), items.len(), t("item(s)"));
-            self.spawn_job(title, After::Refresh, Some(loc.clone()), move |p| ops::transfer(Endpoint::Local(parent), items, d, false, Conflict::Rename, p));
+            self.spawn_job(title, After::Refresh, Some(loc.clone()), vec![parent.clone()], move |p| ops::transfer(Endpoint::Local(parent), items, d, false, Conflict::Rename, p));
         }
     }
 }
@@ -5372,10 +5725,7 @@ impl eframe::App for App {
         self.poll_jobs(ctx);
         self.poll_connect();
         self.handle_dropped_files(ctx);
-        if self.drives_at.elapsed() > Duration::from_secs(10) {
-            self.drives = crate::vfs::drives();
-            self.drives_at = Instant::now();
-        }
+        self.poll_drives(ctx);
         let mut busy = self.connecting.is_some();
         for side in 0..self.panes.len() {
             let tab = self.panes[side].tab_mut();
@@ -5481,7 +5831,7 @@ impl eframe::App for App {
             .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left, right: if show_quick { 0 } else { 10 }, top: 4, bottom: 2 }))
             .show(ctx, |ui| self.panes_area(ui));
 
-        // Viewer (F3)
+        // Viewer window (Shift+F3)
         if self.viewer.is_some() {
             let mut open = true;
             let name = self.viewer.as_ref().map(|v| v.name.clone()).unwrap_or_default();
@@ -5501,17 +5851,18 @@ impl eframe::App for App {
         }
         if self.backup.open {
             let cur = self.panes[self.active].tab().loc.local_path().map(|p| p.to_path_buf());
-            let action = self.backup.ui(ctx, &mut self.cfg.backups, cur.as_deref(), self.theme, &t);
+            let action = self.backup.ui(ctx, &mut self.cfg.backups, cur.as_deref(), &self.drives, self.cfg.show_hidden, self.theme, &t);
             match action {
                 Some(BackupAction::Run(profile)) => {
                     self.save_cfg();
                     let title = format!("{} {}", t("Backup"), profile.name);
-                    let dest = Some(Location::Local(PathBuf::from(&profile.destination)));
-                    self.spawn_job(title, After::Refresh, dest, move |p| backup::run(&profile, p));
+                    let dest = Some(Location::Local(backup::destination_path(&profile)));
+                    let sources = backup::source_paths(&profile);
+                    self.spawn_job(title, After::Refresh, dest, sources, move |p| backup::run(&profile, p));
                 }
                 Some(BackupAction::Restore(file, dest)) => {
                     let title = format!("{} {}", t("Restoring"), file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
-                    self.spawn_job(title, After::Refresh, Some(Location::Local(dest.clone())), move |p| {
+                    self.spawn_job(title, After::Refresh, Some(Location::Local(dest.clone())), vec![file.clone()], move |p| {
                         archive::extract(&file, &dest, &[], "", Conflict::Overwrite, p)?;
                         Ok(dest.to_string_lossy().to_string())
                     });
@@ -5555,35 +5906,6 @@ impl eframe::App for App {
         }
         if self.show_about {
             self.about_window(ctx);
-        }
-        if self.checksum.open {
-            if let Some(dir) = self.checksum.ui(ctx, self.theme) {
-                self.refresh_location(&Location::Local(dir));
-            }
-        }
-        if self.renamer.open {
-            match self.renamer.ui(ctx, self.theme) {
-                Some(RenameAction::Apply(loc, pairs)) => match self.run_rename(&loc, &pairs) {
-                    Ok(done) => {
-                        self.toast(format!("{} {} {}", t("Renamed"), done.len(), t("item(s)")), false);
-                        self.renamer.applied(loc.clone(), done);
-                        self.refresh_location(&loc);
-                    }
-                    Err(e) => {
-                        self.toast(e, true);
-                        self.refresh_location(&loc);
-                    }
-                },
-                Some(RenameAction::Undo(loc, back)) => match self.run_rename(&loc, &back) {
-                    Ok(_) => {
-                        self.toast(t("Rename undone"), false);
-                        self.renamer.undone(&back);
-                        self.refresh_location(&loc);
-                    }
-                    Err(e) => self.toast(e, true),
-                },
-                None => {}
-            }
         }
         self.dialogs(ctx);
         if self.palette.open {
@@ -5681,6 +6003,36 @@ fn preview_names(items: &[Entry]) -> String {
     let names: Vec<&str> = items.iter().take(4).map(|e| e.name.as_str()).collect();
     let more = if items.len() > 4 { format!(" … (+{})", items.len() - 4) } else { String::new() };
     format!("{}{more}", names.join(", "))
+}
+
+/// Where Compress saves: `name` in format `fmt` inside the folder typed (`~` and
+/// relative paths are taken from `home` and `base`). None when no name or folder is given.
+fn pack_dest(dir: &str, name: &str, fmt: ArchiveFormat, home: Option<&Path>, base: &Path) -> Option<PathBuf> {
+    if name.trim().is_empty() {
+        return None;
+    }
+    let dir = crate::pathfield::typed_dir(dir, home, Some(base))?;
+    Some(dir.join(archive::archive_file_name(name, fmt)))
+}
+
+/// A format to choose in the Compress dialog.
+fn format_chip(ui: &mut egui::Ui, th: &Theme, f: ArchiveFormat, on: bool, enabled: bool) -> egui::Response {
+    let text = format!(".{}", f.extension());
+    let g = ui.fonts(|fo| fo.layout_no_wrap(text.clone(), egui::FontId::proportional(13.0), th.text));
+    let size = egui::vec2(g.size().x + 20.0, 26.0);
+    let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
+    let (r, resp) = ui.allocate_exact_size(size, sense);
+    let (fill, fg, stroke) = if on {
+        (th.accent, th.on_accent(), th.accent)
+    } else if resp.hovered() && enabled {
+        (th.hover(), th.strong(), th.border)
+    } else {
+        (th.bg, if enabled { th.text } else { th.weak.gamma_multiply(0.6) }, th.border)
+    };
+    ui.painter().rect(r, 13.0, fill, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
+    ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, &text, egui::FontId::proportional(13.0), fg);
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, &text));
+    if enabled { resp.on_hover_text(f.blurb()) } else { resp.on_disabled_hover_text(f.blurb()).on_hover_text(f.blurb()) }
 }
 
 /// “name” for one item, “3 items” for several.
@@ -5826,6 +6178,11 @@ fn section_title(ui: &mut egui::Ui, th: &Theme, text: &str) {
 
 /// A sidebar entry: icon, label and an optional usage bar.
 fn side_row(ui: &mut egui::Ui, th: &Theme, selected: bool, label: &str, bar: Option<f32>, icon: impl FnOnce(&egui::Painter, egui::Rect)) -> egui::Response {
+    side_row_with(ui, th, selected, label, bar, 0.0, icon)
+}
+
+/// A sidebar row with `button` points kept free at its right end for a button.
+fn side_row_with(ui: &mut egui::Ui, th: &Theme, selected: bool, label: &str, bar: Option<f32>, button: f32, icon: impl FnOnce(&egui::Painter, egui::Rect)) -> egui::Response {
     let h = if bar.is_some() { 38.0 } else { 30.0 };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 4.0, h), egui::Sense::click());
     let p = ui.painter();
@@ -5836,7 +6193,7 @@ fn side_row(ui: &mut egui::Ui, th: &Theme, selected: bool, label: &str, bar: Opt
     }
     let cy = rect.top() + 15.0;
     icon(p, egui::Rect::from_center_size(egui::pos2(rect.left() + 18.0, cy), egui::vec2(16.0, 16.0)));
-    let text_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + 34.0, rect.top()), egui::pos2(rect.right() - 8.0, rect.top() + 30.0));
+    let text_rect = egui::Rect::from_min_max(egui::pos2(rect.left() + 34.0, rect.top()), egui::pos2(rect.right() - 8.0 - button, rect.top() + 30.0));
     p.with_clip_rect(text_rect).text(
         egui::pos2(text_rect.left(), cy),
         egui::Align2::LEFT_CENTER,
@@ -5874,16 +6231,20 @@ fn key_hint(ui: &mut egui::Ui, th: &Theme, key: &str, label: &str) -> egui::Resp
     resp
 }
 
-/// Short, friendly drive name for the sidebar.
-fn drive_name(label: &str, mp: &Path) -> String {
-    let s = mp.to_string_lossy().to_string();
-    if s == "/" {
-        return label.split(" (").next().map(|_| "/".to_string()).unwrap_or(s);
+/// Where a bookmark goes: its path, with `~` for the home folder (and a relative path
+/// from there), as the folder fields fill it in.
+fn bookmark_target(path: &str) -> String {
+    let home = dirs::home_dir();
+    crate::pathfield::resolve_typed(path, home.as_deref(), home.as_deref())
+}
+
+/// The local file or folder behind a location: the folder, or the archive file.
+fn local_file_of(loc: &Location) -> Option<PathBuf> {
+    match loc {
+        Location::Local(p) => Some(p.clone()),
+        Location::Archive { file, .. } => Some(file.clone()),
+        Location::Remote { .. } => None,
     }
-    if cfg!(windows) {
-        return s.trim_end_matches('\\').to_string();
-    }
-    mp.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(s)
 }
 
 fn pause_icon(p: &egui::Painter, r: egui::Rect, c: egui::Color32) {

@@ -72,6 +72,8 @@ pub struct Tab {
     pub search: Option<Search>,
     pub focus_path: bool,
     pub editing_path: bool,
+    /// Folder suggestions while the address is typed.
+    pub complete: crate::completion::Completer,
     /// One-off scroll request (auto-scroll while dragging).
     force_scroll: Option<f32>,
     /// Spring-loaded folder: (folder name, hover start time).
@@ -88,21 +90,66 @@ pub struct Tab {
     pub settings: bool,
     /// The Transfers window (its content is drawn by the app).
     pub transfers: bool,
+    /// The Checksum tool shown instead of the file list (drawn by the app).
+    pub checksum: Option<Box<crate::checksum::ChecksumUi>>,
+    /// The Batch rename tool shown instead of the file list (drawn by the app).
+    pub renamer: Option<Box<crate::rename::BatchRename>>,
+    /// The address bar's folder tree, while it is open.
+    pub tree: Option<Box<crate::foldertree::FolderTree>>,
     /// Quick filter by file category; unlike the text filter it stays on while
     /// browsing other folders, and folders stay visible.
     pub quick: Option<QuickActive>,
 }
 
-/// The quick filter a window has on.
+/// The quick filter a window has on: one or more categories, ticked in its menu.
 #[derive(Clone, Debug)]
 pub struct QuickActive {
-    pub name: String,
+    /// The categories ticked, in the order of the list in Settings.
+    pub names: Vec<String>,
+    /// Their extensions together.
     pub exts: HashSet<String>,
 }
 
 impl QuickActive {
-    pub fn of(q: &crate::config::QuickFilter) -> Self {
-        QuickActive { name: q.name.clone(), exts: q.ext_list().into_iter().collect() }
+    /// The categories called `names` that are in `all` (the list in Settings); None when
+    /// there are none.
+    pub fn from_names(names: &[String], all: &[crate::config::QuickFilter]) -> Option<Self> {
+        // Each name once: the first list of that name.
+        let mut on: Vec<&crate::config::QuickFilter> = Vec::new();
+        for q in all.iter().filter(|q| names.contains(&q.name)) {
+            if !on.iter().any(|o| o.name == q.name) {
+                on.push(q);
+            }
+        }
+        if on.is_empty() {
+            return None;
+        }
+        Some(QuickActive { names: on.iter().map(|q| q.name.clone()).collect(), exts: on.iter().flat_map(|q| q.ext_list()).collect() })
+    }
+
+    /// `cur` with category `name` ticked or unticked; None when none is left.
+    pub fn toggle(cur: Option<&QuickActive>, name: &str, all: &[crate::config::QuickFilter]) -> Option<Self> {
+        let mut names = cur.map(|q| q.names.clone()).unwrap_or_default();
+        match names.iter().position(|n| n == name) {
+            Some(i) => {
+                names.remove(i);
+            }
+            None => names.push(name.to_string()),
+        }
+        Self::from_names(&names, all)
+    }
+
+    pub fn has(&self, name: &str) -> bool {
+        self.names.iter().any(|n| n == name)
+    }
+
+    /// "Images", "Images, Videos", or the first two and how many more.
+    pub fn label(&self) -> String {
+        let shown: Vec<String> = self.names.iter().take(2).map(|n| t(n)).collect();
+        match self.names.len() {
+            0..=2 => shown.join(", "),
+            n => format!("{} +{}", shown.join(", "), n - 2),
+        }
     }
 
     /// Folders always pass, so you can keep browsing.
@@ -145,6 +192,7 @@ impl Tab {
             search: None,
             focus_path: false,
             editing_path: false,
+            complete: Default::default(),
             force_scroll: None,
             spring: None,
             uid: crate::tabs::next_uid(),
@@ -153,6 +201,9 @@ impl Tab {
             du: None,
             settings: false,
             transfers: false,
+            checksum: None,
+            renamer: None,
+            tree: None,
             quick: None,
         }
     }
@@ -171,9 +222,28 @@ impl Tab {
         t
     }
 
-    /// A plain file view (not a terminal, disk usage, settings or transfers window).
+    /// A plain file view (not a terminal, disk usage, settings, transfers or tool window).
     pub fn is_files(&self) -> bool {
-        self.term.is_none() && self.du.is_none() && !self.settings && !self.transfers
+        self.term.is_none() && self.du.is_none() && !self.settings && !self.transfers && !self.is_tool()
+    }
+
+    /// The Checksum tool, in a window of its own working in `dir`.
+    pub fn checksum_tool(tool: crate::checksum::ChecksumUi, dir: PathBuf) -> Self {
+        let mut t = Self::new(Location::Local(dir));
+        t.checksum = Some(Box::new(tool));
+        t
+    }
+
+    /// The Batch rename tool, in a window of its own renaming in `loc`.
+    pub fn rename_tool(tool: crate::rename::BatchRename, loc: Location) -> Self {
+        let mut t = Self::new(loc);
+        t.renamer = Some(Box::new(tool));
+        t
+    }
+
+    /// A Checksum or Batch rename window.
+    pub fn is_tool(&self) -> bool {
+        self.checksum.is_some() || self.renamer.is_some()
     }
 
     /// A disk usage window for `dir` (scans `depth` levels).
@@ -669,7 +739,13 @@ impl Tab {
             return t("Settings");
         }
         if self.transfers {
-            return t("Transfers");
+            return t("Tasks");
+        }
+        if let Some(c) = &self.checksum {
+            return c.title();
+        }
+        if self.renamer.is_some() {
+            return t("Batch rename");
         }
         if let Some(d) = &self.du {
             let name = d.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| d.path.to_string_lossy().to_string());
@@ -776,6 +852,8 @@ pub enum Cmd {
     OpenWith,
     DefaultApps,
     View,
+    /// Show or hide the Quick View panel.
+    QuickView,
     Copy,
     Move,
     Rename,
@@ -863,6 +941,8 @@ pub enum PaneEvent {
     SettingsArea(Rect),
     /// A Transfers window: the area its content goes in (the app draws it).
     TransfersArea(Rect),
+    /// The space for a Checksum or Batch rename tool (the app draws it).
+    ToolArea(Rect),
     /// An AI coding agent button in a terminal's info bar.
     Agent(crate::agents::AgentAct),
 }
@@ -876,7 +956,7 @@ pub struct PaneUiCtx<'a> {
     /// The app's theme: menus and popups are drawn with it, whatever the window's colours.
     pub app_theme: &'a Theme,
     pub active: bool,
-    pub drives: &'a [(String, PathBuf, u64, u64)],
+    pub drives: &'a [crate::drives::Drive],
     pub list: ListCtx<'a>,
     pub is_bookmarked: bool,
     pub show_free: bool,
@@ -949,8 +1029,12 @@ pub fn pane_ui(ui: &mut egui::Ui, pane: &mut Pane, side: usize, c: &PaneUiCtx) -
             let area = tool_window_header(ui, pane.tab().uid, card, c, &mut ev, icons::gear, &t("Settings"));
             ev.push(PaneEvent::SettingsArea(area));
         } else if pane.tab().transfers {
-            let area = tool_window_header(ui, pane.tab().uid, card, c, &mut ev, icons::transfers, &t("Transfers"));
+            let area = tool_window_header(ui, pane.tab().uid, card, c, &mut ev, icons::transfers, &t("Tasks"));
             ev.push(PaneEvent::TransfersArea(area));
+        } else if pane.tab().is_tool() {
+            let icon: fn(&egui::Painter, Rect, egui::Color32) = if pane.tab().checksum.is_some() { icons::mi_checksum } else { icons::mi_rename };
+            let area = tool_window_header(ui, pane.tab().uid, card, c, &mut ev, icon, &pane.tab().title());
+            ev.push(PaneEvent::ToolArea(area));
         } else if pane.tab().du.is_some() {
             let tab = pane.tab_mut();
             fixed_width(ui, |ui| du_header(ui, tab, c, &mut ev));
@@ -1046,6 +1130,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         {
             ev.push(PaneEvent::Up);
         }
+        folder_tree_button(ui, tab, c, ev);
         ui.add_space(4.0);
 
         let extra = if c.pane_count > 1 { 56.0 } else { 0.0 };
@@ -1056,7 +1141,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
                 true,
             )),
             None => {
-                let quick = tab.quick.as_ref().map(|q| t(&q.name));
+                let quick = tab.quick.as_ref().map(|q| q.label());
                 match (quick, tab.filter_text.is_empty()) {
                     (Some(q), true) => Some((q, false)),
                     (Some(q), false) => Some((format!("{q} · {}", tab.filter_text), false)),
@@ -1074,6 +1159,8 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         ui.allocate_ui(vec2(crumb_w, 28.0), |ui| breadcrumb(ui, tab, side, c, ev));
         if let Some((text, recursive)) = chip {
             let (rect, resp) = ui.allocate_exact_size(vec2(chip_w, 24.0), Sense::click());
+            let label = text.clone();
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
             let bad = !recursive && tab.filter.is_err();
             let base = if bad { th.danger } else { th.accent };
             let fill = base.gamma_multiply(if resp.hovered() { 0.32 } else { 0.2 });
@@ -1116,36 +1203,79 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
     });
 }
 
-/// The quick filter button and its menu of file categories.
+/// The folder tree button of the address bar and its popup: OK (or a double click) on a
+/// folder goes there.
+fn folder_tree_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
+    use crate::foldertree::{self, FolderTree, Popup};
+    let th = c.theme;
+    let shown = tab.tree.is_some();
+    let accent = th.accent;
+    let r = icons::icon_button(ui, 26.0, true, th, |p, r, col| foldertree::icon(p, r, if shown { accent } else { col })).on_hover_text(t("Folder tree"));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Folder tree")));
+    if r.clicked() {
+        tab.tree = match tab.tree {
+            Some(_) => None,
+            None => {
+                let roots = foldertree::roots(dirs::home_dir().as_deref(), c.drives);
+                Some(Box::new(FolderTree::new(roots, tab.loc.local_path(), c.list.show_hidden)))
+            }
+        };
+    }
+    let Some(tree) = tab.tree.as_mut() else { return };
+    match foldertree::popup(ui, egui::Id::new(("folder-tree", tab.uid)), r.rect, tree, c.app_theme) {
+        Popup::Picked(p) => {
+            tab.tree = None;
+            ev.push(PaneEvent::Navigate(Location::Local(p)));
+        }
+        Popup::Closed => tab.tree = None,
+        Popup::Open => {}
+    }
+}
+
+/// The quick filter button and its menu of file categories: each one is ticked or
+/// unticked by a click, and the menu stays open so that several can be chosen.
 fn quick_filter_button(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
     let th = c.theme;
     let on = tab.quick.is_some();
     let accent = th.accent;
     let r = icons::icon_button(ui, 26.0, true, th, |p, r, col| icons::funnel(p, r, if on { accent } else { col }, on));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Quick filter")));
     let tip = match &tab.quick {
-        Some(q) => format!("{}: {}", t("Quick filter"), t(&q.name)),
-        None => t("Quick filter: show one kind of file"),
+        Some(q) => format!("{}: {}", t("Quick filter"), q.label()),
+        None => t("Quick filter: show only some kinds of files"),
     };
     let r = r.on_hover_text(tip);
     let id = egui::Id::new(("quick-filter", tab.uid));
     if r.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
     }
-    egui::popup::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClick, |ui| {
-        ui.set_min_width(220.0);
+    egui::popup::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+        ui.set_min_width(240.0);
         menu_style(ui);
+        ui.label(egui::RichText::new(t("Show only")).size(11.5).color(th.weak));
         for (i, q) in c.quick_filters.iter().enumerate() {
             let exts = q.ext_list();
-            let (row, resp) = ui.allocate_exact_size(vec2(220.0, 28.0), Sense::click());
-            let sel = tab.quick.as_ref().is_some_and(|a| a.name == q.name);
+            let (row, resp) = ui.allocate_exact_size(vec2(240.0, 28.0), Sense::click());
+            let sel = tab.quick.as_ref().is_some_and(|a| a.has(&q.name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, sel, t(&q.name)));
             menu_row_fill(ui, row, th, sel, resp.hovered());
-            quick_filter_icon(ui.painter(), Rect::from_center_size(pos2(row.left() + 15.0, row.center().y), vec2(16.0, 16.0)), &exts, th);
-            ui.painter().text(pos2(row.left() + 32.0, row.center().y), Align2::LEFT_CENTER, t(&q.name), FontId::proportional(13.5), th.text);
+            // The tick box.
+            let bx = Rect::from_center_size(pos2(row.left() + 13.0, row.center().y), vec2(15.0, 15.0));
+            if sel {
+                ui.painter().rect_filled(bx, 3.5, th.accent);
+                let s = egui::Stroke::new(1.8_f32, th.on_accent());
+                ui.painter().line_segment([pos2(bx.left() + 3.5, bx.center().y + 0.2), pos2(bx.left() + 6.3, bx.bottom() - 4.0)], s);
+                ui.painter().line_segment([pos2(bx.left() + 6.3, bx.bottom() - 4.0), pos2(bx.right() - 3.2, bx.top() + 4.0)], s);
+            } else {
+                ui.painter().rect_stroke(bx, 3.5, egui::Stroke::new(1.2_f32, th.weak), egui::StrokeKind::Inside);
+            }
+            quick_filter_icon(ui.painter(), Rect::from_center_size(pos2(row.left() + 36.0, row.center().y), vec2(16.0, 16.0)), &exts, th);
+            ui.painter().text(pos2(row.left() + 52.0, row.center().y), Align2::LEFT_CENTER, t(&q.name), FontId::proportional(13.5), th.text);
             ui.painter().text(pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, exts.len().to_string(), FontId::proportional(11.5), th.weak);
             let shown: Vec<String> = exts.iter().take(14).map(|e| format!(".{e}")).collect();
             let more = if exts.len() > 14 { " …" } else { "" };
             if resp.on_hover_text(format!("{}{more}", shown.join(" "))).clicked() {
-                ev.push(PaneEvent::QuickFilter(if sel { None } else { Some(i) }));
+                ev.push(PaneEvent::QuickFilter(Some(i)));
             }
         }
         if c.quick_filters.is_empty() {
@@ -1154,9 +1284,11 @@ fn quick_filter_button(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec
         ui.separator();
         if on && ui.button(t("Show all files")).clicked() {
             ev.push(PaneEvent::QuickFilter(None));
+            ui.memory_mut(|m| m.close_popup());
         }
         if ui.button(t("Edit quick filters…")).clicked() {
             ev.push(PaneEvent::EditQuickFilters);
+            ui.memory_mut(|m| m.close_popup());
         }
     });
 }
@@ -1565,24 +1697,7 @@ fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         tab.editing_path = true;
     }
     if tab.editing_path {
-        let edit = egui::TextEdit::singleline(&mut tab.path_text)
-            .id(path_id)
-            .desired_width(width)
-            .font(egui::TextStyle::Monospace)
-            .margin(egui::Margin::symmetric(8, 5));
-        let r = ui.add(edit);
-        if tab.focus_path {
-            r.request_focus();
-            tab.focus_path = false;
-        }
-        if r.lost_focus() {
-            tab.editing_path = false;
-            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                ev.push(PaneEvent::NavigateText(tab.path_text.clone()));
-            } else {
-                tab.path_text = tab.loc.display(|id| remote_label(&c.list, id));
-            }
-        }
+        address_edit(ui, tab, path_id, width, c, ev);
         return;
     }
     // Segments from the root to the current location.
@@ -1678,6 +1793,126 @@ fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
             }
         }
     });
+}
+
+/// The address bar as a text field, with the folders that match what is typed below it.
+fn address_edit(ui: &mut egui::Ui, tab: &mut Tab, path_id: egui::Id, width: f32, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
+    use egui::{Key, Modifiers};
+    let comp = &mut tab.complete;
+    // A click on a suggestion opens it. The rows are the ones drawn in the last frame:
+    // the text field gives up the keyboard as soon as the mouse is pressed elsewhere.
+    let press = ui.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None });
+    if let Some(k) = press.and_then(|p| comp.rows.iter().position(|r| r.contains(p))) {
+        if let Some(s) = comp.items.get(k) {
+            ev.push(PaneEvent::NavigateText(s.text.clone()));
+            tab.path_text = s.text.clone();
+            ui.memory_mut(|m| m.surrender_focus(path_id));
+            comp.reset();
+            tab.editing_path = false;
+            return;
+        }
+    }
+    // Keys for the list, taken before the text field sees them.
+    let mut filled = false;
+    if ui.memory(|m| m.has_focus(path_id)) && !comp.items.is_empty() {
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowDown)) {
+            comp.step(1);
+        }
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::ArrowUp)) {
+            comp.step(-1);
+        }
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Tab)) {
+            if let Some(text) = comp.tab(&tab.path_text) {
+                tab.path_text = text;
+                filled = true;
+            }
+        }
+        if let Some(s) = comp.sel.and_then(|s| comp.items.get(s)) {
+            if ui.input(|i| i.key_pressed(Key::Enter)) {
+                tab.path_text = s.text.clone();
+            }
+        }
+    }
+    if filled {
+        // Go on typing at the end of what Tab put in.
+        if let Some(mut st) = egui::TextEdit::load_state(ui.ctx(), path_id) {
+            let end = egui::text::CCursor::new(tab.path_text.chars().count());
+            st.cursor.set_char_range(Some(egui::text::CCursorRange::one(end)));
+            st.store(ui.ctx(), path_id);
+        }
+    }
+    // lock_focus: Tab completes instead of moving the keyboard to another widget.
+    let edit = egui::TextEdit::singleline(&mut tab.path_text)
+        .id(path_id)
+        .desired_width(width)
+        .font(egui::TextStyle::Monospace)
+        .margin(egui::Margin::symmetric(8, 5))
+        .lock_focus(true);
+    let r = ui.add(edit);
+    if tab.focus_path {
+        r.request_focus();
+        tab.focus_path = false;
+    }
+    if r.lost_focus() {
+        tab.editing_path = false;
+        tab.complete.reset();
+        if ui.input(|i| i.key_pressed(Key::Enter)) {
+            ev.push(PaneEvent::NavigateText(tab.path_text.clone()));
+        } else {
+            tab.path_text = tab.loc.display(|id| remote_label(&c.list, id));
+        }
+        return;
+    }
+    let comp = &mut tab.complete;
+    comp.active |= r.changed() || filled;
+    let base = match &tab.loc {
+        Location::Local(p) => Some(p.as_path()),
+        _ => None,
+    };
+    comp.update(&tab.path_text, dirs::home_dir().as_deref(), base, c.list.show_hidden, ui.ctx());
+    comp.rows.clear();
+    if comp.items.is_empty() || !r.has_focus() {
+        return;
+    }
+    suggestion_popup(ui, path_id.with("suggestions"), r.rect, comp, c.app_theme);
+}
+
+/// The list of folders (and archives) suggested for a path field, under `anchor`
+/// and above `parent`'s layer. Each row's place is kept in `comp.rows`.
+pub fn suggestion_popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, comp: &mut crate::completion::Completer, th: &Theme) {
+    let w = anchor.width().max(260.0);
+    if parent.layer_id().order == egui::Order::Foreground {
+        // Inside a dialog: keep the list above it.
+        parent.ctx().set_sublayer(parent.layer_id(), egui::LayerId::new(egui::Order::Foreground, id));
+    }
+    egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .fixed_pos(anchor.left_bottom() + vec2(0.0, 4.0))
+        .show(parent.ctx(), |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(th.panel)
+                .corner_radius(8)
+                .inner_margin(egui::Margin::same(4))
+                .stroke(egui::Stroke::new(1.0_f32, th.border))
+                .show(ui, |ui| {
+                    ui.set_width(w - 8.0);
+                    ui.spacing_mut().item_spacing.y = 0.0;
+                    for (i, s) in comp.items.iter().enumerate() {
+                        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+                        let sel = comp.sel == Some(i);
+                        if sel {
+                            ui.painter().rect_filled(rect, 6.0, th.selection);
+                        } else if resp.hovered() {
+                            ui.painter().rect_filled(rect, 6.0, th.hover());
+                        }
+                        let p = ui.painter().with_clip_rect(rect);
+                        let ext = std::path::Path::new(&s.name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                        icons::file_icon(&p, Rect::from_center_size(pos2(rect.left() + 15.0, rect.center().y), vec2(16.0, 16.0)), &s.name, !s.archive, &ext, th);
+                        p.text(pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, &s.name, FontId::proportional(14.0), if sel { th.strong() } else { th.text });
+                        comp.rows.push(rect);
+                    }
+                });
+        });
 }
 
 fn sep(ui: &mut egui::Ui, th: &Theme, w: f32) {
@@ -2317,8 +2552,7 @@ mod quick_filter_tests {
         let mut tab = Tab::new(Location::Local(dir.clone()));
         tab.reload(&ctx);
         wait(&mut tab, &ctx);
-        let images = crate::config::default_quick_filters().into_iter().find(|q| q.name == "Images").unwrap();
-        tab.set_quick(Some(QuickActive::of(&images)), &ctx);
+        tab.set_quick(QuickActive::from_names(&["Images".to_string()], &crate::config::default_quick_filters()), &ctx);
         assert_eq!(shown(&tab), ["sub", "a.jpg", "b.PNG"], "folders stay, upper-case extensions match");
         assert!(tab.is_filtered());
         // Unlike the text filter, the category survives opening a folder.
@@ -2329,5 +2563,41 @@ mod quick_filter_tests {
         assert!(tab.quick.is_none());
         assert_eq!(shown(&tab), ["d.gif", "e.rs"]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn several_categories_at_once() {
+        use crate::config::QuickFilter;
+        let all = vec![QuickFilter::new("Images", "jpg png"), QuickFilter::new("Music", "mp3"), QuickFilter::new("Videos", "mp4 mkv")];
+        let names = |q: &Option<QuickActive>| q.as_ref().map(|q| q.names.clone()).unwrap_or_default();
+        // Ticking adds a category; the order is the menu's, whatever the clicks.
+        let q = QuickActive::toggle(None, "Videos", &all);
+        let q = QuickActive::toggle(q.as_ref(), "Images", &all);
+        assert_eq!(names(&q), ["Images", "Videos"]);
+        let on = q.clone().unwrap();
+        assert!(on.has("Images") && !on.has("Music"));
+        let e = |name: &str| Entry::new(name.into(), false, 0, None);
+        assert!(on.matches(&e("a.png")) && on.matches(&e("b.MKV")) && !on.matches(&e("c.mp3")));
+        assert!(on.matches(&Entry::new("folder.mp3".into(), true, 0, None)), "folders stay");
+        assert_eq!(on.label(), format!("{}, {}", t("Images"), t("Videos")));
+        let three = QuickActive::toggle(q.as_ref(), "Music", &all).unwrap();
+        assert_eq!(three.label(), format!("{}, {} +1", t("Images"), t("Music")));
+        // Unticking the last one turns the filter off.
+        let q = QuickActive::toggle(q.as_ref(), "Images", &all);
+        assert_eq!(names(&q), ["Videos"]);
+        assert!(QuickActive::toggle(q.as_ref(), "Videos", &all).is_none());
+        // Edited in Settings: a renamed or deleted category drops out, an edited one applies.
+        let mut edited = all.clone();
+        edited[2].exts = "webm".into();
+        edited.remove(0);
+        let q = QuickActive::from_names(&three.names, &edited).unwrap();
+        assert_eq!(q.names, ["Music", "Videos"]);
+        assert!(q.matches(&e("x.webm")) && !q.matches(&e("x.mp4")));
+        assert!(QuickActive::from_names(&["Gone".to_string()], &edited).is_none());
+        // Two lists with the same name: the first one, once.
+        let twins = vec![QuickFilter::new("Mine", "a"), QuickFilter::new("Mine", "b")];
+        let q = QuickActive::toggle(None, "Mine", &twins).unwrap();
+        assert_eq!(q.names, ["Mine"]);
+        assert!(q.matches(&e("x.a")) && !q.matches(&e("x.b")));
     }
 }
