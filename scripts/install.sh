@@ -40,17 +40,20 @@ if [ -z "${BASH_VERSION:-}" ]; then
     case "$0" in
         */*|*.sh) if [ -f "$0" ]; then exec bash "$0" "$@"; fi ;;
     esac
-    # Piped into sh: the file is not on disk, so bash gets it from GitHub again.
+    # Piped into sh: the file is not on disk, so bash runs a copy fetched from GitHub
+    # again (a whole file: bash may stop before the end, e.g. for --help).
     url=${MATRIX_FINDER_INSTALL_URL:-https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh}
+    tmp=$(mktemp -d) || exit 1
     if command -v curl >/dev/null 2>&1; then
-        curl -fsSL "$url" | bash -s -- "$@"
+        curl -fsSL "$url" -o "$tmp/install.sh"
     elif command -v wget >/dev/null 2>&1; then
-        wget -qO- "$url" | bash -s -- "$@"
+        wget -qO "$tmp/install.sh" "$url"
     else
         echo "error: run this script with bash: curl -fsSL $url | bash" >&2
-        exit 1
-    fi
+        false
+    fi && bash "$tmp/install.sh" "$@"
     status=$?
+    rm -rf "$tmp"
     # Read what is left of this copy, so the curl it came from ends without an error.
     cat >/dev/null 2>&1
     exit $status
