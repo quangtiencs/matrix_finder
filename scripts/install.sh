@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Build Matrix Finder from source and install it (macOS, Ubuntu/Debian, Fedora).
+# Build Matrix Finder from source and install it (macOS; Debian, Ubuntu, Kali and
+# other Debian-based Linux; Fedora).
 #
 #   scripts/install.sh                  # build this checkout and install it
 #   scripts/install.sh --latest         # build the newest release from GitHub
@@ -7,6 +8,7 @@
 #   scripts/install.sh --uninstall      # remove what this script installed
 #
 #   curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash
+#   (sh works too: it hands itself over to bash)
 #
 # Options:
 #   --system        Linux: install for all users under /usr/local (asks for sudo)
@@ -26,6 +28,34 @@
 #
 # Written for bash 3.2 (macOS's /bin/bash): no associative arrays, no mapfile.
 # shellcheck disable=SC1091  # ~/.cargo/env and /etc/os-release exist at run time
+
+# Started with sh, which is dash on Debian, Ubuntu and Kali (`sh install.sh`,
+# `curl … | sh`): run again in bash. This part is plain POSIX sh, as dash reads and
+# runs it before the rest of the file.
+if [ -z "${BASH_VERSION:-}" ]; then
+    if ! command -v bash >/dev/null 2>&1; then
+        echo "error: this script needs bash; install it (sudo apt-get install bash) and run it again" >&2
+        exit 1
+    fi
+    case "$0" in
+        */*|*.sh) if [ -f "$0" ]; then exec bash "$0" "$@"; fi ;;
+    esac
+    # Piped into sh: the file is not on disk, so bash gets it from GitHub again.
+    url=${MATRIX_FINDER_INSTALL_URL:-https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh}
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" | bash -s -- "$@"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO- "$url" | bash -s -- "$@"
+    else
+        echo "error: run this script with bash: curl -fsSL $url | bash" >&2
+        exit 1
+    fi
+    status=$?
+    # Read what is left of this copy, so the curl it came from ends without an error.
+    cat >/dev/null 2>&1
+    exit $status
+fi
+
 set -euo pipefail
 
 REPO=${MATRIX_FINDER_REPO:-https://github.com/quangtiencs/matrix_finder.git}
@@ -34,7 +64,8 @@ APP_NAME="Matrix Finder"
 
 usage() {
     cat <<'EOF'
-Build Matrix Finder from source and install it (macOS, Ubuntu/Debian, Fedora).
+Build Matrix Finder from source and install it (macOS; Debian, Ubuntu, Kali
+and other Debian-based Linux; Fedora).
 
 Usage: install.sh [options]
 
@@ -218,16 +249,23 @@ install_linux_packages() {
     fi
     # Build: C/C++ compiler (unrar, sqlite, libssh2), pkg-config and OpenSSL headers (SFTP), git.
     # Run: OpenGL/EGL, xkbcommon, Wayland and X11 client libraries (loaded at start).
+    # Kali, Mint, Pop!_OS, Raspberry Pi OS… name Debian or Ubuntu in ID_LIKE; a
+    # derivative that does not is known by its package manager.
     case " $id $like " in
-        *" debian "*|*" ubuntu "*)
-            pm=apt
+        *" debian "*|*" ubuntu "*) pm=apt ;;
+        *" fedora "*|*" rhel "*|*" centos "*) pm=dnf ;;
+        *)
+            if command -v apt-get >/dev/null && command -v dpkg-query >/dev/null; then pm=apt
+            elif command -v dnf >/dev/null && command -v rpm >/dev/null; then pm=dnf; fi ;;
+    esac
+    case $pm in
+        apt)
             for p in build-essential pkg-config libssl-dev git ca-certificates curl \
                      libgl1 libegl1 libxkbcommon0 libxkbcommon-x11-0 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
                      libx11-6 libxcursor1 libxrandr2 libxi6; do
                 grep -q '^ii' <<<"$(dpkg-query -W -f='${db:Status-Abbrev}' "$p" 2>/dev/null)" || missing="$missing $p"
             done ;;
-        *" fedora "*|*" rhel "*|*" centos "*)
-            pm=dnf
+        dnf)
             for p in gcc gcc-c++ make pkgconf-pkg-config openssl-devel git ca-certificates curl \
                      mesa-libGL mesa-libEGL libxkbcommon libxkbcommon-x11 libwayland-client libwayland-cursor libwayland-egl \
                      libX11 libXcursor libXrandr libXi; do
