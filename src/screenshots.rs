@@ -2684,6 +2684,35 @@ fn update_check_offers_a_newer_version() {
     *crate::update::FAKE_ANSWER.lock().unwrap() = None;
 }
 
+/// A tab under the pointer turns clearly darker, as in a browser, and fades back.
+#[test]
+#[ignore]
+fn hovered_tab_turns_darker() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_files_tab(&d.demo, None);
+    assert_eq!(h.state().strip.active, 1, "the first tab is not selected");
+    // The first tab, past its title.
+    let tab = egui::Rect::from_min_max(pos2(280.0, 52.0), pos2(400.0, 70.0));
+    // Its background: the median brightness, which the title and close button leave alone.
+    let background = |img: &RgbaImage| {
+        let mut px: Vec<f32> = img.enumerate_pixels().filter(|(x, y, _)| tab.contains(pos2(*x as f32, *y as f32))).map(|(_, _, p)| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+        px.sort_by(f32::total_cmp);
+        px[px.len() / 2]
+    };
+    move_to(&mut h, pos2(W - 5.0, H - 5.0));
+    settle(&mut h, 6);
+    let away = background(&h.render().unwrap());
+    move_to(&mut h, tab.center());
+    settle(&mut h, 8);
+    let over = background(&h.render().unwrap());
+    assert!(away - over >= 12.0, "darker under the pointer: {away:.1} → {over:.1}");
+    move_to(&mut h, pos2(W - 5.0, H - 5.0));
+    settle(&mut h, 8);
+    let back = background(&h.render().unwrap());
+    assert!((back - away).abs() < 1.0, "back to the bar: {away:.1} → {back:.1}");
+}
+
 /// A long file name is cut to fit the title row of Quick View: it never runs under the
 /// buttons at the end of the row.
 #[test]

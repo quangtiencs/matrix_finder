@@ -43,11 +43,13 @@ pub fn group_color(i: u8, _dark: bool) -> Color32 {
 }
 
 /// Background of a grouped tab: the group colour mixed into the bar.
-fn group_tint(col: Color32, dark: bool, selected: bool, hovered: bool) -> Color32 {
-    let a = match (selected, hovered) {
-        (true, _) => if dark { 0.55 } else { 0.42 },
-        (false, true) => if dark { 0.36 } else { 0.28 },
-        (false, false) => if dark { 0.24 } else { 0.17 },
+/// `hot`: how far the pointer's highlight has faded in (0 to 1).
+fn group_tint(col: Color32, dark: bool, selected: bool, hot: f32) -> Color32 {
+    let a = if selected {
+        if dark { 0.55 } else { 0.42 }
+    } else {
+        let (rest, hover) = if dark { (0.24, 0.42) } else { (0.17, 0.34) };
+        rest + (hover - rest) * hot
     };
     col.gamma_multiply(a)
 }
@@ -810,23 +812,25 @@ fn tab_item(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, w:
     let resp = ui.interact(rect, id, Sense::click_and_drag());
     let p = ui.painter().clone();
     let being_dragged = egui::DragAndDrop::payload::<TabDrag>(ui.ctx()).is_some_and(|d| d.uid == tab.uid);
+    // The pointer's highlight fades in and out, as in a browser.
+    let hot = ui.ctx().animate_bool_with_time(id.with("hot"), resp.hovered() && !selected, 0.12);
     match tab.group.and_then(|g| strip.group(g)) {
         // Grouped tabs are simply filled with the group colour.
         Some(g) => {
-            p.rect_filled(rect, 6.0, group_tint(group_color(g.color, th.dark), th.dark, selected, resp.hovered()));
+            p.rect_filled(rect, 6.0, group_tint(group_color(g.color, th.dark), th.dark, selected, hot));
         }
         None if selected => {
             p.rect(rect, 6.0, th.bg, Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
         }
-        None if resp.hovered() => {
-            p.rect_filled(rect, 6.0, th.hover());
+        None if hot > 0.0 => {
+            p.rect_filled(rect, 6.0, th.tab_hover().gamma_multiply(hot));
         }
         None => {}
     }
     if being_dragged {
         p.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, th.accent.gamma_multiply(0.6)), egui::StrokeKind::Inside);
     }
-    let color = if selected { th.strong() } else if tab.group.is_some() { th.text } else { th.weak };
+    let color = if selected { th.strong() } else if tab.group.is_some() { th.text.lerp_to_gamma(th.strong(), hot) } else { th.weak.lerp_to_gamma(th.strong(), hot) };
     let icon_c = if tab.pinned { rect.center().x } else { rect.left() + 13.0 };
     let icon_r = Rect::from_center_size(pos2(icon_c, rect.center().y), vec2(13.0, 13.0));
     if inf.cells.len() > 1 {
@@ -867,7 +871,7 @@ fn tab_item(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, w:
         let x_rect = Rect::from_center_size(pos2(rect.right() - 11.0, rect.center().y), vec2(16.0, 16.0));
         let over_x = ui.input(|i| i.pointer.hover_pos()).is_some_and(|h| x_rect.contains(h));
         if over_x {
-            p.rect_filled(x_rect, 4.0, th.hover().lerp_to_gamma(th.text, 0.1));
+            p.rect_filled(x_rect, 4.0, th.tab_hover().lerp_to_gamma(th.text, 0.12));
         }
         let s = Stroke::new(1.2_f32, if over_x { th.text } else { th.weak });
         let r = x_rect.shrink(4.5);

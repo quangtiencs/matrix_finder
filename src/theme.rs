@@ -667,6 +667,12 @@ impl Theme {
     pub fn hover(&self) -> Color32 {
         self.bg.lerp_to_gamma(self.surface, 0.55)
     }
+
+    /// A tab under the pointer, as in a browser: clearly darker than the tab bar
+    /// (lighter on a dark theme), and still apart from the selected tab.
+    pub fn tab_hover(&self) -> Color32 {
+        self.panel.lerp_to_gamma(self.text, if self.dark { 0.13 } else { 0.10 })
+    }
 }
 
 pub fn apply(ctx: &egui::Context, t: &Theme) {
@@ -781,6 +787,22 @@ mod tests {
             assert!(contrast >= 4.0, "{}: text contrast {contrast}", t.name);
             assert_eq!(t.dark, b < 0.3, "{}: dark flag", t.name);
             assert!(t.ansi.is_some());
+        }
+    }
+
+    #[test]
+    fn hovered_tabs_stand_out() {
+        let contrast = |a: Color32, b: Color32| {
+            let (a, b) = (luminance(a), luminance(b));
+            (a.max(b) + 0.05) / (a.min(b) + 0.05)
+        };
+        for t in THEMES {
+            let h = t.tab_hover();
+            // Clearly darker than the tab bar (lighter on a dark theme), as in a browser.
+            assert!(contrast(h, t.panel) >= 1.12, "{}: hover {:.3} on the bar", t.name, contrast(h, t.panel));
+            assert_eq!(luminance(h) < luminance(t.panel), !t.dark, "{}: darker on light, lighter on dark", t.name);
+            // The title, drawn strong while hovered, stays readable.
+            assert!(contrast(h, t.strong()) >= 4.5, "{}: title {:.3}", t.name, contrast(h, t.strong()));
         }
     }
 
