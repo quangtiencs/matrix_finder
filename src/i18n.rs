@@ -117,6 +117,9 @@ mod tests {
             include_str!("scidata.rs"),
             include_str!("tensors.rs"),
             include_str!("rdata.rs"),
+            include_str!("drives.rs"),
+            include_str!("foldertree.rs"),
+            include_str!("pathfield.rs"),
             include_str!("archive.rs"),
             include_str!("shortcuts.rs"),
         ];

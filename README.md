@@ -14,11 +14,13 @@ Easy to start with, and it has power-user features in the Total Commander tradit
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-2ea44f)](#build)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](#license)
 [![Languages](https://img.shields.io/badge/i18n-English%20%7C%20Ti%E1%BA%BFng%20Vi%E1%BB%87t-ff69b4)](#settings)
+[![No telemetry](https://img.shields.io/badge/telemetry-none-success)](#privacy)
 
 [**Features**](#features) ·
 [**Screenshots**](#screenshots) ·
 [**Shortcuts**](#shortcuts) ·
 [**Build**](#build) ·
+[**Privacy**](#privacy) ·
 [**Project layout**](#layout)
 
 <br>
@@ -104,7 +106,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 | 🚪 **Quit confirmation** | Quitting while jobs are running or queued asks first: keep transferring, or stop them and quit |
 | 🔑 **SFTP host key check** | Servers are verified before any password or key is used. A new server shows its fingerprint for you to trust, and a changed key is refused |
 | 🛟 **Safer copies and moves** | An existing file is only replaced once the new copy is complete. Moves with *Skip* keep the files they skipped, and copying out of an archive follows your *If file exists* choice |
-| 🔐 **Checksum window** | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>, or right-click → *More* → *Checksum…*. Hash files in the background, compare with a pasted value (the algorithm is picked from its length), save checksum files and verify existing ones |
+| 🔐 **Checksums** | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd>, or right-click → *More* → *Checksum…*, opens in a tab of its own. Hash files in the background, compare with a pasted value (the algorithm is picked from its length), save checksum files and verify existing ones |
 | ➕ **Right-click → New** | A *New ▸ Folder… / Blank file…* submenu in every context menu: on a file, on the `..` row and on empty space |
 | 🎨 **Breeze Light by default** | Breeze Light is the default theme for the app, and Breeze Dark for built-in terminal profiles |
 | 🏠 **Starts at Home** | The app opens your home folder with no terminal running. To restore the last session instead, turn off *Settings → Files & layout → Open the home folder at start* |
@@ -116,7 +118,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 | 🔤 **Fonts** | *Settings → Fonts*: pick the font and size of the interface and of the terminal, from the bundled fonts or anything installed |
 
 <div align="center">
-<picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/checksum.png"><img src="docs/light/checksum.png" width="49%" alt="Checksum window comparing a pasted SHA-256"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/checksum.png"><img src="docs/light/checksum.png" width="49%" alt="Checksum tab comparing a pasted SHA-256"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/checksum-verify.png"><img src="docs/light/checksum-verify.png" width="49%" alt="Verifying a SHA256SUMS file"></picture>
 <br>
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/new-menu.png"><img src="docs/light/new-menu.png" width="49%" alt="Right-click New submenu"></picture>
@@ -130,7 +132,11 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 <details open>
 <summary><b>🖥️ Interface and window</b></summary>
 
-- **Clean, minimal layout** in the Finder / Nautilus style. A full-height sidebar holds the app menu, bookmarks (or put them in a bar above the tabs), drives and network connections. There is a single toolbar, rounded panel cards and a clickable breadcrumb path (click the empty area or press <kbd>Ctrl</kbd>+<kbd>L</kbd> to type a path). File icons are vector drawings coloured by type, and a slim status bar shows clickable key hints.
+- **Clean, minimal layout** in the Finder / Nautilus style. A full-height sidebar holds the app menu (the button just before it, or *View → Sidebar* in that menu, hides and shows the sidebar), bookmarks (or put them in a bar above the tabs), drives and network connections. There is a single toolbar, rounded panel cards and a clickable breadcrumb path (click the empty area or press <kbd>Ctrl</kbd>+<kbd>L</kbd> to type a path). File icons are vector drawings coloured by type, and a slim status bar shows clickable key hints.
+- **Address suggestions**: while you type a path, the folders and archives that match appear below the address bar, names that start with what you typed first. <kbd>↑</kbd> <kbd>↓</kbd> pick one and <kbd>Enter</kbd> opens it, a click opens it too, and <kbd>Tab</kbd> completes the name (or as much as the matches share) so you can go on typing inside it. `~/` works, a name on its own is looked up in the window's folder, and hidden folders show up when hidden files are shown or once you type a dot.
+- **Folder tree**: the tree button at the start of the address bar opens a small tree of your home folder and drives, already open down to the current folder. A chevron opens or closes a folder (read in the background, so a slow drive never holds up the window). A click chooses a folder (or <kbd>↑</kbd> <kbd>↓</kbd>, with <kbd>←</kbd> <kbd>→</kbd> to close and open), and **OK**, <kbd>Enter</kbd> or a double click goes there. **Cancel**, <kbd>Esc</kbd> or a click elsewhere closes it.
+- **Folder fields**: every field that takes a folder suggests folders as you type, like the address bar, and has the folder tree button beside it: *To* in Copy / Move (<kbd>F5</kbd> / <kbd>F6</kbd>), *Save to* in Compress, *Extract to*, the backup's sources, destination and *Restore to*, and the bookmarks' locations. <kbd>↑</kbd> <kbd>↓</kbd> and <kbd>Enter</kbd> or a click fill a suggestion in and list the folders inside it, <kbd>Tab</kbd> completes, and <kbd>Esc</kbd> closes the list without closing the dialog; <kbd>Enter</kbd> with no suggestion chosen confirms the dialog.
+- **Drives** in the sidebar go by their names (*Macintosh HD*, *KINGSTON*, *Windows (C:)*; hover for the path), without the system's own mounts such as macOS's Data volume. The section shows only when there is more than one drive; *Settings → Files & layout → Drives in the sidebar* shows it always or never. The list follows the system: a drive that is plugged in, ejected or unmounted elsewhere appears or leaves within a couple of seconds, and a window showing a drive that went away goes to your home folder. External, network and disk image volumes have an **eject** button (also in their right-click menu). It runs in the background (`diskutil` on macOS; `gio`, `udisksctl` or `umount` on Linux; Explorer's Eject on Windows). While a task uses the drive, ejecting is refused; if a program still has files open there, the message names it.
 - **Native window chrome**: the title bar is part of the toolbar and uses the platform's own window buttons.
   - macOS keeps its real traffic lights in a 52 pt unified title bar.
   - Windows gets Windows 11 caption buttons.
@@ -144,14 +150,15 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - **Merging tabs**: drag a tab onto a window's edge to merge the two tabs, or use the tab menu's *Show beside the current tab*. The palette's *Move window to new tab* splits a window back out.
   - <kbd>Ctrl</kbd>+<kbd>W</kbd> closes the focused window, and closes the tab when it has only one window. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>X</kbd> closes the whole tab, all its windows included.
   - **Settings** (<kbd>Ctrl</kbd>+<kbd>,</kbd> or the ⚙ button) opens in a tab of its own, not a separate window. Opening it again switches to that tab.
-  - **Transfers** (<kbd>Ctrl</kbd>+<kbd>J</kbd> or the ⇅ button) works the same way.
+  - **Tasks** (<kbd>Ctrl</kbd>+<kbd>J</kbd> or the ⇅ button) works the same way.
+  - **Checksum** and **Batch rename** open in a new tab next to the current one, each time, so several can run side by side. Closing the tab stops what it is still hashing.
 - **Tabs & tab groups**: you can reorder, pin, rename and duplicate tabs (a split tab is duplicated with all its windows), use *close others / close to the right*, and **reopen closed tabs** (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd>). Groups have names and 9 colours and can be collapsed. Split tabs and their layout are restored with the session.
 - **Startup**: the app opens in your **home folder** with no terminal open. Turn off *Open the home folder at start* to restore the tabs and groups of the last session instead.
 
 </details>
 
 <details>
-<summary><b>📁 Files, drag & drop and transfers</b></summary>
+<summary><b>📁 Files, drag & drop and tasks</b></summary>
 
 - **Right-click → New ▸ Folder… / Blank file…** (<kbd>F7</kbd> / <kbd>Shift</kbd>+<kbd>F4</kbd>).
 - **Drag & drop**: drop files on the other panel, a folder row, the `..` row, a breadcrumb segment, a bookmark or a drive.
@@ -159,7 +166,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - Hold <kbd>Shift</kbd> to move instead of copy, and press <kbd>Esc</kbd> to cancel.
   - Hovering over a folder opens it (spring-loaded folders), and the list scrolls when you drag near its edges.
   - Files dragged in from the OS land in the panel under the pointer.
-- **Transfer manager** (<kbd>Ctrl</kbd>+<kbd>J</kbd>): every copy, move, delete, compress, extract and backup runs in the background, and you keep browsing. It opens in a tab when you ask for it, never by itself.
+- **Tasks** (<kbd>Ctrl</kbd>+<kbd>J</kbd>, formerly *Transfers*): every copy, move, delete, compress, extract and backup runs in the background, and you keep browsing. It opens in a tab when you ask for it, never by itself; the status bar shows the running task with its progress bar meanwhile.
   - The toolbar button turns into a **circular progress indicator** showing how far the running jobs are together, with a count when there are several.
   - Each job shows progress, speed and time left, with **pause / resume / cancel**.
   - Jobs wait in a **queue**, and you choose how many run at once.
@@ -168,11 +175,11 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 - **If a file already exists**, a copy or move can keep both, overwrite or skip.
   - A move only deletes each source file once it has been copied, so skipped files stay where they were.
   - A cancelled or failed copy to a local folder never leaves a half-written file behind, and an existing file stays intact until the new copy is complete. An interrupted upload can still leave a partial file on the server.
-- **Batch rename** (<kbd>Ctrl</kbd>+<kbd>M</kbd>):
+- **Batch rename** (<kbd>Ctrl</kbd>+<kbd>M</kbd>, in a tab of its own):
   - Name masks with the tokens `[N]` `[N2-5]` `[E]` `[C]` `[D]` `[T]` `[Y]` `[M]` `[d]` `[P]`.
   - Find & replace (plain text or regex with `$1` groups), letter case, **Vietnamese diacritics removal** and a slug mode.
   - A live preview flags conflicts, swaps such as a↔b are safe, and the last batch can be undone.
-- **Open with**: <kbd>Enter</kbd> / <kbd>F4</kbd> opens a file with the OS default app, *Open with…* picks any program, and *Show in file manager* reveals it. Remote and in-archive files are fetched to a temp folder first.
+- **Open with**: <kbd>Enter</kbd> / <kbd>F4</kbd> opens a file with the OS default app (<kbd>F4</kbd> on a folder opens it right here, as <kbd>Enter</kbd> does), *Open with…* picks any program, and *Show in file manager* reveals it. Remote and in-archive files are fetched to a temp folder first.
 - **Bookmarks** (<kbd>Ctrl</kbd>+<kbd>D</kbd>): Home, Desktop, Documents, Downloads, Music, Pictures and Movies are bookmarked by default.
   - **Two display modes**: a **vertical bar** in the sidebar (the default), or a **horizontal bar** above the tabs, like a browser's bookmarks bar. Bookmarks that don't fit in the horizontal bar go into a **»** menu.
   - **In a terminal**: choose in Settings → Bookmarks whether a bookmark always opens in a file window (**Go to file only**) or, when a terminal is focused, runs `cd` to the folder in its shell (**File and Terminal**, the default).
@@ -226,6 +233,9 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - Copying files out of an archive follows the *If file exists* choice. The Extract dialog and backup restore overwrite existing files, except that a single-file archive such as `report.txt.gz` never replaces a file beside it.
   - A crafted tar archive can't write outside the destination folder through symbolic or hard links.
 - **Create** zip, **7z** (LZMA2), tar, tar.gz, tar.xz, **tar.zst** (multithreaded), tar.bz2 and single-file gz/xz/zst/bz2. RAR archives can be created when the `rar` command-line tool is installed.
+  - The **Compress** dialog (<kbd>Alt</kbd>+<kbd>F5</kbd>) shows the formats as buttons, with a line on what the one chosen is good for. The single-file formats are offered only for one file, and typing a format at the end of the name (`photos.7z`) chooses it.
+  - A *Faster ↔ Smaller* slider sets the level (plain .tar has none). The file it will make is shown before it is made, with a warning when one with that name is there already.
+  - Large archives are made in the background: the progress bar is in the status bar and in **Tasks**, where they can be paused.
 - **Protocols**: the local disk, **SFTP** (password, private key or SSH agent) and **FTP**, with saved connection profiles.
   - **SFTP host keys** are checked before any password or key is used, against `~/.ssh/known_hosts` and the app's own `known_hosts` file in its settings folder.
   - A server not listed in either shows its SHA-256 fingerprint and connects only if you choose to trust it. Trusted keys go in the app's file, and `~/.ssh` is never changed.
@@ -245,7 +255,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 <details>
 <summary><b>👁️ Preview and 🔎 search</b></summary>
 
-- **Quick View** (<kbd>Ctrl</kbd>+<kbd>Q</kbd>) or the viewer window (<kbd>F3</kbd>) shows:
+- **Quick View** (<kbd>F3</kbd> shows and hides it; also <kbd>Ctrl</kbd>+<kbd>Q</kbd>) or the viewer window (<kbd>Shift</kbd>+<kbd>F3</kbd>) shows:
   - **PDF**
   - **Jupyter notebooks**
   - images: PNG, JPEG, GIF, WebP, BMP, ICO and TIFF, with animated GIF and WebP playing
@@ -271,9 +281,9 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
   Files past a size limit are not opened at all, and show a small *Too large to preview* message: 80 MB for images, PDF, notebooks, fonts, certificates and RTF, 256 MB for `.xls`, `.xlsb` and `.ods`, 768 MB for 3D models, and 1 GB for everything else. Local safetensors, ONNX and `.npz` files have no limit, since only their headers are read. On a server or inside an archive, only text is previewed past what can be fetched (16 MB and 80 MB).
 - **Search & filter**: one box for files and commands. Start typing in a file window to open it with what you typed, or press <kbd>Ctrl</kbd>+<kbd>F</kbd>. As you type, the active panel is filtered live; <kbd>Enter</kbd> keeps the filter and <kbd>Esc</kbd> closes the box and shows the whole folder again. <kbd>↓</kbd> <kbd>Enter</kbd> searches all subfolders instead. Queries can be plain text, globs, extension lists or an **SQL-like WHERE clause** (see [Quick filter syntax](#filter)).
-- **Quick filters by file type**: the **funnel** button of a file window opens a menu of categories that shows only that kind of file. The built-in categories are Images, Music, Videos, Documents, Spreadsheets, Presentations, Development, Data and Archives, each with its common formats.
+- **Quick filters by file type**: the **funnel** button of a file window opens a menu of categories with tick boxes: tick one or several (say *Images* and *Videos*) to show only those kinds of file. The menu stays open while you tick, and the chip in the address bar names what is shown. The built-in categories are Images, Music, Videos, Documents, Spreadsheets, Presentations, Development, Data and Archives, each with its common formats.
   - **While filtering**: folders stay visible, and the filter stays on while you browse into other folders. It works together with the text filter. Click the chip in the address bar or press <kbd>Esc</kbd> to turn it off.
-  - **Editing**: in *Settings → Quick filters* you can add, rename, reorder and remove categories, edit their extension lists, or restore the built-in ones. The palette lists every category too.
+  - **Your own lists**: in *Settings → Quick filters* (or *Edit quick filters…* at the bottom of the menu) you can add your own categories, rename, reorder and remove them, edit their extension lists, or restore the built-in ones. The palette lists every category too, and ticks or unticks it.
 
 </details>
 
@@ -335,11 +345,11 @@ The images follow your light or dark GitHub theme. Both sets are in [`docs/light
 </tr>
 <tr>
 <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/disk-usage.png"><img src="docs/light/disk-usage.png" alt="Disk usage treemap"></picture></td>
-<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/transfers.png"><img src="docs/light/transfers.png" alt="Transfer manager"></picture></td>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/transfers.png"><img src="docs/light/transfers.png" alt="Tasks"></picture></td>
 </tr>
 <tr>
 <td align="center"><sub>Disk usage treemap</sub></td>
-<td align="center"><sub>Transfer manager with a queue</sub></td>
+<td align="center"><sub>Tasks with a queue</sub></td>
 </tr>
 <tr>
 <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/batch-rename.png"><img src="docs/light/batch-rename.png" alt="Batch rename"></picture></td>
@@ -358,7 +368,7 @@ The images follow your light or dark GitHub theme. Both sets are in [`docs/light
 <td align="center"><sub>Terminal profiles in Settings</sub></td>
 </tr>
 <tr>
-<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/quick-filter.png"><img src="docs/light/quick-filter.png" alt="Quick filter menu with file categories"></picture></td>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/quick-filter.png"><img src="docs/light/quick-filter.png" alt="Quick filter menu with two file categories ticked"></picture></td>
 <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/disk-usage-table.png"><img src="docs/light/disk-usage-table.png" alt="Disk usage as a table"></picture></td>
 </tr>
 <tr>
@@ -449,13 +459,13 @@ NOT name LIKE '.%' OR (ext = 'md' AND size < 4KB)
 | Key | Action | Key | Action |
 |---|---|---|---|
 | <kbd>Tab</kbd> | switch panel | <kbd>F2</kbd> / <kbd>Shift</kbd>+<kbd>F6</kbd> | rename |
-| <kbd>Enter</kbd> | open folder / archive / file | <kbd>F3</kbd> | viewer |
-| <kbd>Backspace</kbd> | parent folder | <kbd>F4</kbd> | open with default app |
+| <kbd>Enter</kbd> | open folder / archive / file | <kbd>F3</kbd> | quick-view panel on / off |
+| <kbd>Backspace</kbd> | parent folder | <kbd>F4</kbd> | open: a folder here, a file with its default app |
 | <kbd>Space</kbd> / <kbd>Insert</kbd> | select | <kbd>Shift</kbd>+<kbd>F4</kbd> | new blank file |
 | <kbd>Shift</kbd>+<kbd>↑↓</kbd> | extend selection | <kbd>F5</kbd> / <kbd>F6</kbd> | copy / move to other panel |
 | <kbd>Ctrl</kbd>+<kbd>A</kbd> / <kbd>Ctrl</kbd>+<kbd>I</kbd> | select all / invert | <kbd>F7</kbd> | new folder |
 | <kbd>Alt</kbd>+<kbd>←</kbd> / <kbd>→</kbd> | back / forward | <kbd>F8</kbd>, <kbd>Del</kbd> | delete (<kbd>Shift</kbd> = permanently) |
-| <kbd>Ctrl</kbd>+<kbd>Q</kbd> | quick-view panel | <kbd>F9</kbd> | terminal here |
+| <kbd>Shift</kbd>+<kbd>F3</kbd> | viewer window | <kbd>F9</kbd> | terminal here |
 | <kbd>Ctrl</kbd>+<kbd>T</kbd> | new tab | <kbd>Alt</kbd>+<kbd>F5</kbd> / <kbd>Alt</kbd>+<kbd>F9</kbd> | compress / extract |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> | reopen closed tab | <kbd>Ctrl</kbd>+<kbd>`</kbd> | new terminal tab |
 | <kbd>Ctrl</kbd>+<kbd>Tab</kbd>, <kbd>Ctrl</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd> | next / previous tab | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>PgUp</kbd> / <kbd>PgDn</kbd> | move tab |
@@ -467,7 +477,7 @@ NOT name LIKE '.%' OR (ext = 'md' AND size < 4KB)
 | <kbd>Ctrl</kbd>+<kbd>H</kbd> | hidden files | <kbd>Ctrl</kbd>+<kbd>U</kbd> | swap panels |
 | <kbd>Ctrl</kbd>+<kbd>D</kbd> | bookmark folder | <kbd>Ctrl</kbd>+<kbd>N</kbd> | connect to server |
 | <kbd>Ctrl</kbd>+<kbd>B</kbd> | backup | <kbd>Ctrl</kbd>+<kbd>,</kbd> | settings |
-| <kbd>Ctrl</kbd>+<kbd>J</kbd> | transfer manager | <kbd>Ctrl</kbd>+<kbd>M</kbd> | batch rename |
+| <kbd>Ctrl</kbd>+<kbd>J</kbd> | tasks | <kbd>Ctrl</kbd>+<kbd>M</kbd> | batch rename |
 | <kbd>Ctrl</kbd>+<kbd>K</kbd> | command palette | <kbd>Ctrl</kbd>+<kbd>\\</kbd> | toggle sidebar |
 | <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> | **checksum (create / verify)** | <kbd>F1</kbd> | all shortcuts |
 
@@ -590,6 +600,12 @@ MATRIX_FINDER_TEST_SFTP=host:22:user:/path/to/private_key cargo test live_sftp -
   ```
 - **Passwords** for saved connections are stored only if you tick *Also save the password*, and they are stored in plain text. Prefer SSH keys or the SSH agent.
 
+<a id="privacy"></a>
+
+## 🔒 Privacy
+
+Matrix Finder collects no data and sends no telemetry: no analytics, no crash reports, no update checks. It goes online only when you ask it to, by connecting to an FTP or SFTP server or clicking a link (which opens in your browser). It also listens on a local port so a second launch can open in the running window. That port is on `localhost` only and is never reachable from the network.
+
 <a id="layout"></a>
 
 ## 🧭 Project layout
@@ -599,17 +615,21 @@ src/
 ├── main.rs        entry point (window icon)
 ├── app.rs         main window, menus, keyboard, dialogs, jobs
 ├── pane.rs        a window: file view (breadcrumb, listing, sort, filter, selection, context menus) or terminal
+├── completion.rs  folder suggestions for the address bar and folder fields
+├── foldertree.rs  the folder tree popup, with OK / Cancel and arrow keys
+├── pathfield.rs   a folder field with suggestions and the folder tree button
 ├── layout.rs      tiling split tree of a tab's windows (split, dock, detach, dividers)
 ├── tabs.rs        the tab bar: tabs holding windows, tab groups, drag & drop of tabs and windows
 ├── palette.rs     command palette (Ctrl+K) with fuzzy search
 ├── checksum.rs    CRC32 / MD5 / SHA-1 / SHA-256 / SHA-512 / BLAKE3, compare, save and verify lists
 ├── terminal.rs    terminal profiles (terminal + shell + startup script + colour theme), open-with
 ├── termview.rs    built-in terminal widget (alacritty_terminal)
-├── vfs.rs         entries, locations (local / remote / archive), drives
+├── vfs.rs         entries, locations (local / remote / archive), free space
+├── drives.rs      mounted drives, a watcher that keeps them current, eject
 ├── remote.rs      FTP (suppaftp) and SFTP (ssh2) back-ends
 ├── archive.rs     list / extract / create for all archive formats
 ├── ops.rs         background copy/move/delete with progress, pause, queue and cancel
-├── rename.rs      batch rename rules, validation, safe apply/undo and its window
+├── rename.rs      batch rename rules, validation, safe apply/undo and its tab
 ├── filter.rs      quick filter + SQL-like expression parser
 ├── preview.rs     image / SVG / Markdown / code / text / hex / table previews
 ├── docview.rs     PDF (hayro) and Jupyter notebook previews

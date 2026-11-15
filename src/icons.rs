@@ -469,6 +469,14 @@ pub fn icon_button(ui: &mut egui::Ui, size: f32, enabled: bool, th: &Theme, draw
     resp
 }
 
+/// Eject: a triangle over a bar.
+pub fn eject(p: &Painter, r: Rect, col: Color32) {
+    let (l, w) = (r.left(), r.width());
+    let tri_bottom = r.top() + r.height() * 0.6;
+    p.add(egui::Shape::convex_polygon(vec![pos2(r.center().x, r.top() + r.height() * 0.08), pos2(l + w * 0.95, tri_bottom), pos2(l + w * 0.05, tri_bottom)], col, Stroke::NONE));
+    p.rect_filled(Rect::from_min_max(pos2(l + w * 0.05, r.top() + r.height() * 0.76), pos2(l + w * 0.95, r.top() + r.height() * 0.92)), 1.0, col);
+}
+
 pub fn plus(p: &Painter, r: Rect, col: Color32) {
     let s = Stroke::new(1.5_f32, col);
     let c = r.center();

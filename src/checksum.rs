@@ -322,9 +322,12 @@ struct Worker {
     started: Instant,
 }
 
+/// The algorithm picked last: the next checksum tab starts with it.
+static LAST_ALGO: Mutex<Option<Algo>> = Mutex::new(None);
+
+/// The Checksum tool, shown in a tab of its own.
 #[derive(Default)]
 pub struct ChecksumUi {
-    pub open: bool,
     base: PathBuf,
     /// Checksum file being verified (verify mode).
     list_file: Option<PathBuf>,
@@ -377,7 +380,8 @@ impl ChecksumUi {
     /// Hash `paths` (files or folders inside `base`).
     pub fn start_files(&mut self, ctx: &egui::Context, base: PathBuf, paths: Vec<PathBuf>) {
         self.stop();
-        let algo = self.algo.unwrap_or(Algo::Sha256);
+        let last = LAST_ALGO.lock().ok().and_then(|a| *a);
+        let algo = self.algo.or(last).unwrap_or(Algo::Sha256);
         self.rows = collect(&base, &paths)
             .into_iter()
             .map(|(name, path, size)| Row { name, path, size, algo, expected: None, state: State::Pending })
@@ -394,7 +398,6 @@ impl ChecksumUi {
         if let Some(a) = clean_hex(&self.compare).and_then(|h| Algo::guess(&h, algo)) {
             self.set_algo(a);
         }
-        self.open = true;
         self.run(ctx);
     }
 
@@ -428,9 +431,13 @@ impl ChecksumUi {
         self.algo = None;
         self.compare.clear();
         self.note = None;
-        self.open = true;
         self.run(ctx);
         Ok(())
+    }
+
+    /// Whether it is hashing files under `dir` now (a drive there is not ejected).
+    pub fn reads_under(&self, dir: &Path) -> bool {
+        self.worker.is_some() && (self.base.starts_with(dir) || self.rows.iter().any(|r| r.state == State::Pending && r.path.starts_with(dir)))
     }
 
     fn stop(&mut self) {
@@ -440,6 +447,9 @@ impl ChecksumUi {
     }
 
     fn set_algo(&mut self, a: Algo) {
+        if let Ok(mut last) = LAST_ALGO.lock() {
+            *last = Some(a);
+        }
         if self.algo != Some(a) {
             self.algo = Some(a);
             for r in &mut self.rows {
@@ -537,25 +547,23 @@ impl ChecksumUi {
         format!("{stem}.{}", algo.ext())
     }
 
-    /// Returns the folder that changed (a checksum file was saved there).
-    pub fn ui(&mut self, ctx: &egui::Context, th: &Theme) -> Option<PathBuf> {
-        if !self.open {
-            return None;
+    /// The name of its tab.
+    pub fn title(&self) -> String {
+        if self.list_file.is_some() {
+            t("Verify checksums")
+        } else {
+            t("Checksum")
         }
+    }
+
+    /// Draws the tool into its tab. Returns the folder that changed (a checksum file
+    /// was saved there).
+    pub fn ui(&mut self, ui: &mut egui::Ui, th: &Theme) -> Option<PathBuf> {
         self.poll();
         let mut changed = None;
-        let mut open = self.open;
         let mut rerun = false;
         let verify = self.list_file.is_some();
-        let title = if verify { t("Verify checksums") } else { t("Checksum") };
-        egui::Window::new(title)
-            .id(egui::Id::new("checksum-window"))
-            .open(&mut open)
-            .collapsible(false)
-            .default_size([860.0, 480.0])
-            .min_width(560.0)
-            .max_height(ctx.screen_rect().height() - 24.0)
-            .show(ctx, |ui| {
+        ui.vertical(|ui| {
                 let total: u64 = self.rows.iter().map(|r| r.size).sum();
                 let sub = match &self.list_file {
                     Some(f) => format!(
@@ -645,19 +653,25 @@ impl ChecksumUi {
                 }
 
                 // Results table.
-                let footer_h = 58.0;
-                let table_h = (ui.available_height() - footer_h).clamp(120.0, 560.0);
+                // The table's frame takes what is left above the buttons: a gap (8), the
+                // buttons (30) and the spacing around them, so they stay in sight.
+                let footer_h = 8.0 + 30.0 + 3.0 * ui.spacing().item_spacing.y;
+                let table_h = (ui.available_height() - footer_h).max(120.0);
                 let match_hash = if verify { None } else { expected.clone() };
                 let mut copy = None;
                 egui::Frame::NONE.fill(th.bg).corner_radius(8).inner_margin(6.0).show(ui, |ui| {
-                    ui.set_height(table_h);
+                    // Inside the frame's margins; the rows scroll below the header.
+                    ui.set_height(table_h - 12.0);
+                    let rows_h = table_h - 12.0 - 22.0 - ui.spacing().item_spacing.y;
                     use egui_extras::{Column, TableBuilder};
                     let w = ui.available_width();
                     let mono = egui::FontId::monospace(12.0);
                     TableBuilder::new(ui)
                         .striped(true)
                         .auto_shrink([false, false])
-                        .max_scroll_height(table_h)
+                        .max_scroll_height(rows_h)
+                        // Not the 200 px egui_extras keeps by default: it would push the buttons out of sight.
+                        .min_scrolled_height(rows_h.min(80.0))
                         .column(Column::exact(22.0))
                         .column(Column::exact(((w - 120.0) * 0.38).max(140.0)).clip(true))
                         .column(Column::exact(78.0))
@@ -794,14 +808,16 @@ impl ChecksumUi {
                 });
             });
         if rerun {
-            self.run(ctx);
+            self.run(ui.ctx());
         }
-        if !open {
-            self.stop();
-            self.rows.clear();
-        }
-        self.open = open;
         changed
+    }
+}
+
+/// Closing its tab stops the hashing.
+impl Drop for ChecksumUi {
+    fn drop(&mut self) {
+        self.stop();
     }
 }
 
@@ -906,6 +922,43 @@ mod tests {
         assert_eq!(hash_reader(f, Algo::Sha256, |_| true).unwrap(), hash_bytes(b"hello world", Algo::Sha256));
         let f = std::fs::File::open(dir.join("a.txt")).unwrap();
         assert!(hash_reader(f, Algo::Sha256, |_| false).is_err());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+    /// While it hashes, it reads the files of its folder (a drive there is not ejected).
+    #[test]
+    fn reads_under_its_folder_while_hashing() {
+        let dir = std::env::temp_dir().join(format!("mf-checksum-reads-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "a").unwrap();
+        let mut tool = ChecksumUi::default();
+        assert!(!tool.reads_under(&dir), "nothing yet");
+        tool.start_files(&egui::Context::default(), dir.clone(), vec![dir.join("a.txt")]);
+        assert!(tool.reads_under(&dir));
+        assert!(tool.reads_under(dir.parent().unwrap()), "a drive holding it");
+        assert!(!tool.reads_under(&dir.join("other")));
+        let start = Instant::now();
+        while tool.worker.is_some() && start.elapsed() < std::time::Duration::from_secs(5) {
+            tool.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(!tool.reads_under(&dir), "done");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Closing the tab drops the tool: the hashing stops with it.
+    #[test]
+    fn dropping_the_tool_stops_hashing() {
+        let dir = std::env::temp_dir().join(format!("mf-checksum-drop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.txt"), "a").unwrap();
+        std::fs::write(dir.join("SHA256SUMS"), format!("{}  a.txt\n", hash_bytes(b"a", Algo::Sha256))).unwrap();
+        let mut tool = ChecksumUi::default();
+        tool.start_verify(&egui::Context::default(), dir.join("SHA256SUMS")).unwrap();
+        assert_eq!(tool.title(), t("Verify checksums"));
+        assert_eq!(tool.base, dir);
+        let cancel = tool.worker.as_ref().expect("hashing").cancel.clone();
+        drop(tool);
+        assert!(cancel.load(Ordering::Relaxed));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

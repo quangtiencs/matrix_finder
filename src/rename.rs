@@ -482,8 +482,8 @@ pub enum RenameAction {
     Undo(Location, Vec<(String, String)>),
 }
 
+/// The Batch rename tool, shown in a tab of its own.
 pub struct BatchRename {
-    pub open: bool,
     loc: Option<Location>,
     parent: String,
     items: Vec<Item>,
@@ -496,7 +496,7 @@ pub struct BatchRename {
 
 impl Default for BatchRename {
     fn default() -> Self {
-        Self { open: false, loc: None, parent: String::new(), items: vec![], existing: HashSet::new(), rules: Rules::default(), last: None, focus: false }
+        Self { loc: None, parent: String::new(), items: vec![], existing: HashSet::new(), rules: Rules::default(), last: None, focus: false }
     }
 }
 
@@ -510,7 +510,6 @@ impl BatchRename {
         self.parent = parent;
         self.items = items;
         self.existing = existing;
-        self.open = true;
         self.focus = true;
     }
 
@@ -530,9 +529,9 @@ impl BatchRename {
         self.rules = Rules::default();
     }
 
-    pub fn ui(&mut self, ctx: &egui::Context, th: &Theme) -> Option<RenameAction> {
+    /// Draws the tool into its tab.
+    pub fn ui(&mut self, ui: &mut egui::Ui, th: &Theme) -> Option<RenameAction> {
         let mut action = None;
-        let mut open = self.open;
         let names: Vec<String> = self.items.iter().map(|i| i.name.clone()).collect();
         let computed = compute(&self.items, &self.rules, &self.parent);
         let (new_names, regex_err) = match computed {
@@ -543,14 +542,7 @@ impl BatchRename {
         let changes = status.iter().filter(|s| **s == Status::Ok).count();
         let errors = status.iter().filter(|s| matches!(s, Status::Error(_))).count();
 
-        egui::Window::new(t("Batch rename"))
-            .open(&mut open)
-            .collapsible(false)
-            .default_size([920.0, 600.0])
-            // Limits the content only: leave room for the title bar and the frame too.
-            .max_height(ctx.screen_rect().height() - 100.0)
-            .min_width(640.0)
-            .show(ctx, |ui| {
+        ui.vertical(|ui| {
                 ui.label(
                     egui::RichText::new(format!("{} {} · {}", self.items.len(), t("item(s)"), self.parent))
                         .size(11.5)
@@ -677,16 +669,22 @@ impl BatchRename {
                 ui.add_space(6.0);
 
                 // Preview
-                let footer_h = 44.0;
-                let table_h = (ui.available_height() - footer_h).clamp(140.0, 340.0);
+                // The table's frame takes what is left above the buttons: a gap (8), the
+                // buttons (30) and the spacing around them, so they stay in sight.
+                let footer_h = 8.0 + 30.0 + 3.0 * ui.spacing().item_spacing.y;
+                let table_h = (ui.available_height() - footer_h).max(140.0);
                 egui::Frame::NONE.fill(th.bg).corner_radius(8).inner_margin(6.0).show(ui, |ui| {
-                    ui.set_height(table_h);
+                    // Inside the frame's margins; the rows scroll below the header.
+                    ui.set_height(table_h - 12.0);
+                    let rows_h = table_h - 12.0 - 24.0 - ui.spacing().item_spacing.y;
                     use egui_extras::{Column, TableBuilder};
                     let w = ui.available_width();
                     TableBuilder::new(ui)
                         .striped(true)
                         .auto_shrink([false, false])
-                        .max_scroll_height(table_h)
+                        .max_scroll_height(rows_h)
+                        // Not the 200 px egui_extras keeps by default: it would push the buttons out of sight.
+                        .min_scrolled_height(rows_h.min(80.0))
                         .column(Column::exact((w - 150.0) * 0.5))
                         .column(Column::exact(24.0))
                         .column(Column::exact((w - 150.0) * 0.5))
@@ -761,7 +759,6 @@ impl BatchRename {
                     });
                 });
             });
-        self.open = open;
         action
     }
 

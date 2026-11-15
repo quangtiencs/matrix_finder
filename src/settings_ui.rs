@@ -682,6 +682,18 @@ impl App {
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.show_sidebar, &t("Show sidebar"), "");
                     row_line(ui, th);
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(t("Drives in the sidebar")).color(th.text));
+                    ui.add_space(2.0);
+                    for (mode, label) in [
+                        (crate::config::SidebarDrives::WhenSeveral, t("Only when there is more than one drive")),
+                        (crate::config::SidebarDrives::Always, t("Always")),
+                        (crate::config::SidebarDrives::Never, t("Never")),
+                    ] {
+                        changed |= ui.radio_value(&mut self.cfg.sidebar_drives, mode, label).changed();
+                    }
+                    ui.add_space(4.0);
+                    row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.show_key_hints, &t("Show key hints in the status bar"), "");
                 });
                 settings_section(ui, th, &t("Safety"), "");
