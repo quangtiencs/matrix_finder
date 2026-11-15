@@ -102,7 +102,12 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
 | Feature | Details |
 |---|---|
-| ⇅ **Transfers in a tab** | The transfer manager now opens in a tab of its own, and starting a copy never opens it for you. While jobs run, the toolbar button becomes a **circular progress indicator** |
+| 💽 **Drives & Eject** <sup>0.7</sup> | The sidebar's drives update by themselves when one is plugged in or removed. External and network drives have an **Eject** button, refused while a task still uses the drive. *Settings → Files & layout → Drives in the sidebar*: always, never, or only with more than one drive |
+| 🌳 **Folder tree & suggestions** <sup>0.7</sup> | The address bar and every field that takes a folder (Copy / Move, Compress, Extract, Backup, bookmarks) suggest folders as you type and have a **folder tree** popup with OK / Cancel and arrow keys. `~` and relative paths work everywhere |
+| 📦 **Compress dialog** <sup>0.7</sup> | Formats as chips with a line on each, the name with its extension, a *Faster ↔ Smaller* slider and where the archive goes. Big archives show their progress in **Tasks** |
+| ⚡ **Several quick filters at once** <sup>0.7</sup> | Tick *Images* and *Videos* together in the funnel menu; add your own lists in *Settings → Quick filters* |
+| 🧰 **Tools in tabs** <sup>0.7</sup> | Checksum and Batch rename open in tabs. <kbd>F3</kbd> shows or hides Quick View, <kbd>F4</kbd> opens a folder here and a file in its app |
+| ⇅ **Tasks in a tab** | Copies, moves, compressing, extracting and backups show in the Tasks tab (formerly Transfers), and starting one never opens it for you. While they run, the toolbar button becomes a **circular progress indicator** |
 | 🚪 **Quit confirmation** | Quitting while jobs are running or queued asks first: keep transferring, or stop them and quit |
 | 🔑 **SFTP host key check** | Servers are verified before any password or key is used. A new server shows its fingerprint for you to trust, and a changed key is refused |
 | 🛟 **Safer copies and moves** | An existing file is only replaced once the new copy is complete. Moves with *Skip* keep the files they skipped, and copying out of an archive follows your *If file exists* choice |
@@ -118,6 +123,9 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 | 🔤 **Fonts** | *Settings → Fonts*: pick the font and size of the interface and of the terminal, from the bundled fonts or anything installed |
 
 <div align="center">
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/folder-tree.png"><img src="docs/light/folder-tree.png" width="49%" alt="Folder tree popup and drives with an Eject button"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/compress.png"><img src="docs/light/compress.png" width="49%" alt="Compress dialog"></picture>
+<br>
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/checksum.png"><img src="docs/light/checksum.png" width="49%" alt="Checksum tab comparing a pasted SHA-256"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/checksum-verify.png"><img src="docs/light/checksum-verify.png" width="49%" alt="Verifying a SHA256SUMS file"></picture>
 <br>
