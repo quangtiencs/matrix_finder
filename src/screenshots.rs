@@ -1254,6 +1254,53 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         shot(&mut h, "palette");
     }
 
+    // The sidebar's drives (a USB stick with its Eject button) and the address bar's
+    // folder tree, open at the current folder.
+    if want("folder-tree") {
+        let mut cfg = settings(mode.theme, d);
+        cfg.bookmarks = crate::config::system_bookmarks();
+        let mut h = app_harness(&cfg, gnome);
+        let drive = |name: &str, mount: &str, total: u64, avail: u64, ejectable: bool| crate::drives::Drive {
+            label: mount.into(),
+            name: name.into(),
+            system: false,
+            mount: PathBuf::from(mount),
+            total,
+            avail,
+            fs: String::new(),
+            device: String::new(),
+            removable: ejectable,
+            ejectable,
+        };
+        let drives = vec![drive(&t("Computer"), "/", 512 << 30, 180 << 30, false), drive("KINGSTON", "/media/user/KINGSTON", 32 << 30, 20 << 30, true)];
+        let fixed = drives.clone();
+        let app = h.state_mut();
+        app.drives = drives;
+        app.drive_watch = crate::drives::Watcher::spawn_with(move || fixed.clone(), Duration::from_secs(3600), Duration::from_secs(3600), None);
+        app.shot_pane(0, &d.demo.join("home").join("Documents"), None);
+        settle(&mut h, 3);
+        let b = h.get_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree")).next().unwrap().bounding_box().unwrap();
+        click_at(&mut h, pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32));
+        for _ in 0..40 {
+            settle(&mut h, 1);
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        shot(&mut h, "folder-tree");
+    }
+
+    // The Compress dialog for a folder, saving next to the other window.
+    if want("compress") {
+        let mut h = app_harness(&settings(mode.theme, d), gnome);
+        let app = h.state_mut();
+        app.shot_pane(0, &d.demo, Some("images"));
+        app.shot_pane(1, &d.demo.join("home"), None);
+        app.shot_focus(0);
+        settle(&mut h, 3);
+        h.state_mut().run_cmd(Cmd::Pack);
+        settle(&mut h, 4);
+        shot(&mut h, "compress");
+    }
+
     if want("about") {
         let mut h = app_harness(&settings(mode.theme, d), gnome);
         let app = h.state_mut();
