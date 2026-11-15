@@ -491,21 +491,15 @@ impl ModelView {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, name: &str, key: &str, th: &Theme) {
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(name).strong().color(th.accent));
-            let size = [0, 1, 2].map(|i| self.mesh.max[i] - self.mesh.min[i]);
-            let mut facts = format!("{} · {} {} · {} × {} × {}", self.mesh.format, crate::table::fmt_count(self.mesh.tris.len() as u64), t("triangles"), size_text(size[0]), size_text(size[1]), size_text(size[2]));
-            if self.mesh.truncated {
-                facts.push_str(&format!(" · {}", t("(truncated)")));
+        let size = [0, 1, 2].map(|i| self.mesh.max[i] - self.mesh.min[i]);
+        let mut facts = format!("{} · {} {} · {} × {} × {}", self.mesh.format, crate::table::fmt_count(self.mesh.tris.len() as u64), t("triangles"), size_text(size[0]), size_text(size[1]), size_text(size[2]));
+        if self.mesh.truncated {
+            facts.push_str(&format!(" · {}", t("(truncated)")));
+        }
+        crate::preview::header_row(ui, th, name, &[(facts, th.weak)], |ui| {
+            if ui.button(t("Reset view")).clicked() {
+                self.cam = Camera::default();
             }
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button(t("Reset view")).clicked() {
-                    self.cam = Camera::default();
-                }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.add(egui::Label::new(egui::RichText::new(facts).color(th.weak)).truncate());
-                });
-            });
         });
         ui.separator();
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());

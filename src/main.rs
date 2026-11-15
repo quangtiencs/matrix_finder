@@ -19,7 +19,9 @@ mod foldertree;
 mod fontfallback;
 mod fonts;
 mod fontview;
+mod geoview;
 mod i18n;
+mod jsonview;
 mod layout;
 mod logo;
 mod media;
@@ -45,6 +47,7 @@ mod textdocs;
 mod termview;
 mod tabs;
 mod theme;
+mod update;
 mod util;
 mod vfs;
 

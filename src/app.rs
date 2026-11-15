@@ -182,6 +182,10 @@ pub struct App {
     backup: BackupUi,
     show_help: bool,
     show_about: bool,
+    /// An update check under way, and whether the user asked for it (the menu).
+    update_check: Option<(std::sync::mpsc::Receiver<crate::util::Res<crate::update::Outcome>>, bool)>,
+    /// A newer release found, with its notes ready to show.
+    update_found: Option<(crate::update::Release, Vec<crate::preview::MdBlock>)>,
     toasts: Vec<Toast>,
     connecting: Option<(ConnectionProfile, bool, Receiver<ConnectResult>)>,
     languages: Vec<(String, String)>,
@@ -335,6 +339,8 @@ impl App {
             backup: BackupUi::default(),
             show_help: false,
             show_about: false,
+            update_check: None,
+            update_found: None,
             toasts: vec![],
             connecting: None,
             languages: i18n::available(),
@@ -391,7 +397,123 @@ impl App {
                 p.tab_mut().reload(&lc);
             }
         }
+        if app.cfg.check_updates && !cfg!(test) && chrono::Utc::now().timestamp() - app.cfg.update_checked >= crate::update::AUTO_EVERY_SECS {
+            app.check_for_updates(false);
+        }
         app
+    }
+
+    /// Ask GitHub for the latest release in the background. `manual`: the user asked,
+    /// so every outcome is told; the check at start only shows a newer version.
+    fn check_for_updates(&mut self, manual: bool) {
+        if let Some((_, was_manual)) = &mut self.update_check {
+            *was_manual |= manual;
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::update::check());
+        });
+        self.update_check = Some((rx, manual));
+        if manual {
+            self.toast(t("Checking for updates…"), false);
+        }
+    }
+
+    fn poll_update(&mut self, ctx: &egui::Context) {
+        let Some((rx, manual)) = &self.update_check else { return };
+        let manual = *manual;
+        let result = match rx.try_recv() {
+            Ok(r) => r,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                ctx.request_repaint_after(Duration::from_millis(250));
+                return;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Err(t("The update check stopped unexpectedly.")),
+        };
+        self.update_check = None;
+        let checking = t("Checking for updates…");
+        self.toasts.retain(|x| x.text != checking);
+        use crate::update::{version_text, Outcome};
+        match result {
+            Ok(Outcome::Newer(r)) => {
+                self.cfg.update_checked = chrono::Utc::now().timestamp();
+                if manual || r.tag != self.cfg.update_skip {
+                    let notes = crate::preview::parse_markdown(&r.notes, self.theme.syntax);
+                    self.update_found = Some((r, notes));
+                }
+            }
+            Ok(Outcome::UpToDate(v)) => {
+                self.cfg.update_checked = chrono::Utc::now().timestamp();
+                if manual {
+                    self.toast(format!("{} ({})", t("Matrix Finder is up to date"), version_text(v)), false);
+                }
+            }
+            Err(e) if manual => self.toast(e, true),
+            Err(_) => {}
+        }
+        self.save_cfg();
+    }
+
+    /// A newer version: what is in it, and where to get it. Installing is left to the user.
+    fn update_window(&mut self, ctx: &egui::Context) {
+        let Some((r, notes)) = &self.update_found else { return };
+        let th = self.theme;
+        let mut open = true;
+        let mut close = false;
+        let mut skip = false;
+        let asset = crate::update::asset_for(r, std::env::consts::OS, std::env::consts::ARCH);
+        egui::Window::new(t("Update available")).open(&mut open).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
+            ui.label(RichText::new(format!("Matrix Finder {}", crate::update::version_text(r.version))).size(18.0).strong().color(th.strong()));
+            let mut line = format!("{} {}", t("You have"), env!("CARGO_PKG_VERSION"));
+            if !r.date.is_empty() {
+                line.push_str(&format!(" · {} {}", t("released"), r.date));
+            }
+            ui.label(RichText::new(line).color(th.weak));
+            if !notes.is_empty() {
+                ui.add_space(6.0);
+                egui::Frame::NONE.fill(th.surface).corner_radius(6).inner_margin(8.0).show(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+                        crate::preview::markdown_ui(ui, notes, th);
+                    });
+                });
+            }
+            ui.add_space(6.0);
+            ui.label(RichText::new(t("Matrix Finder does not install updates itself: download the new version and install it as you did before.")).size(12.0).color(th.weak));
+            if asset.is_none() && cfg!(target_os = "macos") {
+                // Releases are built for Apple silicon only.
+                ui.label(RichText::new(t("There is no download for this Mac (Intel): build the new version with the install script, as the release page shows.")).size(12.0).color(th.weak));
+            }
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if let Some(a) = asset {
+                    let label = format!("{} ({})", t("Download"), crate::util::human_size(a.size));
+                    if ui.button(RichText::new(label).strong()).on_hover_text(&a.name).clicked() {
+                        let _ = open::that(&a.url);
+                        close = true;
+                    }
+                }
+                if ui.button(t("Open release page")).clicked() {
+                    let _ = open::that(&r.url);
+                    close = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(t("Later")).clicked() {
+                        close = true;
+                    }
+                    if ui.button(t("Skip this version")).on_hover_text(t("The check at start will not offer this version again")).clicked() {
+                        skip = true;
+                    }
+                });
+            });
+        });
+        if skip {
+            self.cfg.update_skip = r.tag.clone();
+            self.save_cfg();
+        }
+        if !open || close || skip {
+            self.update_found = None;
+        }
     }
 
     /// The pane that "other panel" commands target, if there is more than one.
@@ -3808,6 +3930,10 @@ impl App {
                     self.show_help = true;
                     ui.close_menu();
                 }
+                if ui.button(t("Check for updates…")).clicked() {
+                    self.check_for_updates(true);
+                    ui.close_menu();
+                }
                 if ui.button(t("About")).clicked() {
                     self.show_about = true;
                     ui.close_menu();
@@ -3900,6 +4026,10 @@ impl App {
             ui.set_min_width(230.0);
             if ui.button(t("About")).clicked() {
                 self.show_about = true;
+                ui.close_menu();
+            }
+            if ui.button(t("Check for updates…")).clicked() {
+                self.check_for_updates(true);
                 ui.close_menu();
             }
             ui.separator();
@@ -4385,6 +4515,7 @@ impl App {
             (Act::ExportSettings, t("Export settings…"), ""),
             (Act::ImportSettings, t("Import settings…"), ""),
             (Act::About, t("About"), ""),
+            (Act::CheckUpdates, t("Check for updates…"), ""),
             (Act::Quit, t("Quit"), ""),
         ] {
             if act == Act::WindowToNewTab && windows < 2 {
@@ -4528,6 +4659,7 @@ impl App {
                 Act::Settings => self.open_settings(self.settings_page),
                 Act::Shortcuts => self.show_help = true,
                 Act::About => self.show_about = true,
+                Act::CheckUpdates => self.check_for_updates(true),
                 Act::Bookmarks => self.open_settings(SettingsPage::Bookmarks),
                 Act::DefaultApps => self.open_settings(SettingsPage::DefaultApps),
                 Act::InvertSelection => self.panes[a].tab_mut().invert_marks(),
@@ -5605,6 +5737,10 @@ impl App {
                 ui.label(RichText::new("Matrix Finder").font(egui::FontId::new(26.0, egui::FontFamily::Name("bold".into()))).color(self.theme.strong()));
                 ui.label(RichText::new(t("Files, archives and servers, all in one place.")).color(self.theme.accent));
                 ui.label(RichText::new(format!("{} {}", t("Version"), env!("CARGO_PKG_VERSION"))).size(11.5).color(self.theme.weak));
+                let checking = self.update_check.is_some();
+                if ui.add_enabled(!checking, egui::Button::new(if checking { t("Checking for updates…") } else { t("Check for updates…") })).clicked() {
+                    self.check_for_updates(true);
+                }
                 ui.add_space(4.0);
                 ui.label(t("A fast dual-panel file manager written in Rust."));
             });
@@ -5710,6 +5846,7 @@ impl eframe::App for App {
             self.icon_key = icon_key;
         }
         self.shift_down = ctx.input(|i| i.modifiers.shift);
+        crate::fonts::set_reading_serif(self.cfg.reading_font == crate::config::ReadingFont::Serif);
         self.drag_target = None;
         self.sync_tab();
         self.active = self.active.min(self.panes.len() - 1);
@@ -5726,11 +5863,12 @@ impl eframe::App for App {
         self.poll_connect();
         self.handle_dropped_files(ctx);
         self.poll_drives(ctx);
+        self.poll_update(ctx);
         let mut busy = self.connecting.is_some();
         for side in 0..self.panes.len() {
             let tab = self.panes[side].tab_mut();
             tab.poll(&lc!(self));
-            busy |= self.panes[side].tab().is_loading() || self.panes[side].tab().dir_sizes.is_some();
+            busy |= self.panes[side].tab().is_loading() || self.panes[side].tab().is_scanning() || self.panes[side].tab().dir_sizes.is_some();
         }
         if busy {
             ctx.request_repaint_after(Duration::from_millis(60));
@@ -5907,6 +6045,7 @@ impl eframe::App for App {
         if self.show_about {
             self.about_window(ctx);
         }
+        self.update_window(ctx);
         self.dialogs(ctx);
         if self.palette.open {
             self.palette_live_filter();

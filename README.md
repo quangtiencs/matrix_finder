@@ -19,6 +19,7 @@ Easy to start with, and it has power-user features in the Total Commander tradit
 [**Features**](#features) ·
 [**Screenshots**](#screenshots) ·
 [**Shortcuts**](#shortcuts) ·
+[**Download**](#download) ·
 [**Build**](#build) ·
 [**Privacy**](#privacy) ·
 [**Project layout**](#layout)
@@ -80,13 +81,13 @@ Browse zip, 7z, rar and tar.* like folders, preview the files inside, and create
 <td valign="top">
 
 ### 👁️ Quick View
-Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 languages, plus **Parquet / Avro / Excel / CSV / NumPy / R** tables and **safetensors / ONNX** model weights.
+Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 languages, **JSON as a tree** with paths to copy, plus **Parquet / Avro / Excel / CSV / NumPy / HDF5 / R** tables, **safetensors / ONNX** model weights and **GeoJSON / WKT / WKB** geometry.
 
 </td>
 <td valign="top">
 
 ### 🔎 SQL-like filter
-`size > 10MB AND ext IN ('mp4','mkv')`: filter the panel live as you type, or search every subfolder.
+`size > 10MB AND ext IN ('mp4','mkv')`: filter the panel live as you type, or search every subfolder. Search inside files like grep (`source LIKE '%TODO%'`) and match names with regular expressions.
 
 </td>
 <td valign="top">
@@ -102,6 +103,10 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
 | Feature | Details |
 |---|---|
+| 🔔 **Check for updates** <sup>0.8</sup> | *Check for updates…* asks GitHub for the latest release and shows what is new, with links to download it; you install it yourself. Checking at start is a setting, off by default |
+| 🌲 **JSON tree** <sup>0.8</sup> | JSON files open as a tree in Quick View. Click a row to get its path, `j['data'][0]['name']`, and copy it in Python, JavaScript, jq or JSONPath style; right-click to copy the value |
+| 🔍 **Search inside files** <sup>0.8</sup> | `source LIKE '%TODO%'` in the search box finds files with a matching line, like grep, in the folder or (<kbd>↓</kbd> <kbd>Enter</kbd>) every subfolder. Names, extensions and lines also take **regular expressions**: `name REGEXP '^img_\d+'`, `name ~ '^IMG'`, `source ~ 'fn \w+'` |
+| 🔷 **Geometry preview** <sup>0.8</sup> | Quick View draws the shapes in **GeoJSON**, **WKT** and **WKB** files (points, lines, polygons with holes, multi-geometries and collections) on a plain grid, with no map and nothing fetched. Drag to move, scroll to zoom, and *Source* shows the text |
 | 💽 **Drives & Eject** <sup>0.7</sup> | The sidebar's drives update by themselves when one is plugged in or removed. External and network drives have an **Eject** button, refused while a task still uses the drive. *Settings → Files & layout → Drives in the sidebar*: always, never, or only with more than one drive |
 | 🌳 **Folder tree & suggestions** <sup>0.7</sup> | The address bar and every field that takes a folder (Copy / Move, Compress, Extract, Backup, bookmarks) suggest folders as you type and have a **folder tree** popup with OK / Cancel and arrow keys. `~` and relative paths work everywhere |
 | 📦 **Compress dialog** <sup>0.7</sup> | Formats as chips with a line on each, the name with its extension, a *Faster ↔ Smaller* slider and where the archive goes. Big archives show their progress in **Tasks** |
@@ -123,6 +128,9 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 | 🔤 **Fonts** | *Settings → Fonts*: pick the font and size of the interface and of the terminal, from the bundled fonts or anything installed |
 
 <div align="center">
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/quickview-json.png"><img src="docs/light/quickview-json.png" width="49%" alt="Quick View of a JSON file as a tree with the path of a row"></picture>
+<picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/quickview-geometry.png"><img src="docs/light/quickview-geometry.png" width="49%" alt="Quick View of a GeoJSON polygon with a hole"></picture>
+<br>
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/folder-tree.png"><img src="docs/light/folder-tree.png" width="49%" alt="Folder tree popup and drives with an Eject button"></picture>
 <picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/compress.png"><img src="docs/light/compress.png" width="49%" alt="Compress dialog"></picture>
 <br>
@@ -273,12 +281,14 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - **SVG**
   - **Markdown** (rendered or source)
   - **highlighted code** in ~60 languages
+  - **JSON** (`.json`, `.jsonld`, `.har`, `.webmanifest`) as a **tree**: keys in the file's order, values coloured by type, objects and arrays with their size. A click on the chevron (or a double click) opens and closes a branch, and *Expand all* / *Collapse all* do the whole tree. Click a row to see its **path** above the tree and copy it with *Copy path*, as Python `j['data'][0]['name']`, JavaScript `j.data[0].name`, jq `.data[0].name` or JSONPath `$.data[0].name` (the style you pick is kept). Right-click a row to copy its path, its value (as indented JSON) or its key. Big arrays show 1,000 items at a time, and *Source* shows the highlighted text. Files over 32 MB, or that are not quite JSON (comments, trailing commas), are shown as text
   - **data tables** for Parquet, Avro, Excel/ODS, CSV/TSV, **SQLite**, **JSON Lines**, **NumPy** (`.npy`, `.npz`), **Arrow/Feather** and **HDF5**
   - **model weights**: **safetensors** and **ONNX** list every tensor with its shape, type and size, and the parameter count; only the header is read, so multi-gigabyte models open at once. ONNX also shows inputs and outputs, operators and metadata
   - **R data** (`.RData`, `.rda`, `.rds`, packed or not): each object with its class and size, and data frames, matrices and vectors as tables; functions and environments are never run
   - **RTF, EPUB and ODF text** as readable text, with EPUB chapters
   - **fonts** (TTF, OTF, WOFF, WOFF2): a sample sheet with names and properties
   - **3D models** (STL, OBJ, glTF, GLB): drag to turn, scroll to zoom
+  - **geometry** (GeoJSON, GeoJSON sequences `.geojsonl`, WKT and EWKT, WKB and EWKB, binary or as hex text): points, lines and polygons with their holes, drawn on a plain grid with x and y at the same scale. There is no map, and nothing is fetched. Drag to move, scroll or pinch to zoom around the pointer, double-click to see it all again; the pointer's coordinates show in the corner. The header counts features, geometry types and vertices (and the SRID, if the file has one); *Source* shows the text of GeoJSON and WKT
   - **certificates** (PEM, CRT, CER, DER): validity, names, key and fingerprints; private keys are never displayed
   - a hex dump for binary files
   - folder and archive summaries
@@ -287,8 +297,8 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
   **Password-protected files:** ZIP (ZipCrypto and AES), 7z and RAR ask for the password when you open, preview or extract something protected. It is checked first, kept in memory until the app closes, and never saved. Protected Office, PDF, ODF and EPUB files show a small *Password protected* message: press <kbd>Enter</kbd> to open them in their own app.
 
-  Files past a size limit are not opened at all, and show a small *Too large to preview* message: 80 MB for images, PDF, notebooks, fonts, certificates and RTF, 256 MB for `.xls`, `.xlsb` and `.ods`, 768 MB for 3D models, and 1 GB for everything else. Local safetensors, ONNX and `.npz` files have no limit, since only their headers are read. On a server or inside an archive, only text is previewed past what can be fetched (16 MB and 80 MB).
-- **Search & filter**: one box for files and commands. Start typing in a file window to open it with what you typed, or press <kbd>Ctrl</kbd>+<kbd>F</kbd>. As you type, the active panel is filtered live; <kbd>Enter</kbd> keeps the filter and <kbd>Esc</kbd> closes the box and shows the whole folder again. <kbd>↓</kbd> <kbd>Enter</kbd> searches all subfolders instead. Queries can be plain text, globs, extension lists or an **SQL-like WHERE clause** (see [Quick filter syntax](#filter)).
+  Files past a size limit are not opened at all, and show a small *Too large to preview* message: 80 MB for images, PDF, notebooks, fonts, certificates, geometry and RTF (JSON trees up to 32 MB, then text), 256 MB for `.xls`, `.xlsb` and `.ods`, 768 MB for 3D models, and 1 GB for everything else. Local safetensors, ONNX and `.npz` files have no limit, since only their headers are read. On a server or inside an archive, only text is previewed past what can be fetched (16 MB and 80 MB).
+- **Search & filter**: one box for files and commands. Start typing in a file window to open it with what you typed, or press <kbd>Ctrl</kbd>+<kbd>F</kbd>. As you type, the active panel is filtered live; <kbd>Enter</kbd> keeps the filter and <kbd>Esc</kbd> closes the box and shows the whole folder again. <kbd>↓</kbd> <kbd>Enter</kbd> searches all subfolders instead. Queries can be plain text, globs, extension lists or an **SQL-like WHERE clause**, with **regular expressions** (`name REGEXP '^img_\d+'`) and a **search inside files** like grep (`source LIKE '%TODO%'`), see [Quick filter syntax](#filter).
 - **Quick filters by file type**: the **funnel** button of a file window opens a menu of categories with tick boxes: tick one or several (say *Images* and *Videos*) to show only those kinds of file. The menu stays open while you tick, and the chip in the address bar names what is shown. The built-in categories are Images, Music, Videos, Documents, Spreadsheets, Presentations, Development, Data and Archives, each with its common formats.
   - **While filtering**: folders stay visible, and the filter stays on while you browse into other folders. It works together with the text filter. Click the chip in the address bar or press <kbd>Esc</kbd> to turn it off.
   - **Your own lists**: in *Settings → Quick filters* (or *Edit quick filters…* at the bottom of the menu) you can add your own categories, rename, reorder and remove them, edit their extension lists, or restore the built-in ones. The palette lists every category too, and ticks or unticks it.
@@ -307,7 +317,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
   A UI-scale slider is also available.
 - **Icons**: *Match theme*, *System icon theme*, or any installed freedesktop icon theme (Papirus, Humanity…) using its real SVG/PNG icons.
-- **Fonts**: Adobe Source Sans 3, Source Serif 4 and Source Code Pro are bundled (SIL OFL), with a CJK fallback. *Settings → Fonts* sets the interface font and text size separately from the terminal's, using the bundled fonts or any installed one.
+- **Fonts**: Adobe Source Sans 3, Source Serif 4 and Source Code Pro are bundled (SIL OFL), with a CJK fallback. *Settings → Fonts* sets the interface font and text size separately from the terminal's, using the bundled fonts or any installed one. Markdown, notebooks and documents in Quick View are read in Source Sans 3; *Settings → Fonts → Reading* switches them to Source Serif 4.
 - **Languages**: English and **Tiếng Việt** are built in. To add another language, drop a JSON file into the language folder.
 
 </details>
@@ -424,6 +434,14 @@ The images follow your light or dark GitHub theme. Both sets are in [`docs/light
 <td align="center"><sub>Quick View: certificate details</sub></td>
 </tr>
 <tr>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/quickview-hdf5.png"><img src="docs/light/quickview-hdf5.png" alt="Quick View of an HDF5 dataset"></picture></td>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/quickview-safetensors.png"><img src="docs/light/quickview-safetensors.png" alt="Quick View of a safetensors model: its tensors"></picture></td>
+</tr>
+<tr>
+<td align="center"><sub>Quick View: HDF5 datasets as tables</sub></td>
+<td align="center"><sub>Quick View: safetensors, every tensor with its shape and size</sub></td>
+</tr>
+<tr>
 <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/settings-shortcuts.png"><img src="docs/light/settings-shortcuts.png" alt="Keyboard shortcuts in Settings"></picture></td>
 <td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/split-numbered.png"><img src="docs/light/split-numbered.png" alt="Numbered windows in a split tab"></picture></td>
 </tr>
@@ -455,10 +473,18 @@ size > 10MB AND type = 'file'
 age < 7d                       -- s, m, h, d, w, mo, y
 modified >= '2024-01-01'
 NOT name LIKE '.%' OR (ext = 'md' AND size < 4KB)
+name REGEXP '^img_\d{4}\.jpe?g$'  -- regular expression, ignoring case
+name ~ '^IMG_'                 -- ~ minds case; ~* ignores it; !~ and !~* = no match
+source LIKE '%TODO%'           -- a line of the file matches, like grep
+source ~ 'fn \w+\(' AND ext = 'rs'
 ```
 
-**Fields:** `name` `ext` `size` `type` (`dir`/`file`) `modified` `age` `hidden`<br>
-**Operators:** `= != <> < <= > >= LIKE NOT LIKE ILIKE GLOB IN NOT IN AND OR NOT ( )`. An optional leading `WHERE` is accepted.
+**Fields:** `name` `ext` `size` `type` (`dir`/`file`) `modified` `age` `hidden` `source` (alias `content`)<br>
+**Operators:** `= != <> < <= > >= LIKE NOT LIKE ILIKE GLOB IN NOT IN REGEXP RLIKE NOT REGEXP ~ ~* !~ !~* AND OR NOT ( )`. An optional leading `WHERE` is accepted.
+
+**Regular expressions** use the [Rust `regex` syntax](https://docs.rs/regex/latest/regex/#syntax) (`\d`, `\w`, `[a-z]`, `(a|b)`, `^…$`, `{2,4}`…) and work on `name`, `ext` and `source`. Put the pattern in quotes.
+
+**`source`** reads the files like `grep`: a `LIKE` pattern or a regular expression is tried on each line, so `'%TODO%'` finds a line that contains *TODO* and `'TODO%'` one that starts with it. Folders and binary files (a NUL byte near the start) never match, `NOT LIKE` included. The files are read in the background: while you type, the folder fills in as matches are found (*Searching file contents…* in the status bar), and <kbd>↓</kbd> <kbd>Enter</kbd> searches every subfolder the same way. It works on local folders.
 
 <a id="shortcuts"></a>
 
@@ -495,6 +521,14 @@ NOT name LIKE '.%' OR (ext = 'md' AND size < 4KB)
 > **Change any of them in *Settings → Keyboard shortcuts*.** Windows in a split tab show their number in their title bar. <kbd>F1</kbd> lists the keys currently set.
 >
 > **Vim, Emacs and other terminal programs keep their keys.** While a terminal has the keyboard, the app only takes combinations they never receive (<kbd>⌘</kbd> on macOS, <kbd>Ctrl</kbd>+<kbd>Shift</kbd> elsewhere, and <kbd>Ctrl</kbd>+<kbd>Tab</kbd>). So <kbd>Ctrl</kbd>+<kbd>W</kbd> closes a file window, and in a terminal it reaches Vim; there <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>W</kbd> closes the window. This also holds for keys you set yourself.
+
+<a id="download"></a>
+
+## 📦 Download
+
+**macOS on Apple silicon (M1 and later):** download `MatrixFinder-<version>-macos-arm64.dmg` from the [latest release](https://github.com/quangtiencs/matrix_finder/releases/latest), open it and drag **Matrix Finder** to **Applications**. The app is ad-hoc signed, not notarized: the first time, right-click it and choose **Open**.
+
+**Intel Macs, Linux and Windows:** build it with the [install script](#build) below. From 0.8.0 on, releases no longer include a DMG for Intel Macs, which few people still use.
 
 <a id="build"></a>
 
@@ -561,7 +595,7 @@ make dmg            # or: scripts/macos/build-dmg.sh
 
 This builds `target/macos/Matrix Finder.app` and `target/macos/MatrixFinder-<version>-macos-<arch>.dmg`. Open the DMG and drag **Matrix Finder** onto **Applications**.
 
-- `make dmg-universal` builds one binary for both Apple silicon and Intel, and `make app` builds only the `.app`.
+- `make dmg-universal` builds one binary for both Apple silicon and Intel (releases ship only the Apple silicon DMG since 0.8.0, so this is the way to a DMG for an Intel Mac), and `make app` builds only the `.app`.
 - `--sign "Developer ID Application: …"` applies a real signature. The default is an ad-hoc signature, so macOS asks for confirmation the first time you open the app (right-click → Open).
 - `--no-layout` skips the Finder window styling, and `BUNDLE_ID=…` changes the bundle identifier.
 - After editing the SVGs in `assets/logo`, run `make icons` to regenerate the PNGs, the `.icns` file and the DMG background.
@@ -601,6 +635,7 @@ MATRIX_FINDER_TEST_SFTP=host:22:user:/path/to/private_key cargo test live_sftp -
 
 ## 🌍 Languages, settings and backups
 
+- **Updates**: *Check for updates…* (in the app menu, *Help*, the About window or the command palette) asks GitHub for the latest release. If there is a newer one, a window shows its version, date and release notes, with **Download** (the Apple silicon DMG; on an Intel Mac, build it with the install script instead) and **Open release page**, both opened in your browser. Installing is up to you, as before. *Skip this version* keeps the check at start from offering it again. To check at start (at most once a day), turn on *Settings → Files & layout → Check for updates when Matrix Finder starts*; it is off by default (see [Privacy](#privacy)).
 - **Settings** are stored in `<config dir>/matrix_finder/settings.json`: `~/.config` on Linux, `~/Library/Application Support` on macOS and `%APPDATA%` on Windows. *File → Export settings…* writes a copy **without passwords**.
 - **Languages** live in `<config dir>/matrix_finder/lang/<code>.json`. *Settings → Export translation template…* writes every key for you, and missing keys fall back to English.
   ```json
@@ -612,7 +647,9 @@ MATRIX_FINDER_TEST_SFTP=host:22:user:/path/to/private_key cargo test live_sftp -
 
 ## 🔒 Privacy
 
-Matrix Finder collects no data and sends no telemetry: no analytics, no crash reports, no update checks. It goes online only when you ask it to, by connecting to an FTP or SFTP server or clicking a link (which opens in your browser). It also listens on a local port so a second launch can open in the running window. That port is on `localhost` only and is never reachable from the network.
+Matrix Finder collects no data and sends no telemetry: no analytics, no crash reports. It goes online only when you ask it to: by connecting to an FTP or SFTP server, clicking a link (which opens in your browser), or checking for updates. It also listens on a local port so a second launch can open in the running window. That port is on `localhost` only and is never reachable from the network.
+
+**Update checks** happen only when you choose *Check for updates…*, or at start (at most once a day) if you turn on *Settings → Files & layout → Check for updates when Matrix Finder starts*, which is **off by default**. The check asks GitHub's public API for the latest release of this project, using `curl` (or `wget`), with only the app's name and version in the request. Nothing about you or your files is sent, and nothing is downloaded or installed by the app.
 
 <a id="layout"></a>
 
@@ -657,6 +694,9 @@ src/
 ├── textdocs.rs    RTF, EPUB and ODF text
 ├── fontview.rs    font sample sheets
 ├── model3d.rs     STL, OBJ and glTF models and their renderer
+├── geoview.rs     GeoJSON, WKT and WKB geometry and its drawing
+├── jsonview.rs    JSON as a tree, with paths to copy
+├── update.rs      checking GitHub for a newer release (only when asked)
 ├── certview.rs    X.509 certificates
 ├── defaultapps.rs which app opens which file type, and the system's own choice
 ├── chrome.rs      native-looking integrated title bar

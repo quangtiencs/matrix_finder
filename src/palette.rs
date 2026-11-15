@@ -23,6 +23,7 @@ pub enum Act {
     Settings,
     Shortcuts,
     About,
+    CheckUpdates,
     Bookmarks,
     DefaultApps,
     InvertSelection,

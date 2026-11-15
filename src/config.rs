@@ -189,7 +189,7 @@ pub fn default_quick_filters() -> Vec<QuickFilter> {
             "Development",
             "rs py js mjs cjs ts tsx jsx java kt kts scala go c h cpp cc cxx hpp hh cs swift m mm rb php pl lua r dart zig nim ex exs erl hs ml clj sh bash zsh fish ps1 bat sql html htm css scss sass less vue svelte json yaml yml toml ini xml gradle cmake mk proto",
         ),
-        QuickFilter::new("Data", "parquet avro arrow feather orc jsonl ndjson ipynb sqlite sqlite3 db h5 hdf5 npy npz safetensors onnx rdata rda rds pkl pickle"),
+        QuickFilter::new("Data", "parquet avro arrow feather orc jsonl ndjson ipynb sqlite sqlite3 db h5 hdf5 npy npz safetensors onnx rdata rda rds pkl pickle geojson wkt wkb"),
         QuickFilter::new("Archives", "zip rar 7z tar gz tgz bz2 tbz2 xz txz zst lz4 iso dmg cab deb rpm jar"),
     ]
 }
@@ -363,6 +363,17 @@ impl Default for BackupProfile {
     }
 }
 
+/// The font that Markdown and documents are read in.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ReadingFont {
+    /// Source Sans 3, like the interface.
+    #[default]
+    Sans,
+    /// Source Serif 4.
+    Serif,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -413,6 +424,15 @@ pub struct Settings {
     pub show_disk_usage: bool,
     /// When the sidebar lists the drives.
     pub sidebar_drives: SidebarDrives,
+    /// Ask GitHub for a newer version at start (at most once a day). Off by default:
+    /// the app goes online only when asked to.
+    pub check_updates: bool,
+    /// The font of Markdown, notebooks' text and documents.
+    pub reading_font: ReadingFont,
+    /// When updates were last looked for (seconds since 1970), for the daily check.
+    pub update_checked: i64,
+    /// A version the user chose to skip: the check at start does not offer it again.
+    pub update_skip: String,
     /// Changed keyboard shortcuts: action id → its keys. The others use the defaults of the
     /// operating system (see `shortcuts`).
     pub shortcuts: std::collections::BTreeMap<String, Vec<String>>,
@@ -482,10 +502,10 @@ pub struct SavedPane {
 const BOOKMARK_DEFAULTS: u32 = 1;
 
 /// See `Settings::quick_filter_defaults`.
-const QUICK_FILTER_DEFAULTS: u32 = 1;
+const QUICK_FILTER_DEFAULTS: u32 = 2;
 
 /// Formats added to a built-in quick filter, with the version that added them.
-const QUICK_FILTER_ADDED: &[(u32, &str, &str)] = &[(1, "Data", "safetensors onnx rdata rda rds")];
+const QUICK_FILTER_ADDED: &[(u32, &str, &str)] = &[(1, "Data", "safetensors onnx rdata rda rds"), (2, "Data", "geojson wkt wkb")];
 
 /// Allowed terminal scroll speeds (lines per trackpad row or wheel notch).
 pub const SCROLL_SPEEDS: std::ops::RangeInclusive<f32> = 0.1..=10.0;
@@ -533,6 +553,10 @@ impl Default for Settings {
             icon_pack: "theme".into(),
             show_disk_usage: false,
             sidebar_drives: SidebarDrives::default(),
+            check_updates: false,
+            reading_font: ReadingFont::default(),
+            update_checked: 0,
+            update_skip: String::new(),
             shortcuts: Default::default(),
             default_apps: Default::default(),
             terminal_profiles: vec![TerminalProfile::default()],
@@ -686,6 +710,8 @@ impl Settings {
             left_paths: keep.left_paths,
             right_paths: keep.right_paths,
             session: keep.session,
+            update_checked: keep.update_checked,
+            update_skip: keep.update_skip,
             ..Settings::default()
         };
         self.normalize();
@@ -834,7 +860,7 @@ mod tests {
         let mut v: Settings = serde_json::from_str(old).unwrap();
         assert_eq!(v.quick_filter_defaults, 0);
         v.normalize();
-        assert_eq!(v.quick_filters[0].exts, "parquet npy rds safetensors onnx rdata rda");
+        assert_eq!(v.quick_filters[0].exts, "parquet npy rds safetensors onnx rdata rda geojson wkt wkb");
         assert_eq!(v.quick_filters[1].exts, "cr2");
         assert_eq!(v.quick_filter_defaults, QUICK_FILTER_DEFAULTS);
         // Once only: an extension you remove stays removed.
@@ -845,7 +871,7 @@ mod tests {
         let mut s = Settings::default();
         s.normalize();
         assert_eq!(s.quick_filters, default_quick_filters());
-        for e in ["safetensors", "onnx", "rdata", "rda", "rds"] {
+        for e in ["safetensors", "onnx", "rdata", "rda", "rds", "geojson", "wkt", "wkb"] {
             assert!(s.quick_filters.iter().any(|q| q.name == "Data" && q.ext_list().iter().any(|x| x == e)), "{e}");
         }
     }
