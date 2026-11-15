@@ -36,7 +36,7 @@ pub fn kind_of(ext: &str) -> FileKind {
         "pdf" => FileKind::Pdf,
         "exe" | "msi" | "app" | "bat" | "cmd" | "appimage" | "deb" | "rpm" | "dmg" | "pkg" | "bin" => FileKind::Exec,
         "json" | "toml" | "yaml" | "yml" | "xml" | "csv" | "tsv" | "parquet" | "pq" | "avro" | "xlsm" | "xlsb" | "ini" | "cfg" | "conf" | "lock" | "db" | "sqlite"
-        | "xls" | "xlsx" | "ods" => FileKind::Data,
+        | "xls" | "xlsx" | "ods" | "geojson" | "geojsonl" | "wkt" | "wkb" | "h5" | "hdf5" | "npy" | "npz" | "safetensors" | "onnx" | "feather" | "arrow" => FileKind::Data,
         _ => FileKind::Other,
     }
 }

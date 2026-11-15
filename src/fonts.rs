@@ -26,7 +26,32 @@ pub fn label<'a>(value: &'a str, builtin: &'a [(&'a str, &'a str)]) -> &'a str {
 }
 
 /// The families that draw the interface (not the terminal).
-const UI_FAMILIES: [&str; 4] = ["bold", "serif", "serif-bold", "serif-italic"];
+const UI_FAMILIES: [&str; 6] = ["bold", "serif", "serif-bold", "serif-italic", "read", "read-bold"];
+
+/// Markdown and documents are read in Source Sans 3 (the default) or Source Serif 4,
+/// whatever the interface font is.
+static READING_SERIF: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_reading_serif(serif: bool) {
+    READING_SERIF.store(serif, Ordering::Relaxed);
+}
+
+/// The font for reading text of this weight and slant, and whether it has to be slanted
+/// by drawing (Source Sans comes without an italic here).
+pub fn reading_font(bold: bool, italic: bool) -> (FontFamily, bool) {
+    reading_font_in(READING_SERIF.load(Ordering::Relaxed), bold, italic)
+}
+
+fn reading_font_in(serif: bool, bold: bool, italic: bool) -> (FontFamily, bool) {
+    let family = |n: &str| FontFamily::Name(n.into());
+    match (serif, bold, italic) {
+        (true, true, _) => (family("serif-bold"), false),
+        (true, false, true) => (family("serif-italic"), false),
+        (true, false, false) => (family("serif"), false),
+        (false, true, i) => (family("read-bold"), i),
+        (false, false, i) => (family("read"), i),
+    }
+}
 
 fn ui_families() -> impl Iterator<Item = FontFamily> {
     [FontFamily::Proportional, FontFamily::Monospace].into_iter().chain(UI_FAMILIES.iter().map(|n| FontFamily::Name((*n).into())))
@@ -230,7 +255,7 @@ fn base() -> &'static FontDefinitions {
 fn build_base() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     // Bundled Adobe Source fonts (SIL OFL 1.1), full Latin coverage incl. Vietnamese:
-    // Source Sans 3 for the UI, Source Serif 4 for reading (Markdown), Source Code Pro for code.
+    // Source Sans 3 for the UI and for reading (Markdown; Source Serif 4 if chosen), Source Code Pro for code.
     let add = |fonts: &mut FontDefinitions, key: &str, data: &'static [u8]| {
         fonts.font_data.insert(key.into(), Arc::new(FontData::from_static(data)));
     };
@@ -245,7 +270,7 @@ fn build_base() -> FontDefinitions {
     let with = |first: &str, rest: &Vec<String>| [vec![first.to_string()], rest.clone()].concat();
     fonts.families.insert(FontFamily::Proportional, with("sans", &defaults_prop));
     fonts.families.insert(FontFamily::Monospace, with("mono", &defaults_mono));
-    for (fam, key) in [("bold", "sans-bold"), ("serif", "serif"), ("serif-bold", "serif-bold"), ("serif-italic", "serif-italic")] {
+    for (fam, key) in [("bold", "sans-bold"), ("serif", "serif"), ("serif-bold", "serif-bold"), ("serif-italic", "serif-italic"), ("read", "sans"), ("read-bold", "sans-bold")] {
         fonts.families.insert(FontFamily::Name(fam.into()), with(key, &defaults_prop));
     }
     // Terminal: JetBrains Mono (OFL), then the Nerd Font symbols (MIT) for the icons and
@@ -334,5 +359,29 @@ mod tests {
         assert_eq!(user_font(&mut d, "term", "No Such Font 123", 700), None);
         assert_eq!(label("", &TERM_BUILTIN), "JetBrains Mono");
         assert_eq!(label("Menlo", &TERM_BUILTIN), "Menlo");
+    }
+
+    #[test]
+    fn reading_fonts() {
+        let f = |n: &str| FontFamily::Name(n.into());
+        // Source Sans by default, whatever the interface font: its bold, and drawn slanted for italic.
+        assert_eq!(reading_font_in(false, false, false), (f("read"), false));
+        assert_eq!(reading_font_in(false, true, false), (f("read-bold"), false));
+        assert_eq!(reading_font_in(false, false, true), (f("read"), true));
+        assert_eq!(reading_font_in(false, true, true), (f("read-bold"), true));
+        // Source Serif has its own italic.
+        assert_eq!(reading_font_in(true, false, false), (f("serif"), false));
+        assert_eq!(reading_font_in(true, false, true), (f("serif-italic"), false));
+        assert_eq!(reading_font_in(true, true, true), (f("serif-bold"), false));
+        let d = base();
+        assert_eq!(d.families[&f("read")][0], "sans");
+        assert_eq!(d.families[&f("read-bold")][0], "sans-bold");
+        // A chosen interface font leaves reading alone.
+        let mut d = base().clone();
+        if let Some((regular, bold)) = user_font(&mut d, "ui", "builtin:serif", 600) {
+            put_first(&mut d, FontFamily::Proportional, regular);
+            put_first(&mut d, FontFamily::Name("bold".into()), bold);
+        }
+        assert_eq!(d.families[&f("read")][0], "sans");
     }
 }

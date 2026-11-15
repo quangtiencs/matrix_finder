@@ -122,25 +122,21 @@ impl PdfView {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, name: &str, key: &str, th: &Theme, t: &dyn Fn(&str) -> String) {
         self.poll(ui.ctx(), key);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(name).strong().color(th.accent));
-            let info = match self.total {
-                Some(n) if self.rx.is_some() => format!("PDF · {n} {} · {} {}/{}", t("pages"), t("rendering"), self.pages.len(), n.min(MAX_PDF_PAGES)),
-                Some(n) => format!("PDF · {n} {}", t("pages")),
-                None => "PDF".into(),
-            };
-            ui.label(RichText::new(info).color(th.weak));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("+").clicked() {
-                    self.zoom = (self.zoom * 1.2).min(4.0);
-                }
-                if ui.button("−").clicked() {
-                    self.zoom = (self.zoom / 1.2).max(0.25);
-                }
-                if ui.selectable_label((self.zoom - 1.0).abs() < 0.01, t("Fit width")).clicked() {
-                    self.zoom = 1.0;
-                }
-            });
+        let info = match self.total {
+            Some(n) if self.rx.is_some() => format!("PDF · {n} {} · {} {}/{}", t("pages"), t("rendering"), self.pages.len(), n.min(MAX_PDF_PAGES)),
+            Some(n) => format!("PDF · {n} {}", t("pages")),
+            None => "PDF".into(),
+        };
+        crate::preview::header_row(ui, th, name, &[(info, th.weak)], |ui| {
+            if ui.button("+").clicked() {
+                self.zoom = (self.zoom * 1.2).min(4.0);
+            }
+            if ui.button("−").clicked() {
+                self.zoom = (self.zoom / 1.2).max(0.25);
+            }
+            if ui.selectable_label((self.zoom - 1.0).abs() < 0.01, t("Fit width")).clicked() {
+                self.zoom = 1.0;
+            }
         });
         ui.separator();
         if self.error.as_deref() == Some(crate::preview::LOCKED) {
@@ -322,10 +318,8 @@ impl NotebookView {
             }
         }
         let code_cells = self.cells.iter().filter(|c| matches!(c, Cell::Code { .. })).count();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(name).strong().color(th.accent));
-            ui.label(RichText::new(format!("Jupyter · {} · {} {} · {code_cells} {}", self.kernel, self.cells.len(), t("cells"), t("code"))).color(th.weak));
-        });
+        let facts = format!("Jupyter · {} · {} {} · {code_cells} {}", self.kernel, self.cells.len(), t("cells"), t("code"));
+        crate::preview::header_row(ui, th, name, &[(facts, th.weak)], |_| {});
         ui.separator();
         let gutter = 58.0;
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {

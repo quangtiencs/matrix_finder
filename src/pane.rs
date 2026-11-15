@@ -46,6 +46,21 @@ impl Drop for Search {
 /// Upper bound on recursive search results.
 const SEARCH_LIMIT: usize = 20_000;
 
+/// A filter that reads files (`source LIKE …`), run over the listing in the background.
+/// The names that pass arrive in batches; until then they are not shown.
+pub struct ContentScan {
+    pub running: bool,
+    hits: HashSet<String>,
+    rx: Receiver<Vec<String>>,
+    cancel: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Drop for ContentScan {
+    fn drop(&mut self) {
+        self.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub struct Tab {
     pub loc: Location,
     pub entries: Vec<Entry>,
@@ -70,6 +85,8 @@ pub struct Tab {
     pub dir_sizes: Option<Receiver<(String, u64)>>,
     /// Recursive search results shown instead of the folder.
     pub search: Option<Search>,
+    /// The filter reads files: which entries it let through so far.
+    pub scan: Option<ContentScan>,
     pub focus_path: bool,
     pub editing_path: bool,
     /// Folder suggestions while the address is typed.
@@ -190,6 +207,7 @@ impl Tab {
             select_name: None,
             dir_sizes: None,
             search: None,
+            scan: None,
             focus_path: false,
             editing_path: false,
             complete: Default::default(),
@@ -270,6 +288,11 @@ impl Tab {
 
     pub fn is_loading(&self) -> bool {
         self.loading.is_some() || self.search.as_ref().is_some_and(|s| s.running)
+    }
+
+    /// The filter is still reading files.
+    pub fn is_scanning(&self) -> bool {
+        self.scan.as_ref().is_some_and(|s| s.running)
     }
 
     pub fn navigate(&mut self, loc: Location, ctx: &ListCtx) {
@@ -411,7 +434,7 @@ impl Tab {
                 let is_dir = d.file_type().is_dir();
                 let mut e = Entry::new(d.file_name().to_string_lossy().to_string(), is_dir, meta.as_ref().filter(|_| !is_dir).map(|m| m.len()).unwrap_or(0), meta.and_then(|m| m.modified().ok()));
                 e.is_link = d.path_is_symlink();
-                if !filter.matches(&e) {
+                if !filter.matches_at(&e, Some(d.path()), &stop) {
                     continue;
                 }
                 // Results are named by their path below the search folder.
@@ -490,6 +513,31 @@ impl Tab {
                 changed = true;
             }
         }
+        if let Some(s) = &mut self.scan {
+            let mut got = false;
+            loop {
+                match s.rx.try_recv() {
+                    Ok(names) => {
+                        s.hits.extend(names);
+                        got = true;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                    Err(_) => {
+                        s.running = false;
+                        got = true;
+                        break;
+                    }
+                }
+            }
+            if got {
+                let keep = self.cursor_entry().map(|e| e.name.clone());
+                self.rebuild_view(ctx);
+                if let Some(p) = keep.and_then(|n| self.view.iter().position(|&i| self.entries[i].name == n)) {
+                    self.cursor = p;
+                }
+                changed = true;
+            }
+        }
         if let Some(rx) = &self.loading {
             match rx.try_recv() {
                 Ok(Ok(Loaded::Entries(list))) => {
@@ -550,6 +598,7 @@ impl Tab {
         self.entries = list;
         let existing: HashSet<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
         self.marked.retain(|m| existing.contains(m.as_str()));
+        self.restart_scan(ctx);
         self.rebuild_view(ctx);
         if let Some(name) = self.select_name.take() {
             if let Some(pos) = self.view.iter().position(|&i| self.entries[i].name == name) {
@@ -563,6 +612,7 @@ impl Tab {
     pub fn set_filter(&mut self, text: &str, ctx: &ListCtx) {
         self.filter_text = text.to_string();
         self.filter = Filter::parse(text);
+        self.restart_scan(ctx);
         let keep = self.cursor_entry().map(|e| e.name.clone());
         self.rebuild_view(ctx);
         self.cursor = keep
@@ -571,8 +621,50 @@ impl Tab {
         self.ensure_visible = true;
     }
 
+    /// Start reading the files of the listing again, when the filter looks into them
+    /// (`source LIKE …`): on the UI thread that could take minutes.
+    fn restart_scan(&mut self, ctx: &ListCtx) {
+        self.scan = None;
+        let Ok(filter) = &self.filter else { return };
+        if !filter.reads_content() {
+            return;
+        }
+        let Some(dir) = self.loc.local_path().map(|p| p.to_path_buf()) else {
+            self.filter = Err(t("Searching file contents works on local folders"));
+            return;
+        };
+        let filter = filter.clone();
+        let show_hidden = ctx.show_hidden;
+        // Search results are named by their path below the folder, which joins the same way.
+        let entries: Vec<Entry> = self.entries.iter().filter(|e| !e.is_parent && !e.is_dir && (show_hidden || !e.hidden)).cloned().collect();
+        let (tx, rx) = channel();
+        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let stop = cancel.clone();
+        std::thread::spawn(move || {
+            let mut batch = Vec::new();
+            let mut last = std::time::Instant::now();
+            for e in entries {
+                if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                if filter.matches_at(&e, Some(&dir.join(&e.name)), &stop) {
+                    batch.push(e.name);
+                }
+                if !batch.is_empty() && last.elapsed().as_millis() > 120 {
+                    if tx.send(std::mem::take(&mut batch)).is_err() {
+                        return;
+                    }
+                    last = std::time::Instant::now();
+                }
+            }
+            let _ = tx.send(batch);
+        });
+        self.scan = Some(ContentScan { running: true, hits: HashSet::new(), rx, cancel });
+    }
+
     pub fn rebuild_view(&mut self, ctx: &ListCtx) {
         let filter = self.filter.as_ref().ok();
+        let hits = self.scan.as_ref().map(|s| &s.hits);
         let mut view: Vec<usize> = (0..self.entries.len())
             .filter(|&i| {
                 let e = &self.entries[i];
@@ -585,7 +677,10 @@ impl Tab {
                 if self.quick.as_ref().is_some_and(|q| !q.matches(e)) {
                     return false;
                 }
-                filter.is_none_or(|f| f.matches(e))
+                match hits {
+                    Some(h) => h.contains(&e.name),
+                    None => filter.is_none_or(|f| f.matches(e)),
+                }
             })
             .collect();
         let (sort, desc, dirs_first) = (self.sort, self.desc, ctx.dirs_first);
@@ -2106,7 +2201,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 let (r, bg) = ui.allocate_exact_size(vec2(avail_w, rest.y.max(ROW_H)), Sense::click());
                 if only_parent && !tab.is_loading() && tab.error.is_none() {
                     // Empty state: an icon, what is going on and what one can do.
-                    let searching = tab.search.as_ref().is_some_and(|s| s.running);
+                    let searching = tab.search.as_ref().is_some_and(|s| s.running) || tab.is_scanning();
                     let (msg, hint) = if searching {
                         (t("Searching…"), String::new())
                     } else if tab.is_filtered() {
@@ -2249,6 +2344,10 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
         p.with_clip_rect(frect).text(left, Align2::LEFT_CENTER, format!("⚠ {err}"), small.clone(), th.danger);
     } else if let Err(e) = &tab.filter {
         p.with_clip_rect(frect).text(left, Align2::LEFT_CENTER, format!("⚠ {e}"), small.clone(), th.danger);
+    } else if tab.is_scanning() {
+        let found = tab.view.iter().filter(|&&i| !tab.entries[i].is_parent).count();
+        p.with_clip_rect(frect).text(left, Align2::LEFT_CENTER, format!("{} · {found} {}", t("Searching file contents…"), t("found")), small.clone(), th.weak);
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     } else {
         let (files, dirs) = tab
             .view
@@ -2487,12 +2586,14 @@ pub fn filter_help() -> String {
         ("age < 7d", t("modified within 7 days (s, m, h, d, w, mo, y)")),
         ("modified >= '2024-01-01'", t("modified since a date")),
         ("NOT name LIKE '.%'", t("negation; combine with AND, OR, ( )")),
+        (r"name REGEXP '^img_\d+'", t("regular expression (~ minds case, !~ for no match)")),
+        ("source LIKE '%TODO%'", t("a line of the file matches, like grep (also REGEXP)")),
     ];
     let mut s = format!("{}\n", t("Quick filter syntax"));
     for (example, desc) in rows {
         s.push_str(&format!("  {example:<31} {desc}\n"));
     }
-    s.push_str(&format!("{}: name, ext, size, type, modified, age, hidden", t("Fields")));
+    s.push_str(&format!("{}: name, ext, size, type, modified, age, hidden, source", t("Fields")));
     s
 }
 

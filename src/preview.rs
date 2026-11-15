@@ -47,6 +47,10 @@ pub enum Kind {
     Font,
     Model,
     Certificate,
+    /// GeoJSON, WKT and WKB: shapes drawn without a map.
+    Geo,
+    /// A tree to explore; text past `jsonview::MAX_JSON`.
+    Json,
     Code,
     Text,
     Other,
@@ -69,6 +73,12 @@ pub fn classify(name: &str) -> Kind {
     }
     if crate::certview::is_cert(name) {
         return Kind::Certificate;
+    }
+    if crate::geoview::is_geo(name) {
+        return Kind::Geo;
+    }
+    if crate::jsonview::is_json(name) {
+        return Kind::Json;
     }
     match ext.as_str() {
         "pdf" => return Kind::Pdf,
@@ -102,6 +112,8 @@ pub fn classify(name: &str) -> Kind {
 pub fn read_limit(name: &str) -> usize {
     match classify(name) {
         Kind::Code | Kind::Text | Kind::Markdown | Kind::Other => MAX_TEXT,
+        // One byte more tells a file past the limit.
+        Kind::Json => crate::jsonview::MAX_JSON + 1,
         _ => MAX_IMAGE,
     }
 }
@@ -115,7 +127,7 @@ const LARGE_WORKBOOK: u64 = 256 * 1024 * 1024;
 /// be in memory as a whole, as more of it would not be read anyway, and else `LARGE_FILE`.
 pub fn size_limit(name: &str) -> u64 {
     match classify(name) {
-        Kind::Image | Kind::Svg | Kind::Pdf | Kind::Notebook | Kind::Heif | Kind::Font | Kind::Certificate => MAX_IMAGE as u64,
+        Kind::Image | Kind::Svg | Kind::Pdf | Kind::Notebook | Kind::Heif | Kind::Font | Kind::Certificate | Kind::Geo => MAX_IMAGE as u64,
         Kind::Document if !crate::textdocs::reads_zip(name) => MAX_IMAGE as u64,
         Kind::Model => crate::model3d::MAX_FILE,
         Kind::Table if matches!(ext_of(name).as_str(), "xls" | "xlsb" | "ods") => LARGE_WORKBOOK,
@@ -129,7 +141,7 @@ pub fn size_limit(name: &str) -> u64 {
 /// `readable` is how much can be fetched from where the file is, if not a local disk:
 /// text can be shown from its start, while other formats need all of the file.
 pub fn too_large(name: &str, size: u64, readable: Option<u64>) -> bool {
-    let start_is_enough = matches!(classify(name), Kind::Code | Kind::Text | Kind::Markdown | Kind::Other);
+    let start_is_enough = matches!(classify(name), Kind::Code | Kind::Text | Kind::Markdown | Kind::Other | Kind::Json);
     size > size_limit(name) || (!start_is_enough && readable.is_some_and(|r| size > r))
 }
 
@@ -164,6 +176,8 @@ enum Loaded {
     Pdf(Box<crate::docview::PdfView>),
     Notebook(Box<crate::docview::NotebookView>),
     Model(Box<crate::model3d::ModelView>),
+    Geo(Box<crate::geoview::GeoView>),
+    Json(Box<crate::jsonview::JsonView>),
     Document(crate::textdocs::Document),
     Summary(Summary),
     /// Past its size limit: nothing was read.
@@ -447,6 +461,15 @@ impl Preview {
         self.loaded.is_some() && self.rx.is_none() && pages_done
     }
 
+    /// The JSON tree, if that is what was loaded (for tests).
+    #[cfg(test)]
+    pub fn json(&mut self) -> Option<&mut crate::jsonview::JsonView> {
+        match &mut self.loaded {
+            Some(Loaded::Json(j)) => Some(j),
+            _ => None,
+        }
+    }
+
     /// What was loaded, in a few words (for tests).
     #[cfg(test)]
     pub fn describe(&self) -> String {
@@ -467,6 +490,8 @@ impl Preview {
             Some(Loaded::Pdf(p)) => format!("pdf {}", p.describe()),
             Some(Loaded::Notebook(_)) => "notebook".into(),
             Some(Loaded::Model(m)) => format!("model {}", m.describe()),
+            Some(Loaded::Geo(g)) => format!("geo {}", g.describe()),
+            Some(Loaded::Json(j)) => format!("json {}", j.describe()),
             Some(Loaded::Document(d)) => format!("doc {} {:?} {:?} sections={} first={:?}", d.format, d.title, d.author, d.sections.len(), d.sections.first().map(|s| s.blocks.len())),
             Some(Loaded::Summary(s)) => format!("summary {} pic={} {:?}", s.format, s.picture.as_ref().map_or("no".to_string(), |p| format!("{}x{}", p.w, p.h)), s.rows),
             Some(Loaded::Info(s)) => format!("info {s}"),
@@ -521,82 +546,72 @@ impl Preview {
             Some(Loaded::Pdf(v)) => return v.ui(ui, &self.name, &self.key, theme, &t),
             Some(Loaded::Notebook(v)) => return v.ui(ui, &self.name, &self.key, theme, &t),
             Some(Loaded::Model(v)) => return v.ui(ui, &self.name, &self.key, theme),
+            Some(Loaded::Geo(v)) => return v.ui(ui, &self.name, &self.key, theme),
+            Some(Loaded::Json(v)) => return v.ui(ui, &self.name, &self.key, theme),
             _ => {}
         }
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(&self.name).strong().color(theme.accent));
-            match &self.loaded {
-                Some(Loaded::Image { orig, fmt, .. }) => {
-                    let frames = if self.frames.is_empty() { String::new() } else { format!(" · {} {}", self.frames.len() + 1, t("frames")) };
-                    ui.label(egui::RichText::new(format!("{}×{} {}{frames}", orig.0, orig.1, fmt)).color(theme.weak));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button("+").clicked() {
-                            self.zoom = Some(self.zoom.unwrap_or(1.0) * 1.25);
-                        }
-                        if ui.button("−").clicked() {
-                            self.zoom = Some(self.zoom.unwrap_or(1.0) / 1.25);
-                        }
-                        if ui.selectable_label(self.zoom == Some(1.0), "1:1").clicked() {
-                            self.zoom = Some(1.0);
-                        }
-                        if ui.selectable_label(self.zoom.is_none(), t("Fit")).clicked() {
-                            self.zoom = None;
-                        }
-                        if !self.frames.is_empty() && ui.button(if self.paused { t("Play") } else { t("Pause") }).clicked() {
-                            self.paused = !self.paused;
-                        }
+        let weak = theme.weak;
+        let facts: Vec<(String, Color32)> = match &self.loaded {
+            Some(Loaded::Image { orig, fmt, .. }) => {
+                let frames = if self.frames.is_empty() { String::new() } else { format!(" · {} {}", self.frames.len() + 1, t("frames")) };
+                vec![(format!("{}×{} {}{frames}", orig.0, orig.1, fmt), weak)]
+            }
+            Some(Loaded::Summary(s)) => vec![(s.format.clone(), weak)],
+            Some(Loaded::Document(d)) => {
+                let mut parts = vec![d.format.to_string()];
+                parts.extend(d.title.clone());
+                parts.extend(d.author.clone());
+                vec![(parts.join(" · "), weak)]
+            }
+            Some(Loaded::Code { truncated, lang, lines, .. }) => {
+                let mut v = vec![(format!("{lang} · {} {}", lines.len(), t("lines")), weak)];
+                if *truncated {
+                    v.push((t("(truncated)"), theme.marked));
+                }
+                v
+            }
+            Some(Loaded::Markdown { .. }) => vec![("Markdown".to_string(), weak)],
+            Some(Loaded::Table { data, .. }) => {
+                let mut parts = vec![data.format.to_string()];
+                if let Some(sh) = data.sheets.get(self.sheet) {
+                    parts.push(format!("{} {}", sh.columns.len(), t("columns")));
+                    parts.push(match sh.total_rows {
+                        Some(n) => format!("{} {}", crate::table::fmt_count(n), t("rows")),
+                        None => format!("{}+ {}", crate::table::fmt_count(sh.rows.len() as u64), t("rows")),
                     });
                 }
-                Some(Loaded::Summary(s)) => {
-                    ui.label(egui::RichText::new(&s.format).color(theme.weak));
+                parts.extend(data.info.iter().cloned());
+                vec![(parts.join(" · "), weak)]
+            }
+            Some(Loaded::Hex { total, .. }) => vec![(format!("{} · {}", t("Binary"), human_size(*total as u64)), weak)],
+            _ => vec![],
+        };
+        header_row(ui, theme, &self.name, &facts, |ui| match &self.loaded {
+            Some(Loaded::Image { .. }) => {
+                if ui.button("+").clicked() {
+                    self.zoom = Some(self.zoom.unwrap_or(1.0) * 1.25);
                 }
-                Some(Loaded::Document(d)) => {
-                    let mut parts = vec![d.format.to_string()];
-                    parts.extend(d.title.clone());
-                    parts.extend(d.author.clone());
-                    ui.add(egui::Label::new(egui::RichText::new(parts.join(" · ")).color(theme.weak)).truncate());
+                if ui.button("−").clicked() {
+                    self.zoom = Some(self.zoom.unwrap_or(1.0) / 1.25);
                 }
-                Some(Loaded::Code { truncated, lang, lines, .. }) => {
-                    ui.label(egui::RichText::new(format!("{lang} · {} {}", lines.len(), t("lines"))).color(theme.weak));
-                    if *truncated {
-                        ui.label(egui::RichText::new(t("(truncated)")).color(theme.marked));
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.checkbox(&mut self.wrap, t("Wrap"));
-                    });
+                if ui.selectable_label(self.zoom == Some(1.0), "1:1").clicked() {
+                    self.zoom = Some(1.0);
                 }
-                Some(Loaded::Markdown { .. }) => {
-                    ui.label(egui::RichText::new("Markdown").color(theme.weak));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.selectable_label(self.show_source, t("Source")).clicked() {
-                            self.show_source = !self.show_source;
-                        }
-                    });
+                if ui.selectable_label(self.zoom.is_none(), t("Fit")).clicked() {
+                    self.zoom = None;
                 }
-                Some(Loaded::Table { data, source }) => {
-                    let mut parts = vec![data.format.to_string()];
-                    if let Some(sh) = data.sheets.get(self.sheet) {
-                        parts.push(format!("{} {}", sh.columns.len(), t("columns")));
-                        parts.push(match sh.total_rows {
-                            Some(n) => format!("{} {}", crate::table::fmt_count(n), t("rows")),
-                            None => format!("{}+ {}", crate::table::fmt_count(sh.rows.len() as u64), t("rows")),
-                        });
-                    }
-                    parts.extend(data.info.iter().cloned());
-                    let has_source = source.is_some();
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if has_source && ui.selectable_label(self.show_source, t("Source")).clicked() {
-                            self.show_source = !self.show_source;
-                        }
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            ui.add(egui::Label::new(egui::RichText::new(parts.join(" · ")).color(theme.weak)).truncate());
-                        });
-                    });
+                if !self.frames.is_empty() && ui.button(if self.paused { t("Play") } else { t("Pause") }).clicked() {
+                    self.paused = !self.paused;
                 }
-                Some(Loaded::Hex { total, .. }) => {
-                    ui.label(egui::RichText::new(format!("{} · {}", t("Binary"), human_size(*total as u64))).color(theme.weak));
+            }
+            Some(Loaded::Code { .. }) => {
+                ui.checkbox(&mut self.wrap, t("Wrap"));
+            }
+            _ => {
+                let has_source = matches!(&self.loaded, Some(Loaded::Markdown { .. }) | Some(Loaded::Table { source: Some(_), .. }));
+                if has_source && ui.selectable_label(self.show_source, t("Source")).clicked() {
+                    self.show_source = !self.show_source;
                 }
-                _ => {}
             }
         });
         ui.separator();
@@ -609,7 +624,7 @@ impl Preview {
         };
         match loaded {
             // Rendered by their own views above.
-            Loaded::Pdf(_) | Loaded::Notebook(_) | Loaded::Model(_) => {}
+            Loaded::Pdf(_) | Loaded::Notebook(_) | Loaded::Model(_) | Loaded::Geo(_) | Loaded::Json(_) => {}
             Loaded::Locked => {
                 self.password_wanted |= locked_ui(ui, theme, &t, self.archive.is_some());
             }
@@ -734,6 +749,58 @@ impl Preview {
             }
         }
     }
+}
+
+/// Below this much room beside its buttons, the name of a preview gets a line of its own.
+const NAME_ROOM: f32 = 220.0;
+
+/// The title row of a preview: the file name and its facts on the left, cut with "…"
+/// when they do not fit (the whole text shows on hover), and the buttons that `buttons`
+/// adds, right to left, on the right. The buttons always keep their room; when they
+/// leave too little for the name, it goes on a line of its own above them.
+pub fn header_row(ui: &mut egui::Ui, theme: &Theme, name: &str, facts: &[(String, Color32)], buttons: impl FnOnce(&mut egui::Ui)) {
+    // How wide the buttons were last time: they are drawn before the name.
+    let id = ui.id().with("preview-header-buttons");
+    let buttons_w: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
+    let own_line = ui.available_width() - buttons_w < NAME_ROOM;
+    let name_label = || egui::Label::new(egui::RichText::new(name).strong().color(theme.accent)).truncate();
+    if own_line {
+        ui.add(name_label());
+    }
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let before = ui.available_width();
+            buttons(ui);
+            let used = before - ui.available_width();
+            if (used - buttons_w).abs() > 0.5 {
+                ui.data_mut(|d| d.insert_temp(id, used));
+                ui.ctx().request_repaint();
+            }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                let font = egui::TextStyle::Body.resolve(ui.style());
+                let gap = ui.spacing().item_spacing.x;
+                let room = ui.available_width();
+                let text: Vec<&str> = facts.iter().map(|(s, _)| s.as_str()).collect();
+                let facts_w = if facts.is_empty() { 0.0 } else { ui.fonts(|f| f.layout_no_wrap(text.join(" "), font.clone(), theme.weak).size().x) + gap };
+                if !own_line {
+                    // The name gets what the facts leave, and at least half the row.
+                    let name_room = (room - facts_w).max(room * 0.5).max(24.0);
+                    ui.allocate_ui_with_layout(egui::vec2(name_room, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name_label()));
+                }
+                if !facts.is_empty() {
+                    let mut job = LayoutJob::default();
+                    for (i, (s, c)) in facts.iter().enumerate() {
+                        let format = TextFormat { font_id: font.clone(), color: *c, ..Default::default() };
+                        if i > 0 {
+                            job.append(" ", 0.0, format.clone());
+                        }
+                        job.append(s, 0.0, format);
+                    }
+                    ui.add(egui::Label::new(job).truncate());
+                }
+            });
+        });
+    });
 }
 
 fn summary_ui(ui: &mut egui::Ui, s: &Summary, texture: Option<&TextureHandle>, theme: &Theme) {
@@ -949,7 +1016,7 @@ fn checkerboard(p: &egui::Painter, rect: egui::Rect, theme: &Theme) {
     }
 }
 
-fn code_view(ui: &mut egui::Ui, lines: &[Styled], bg: Color32, wrap: bool, theme: &Theme) {
+pub fn code_view(ui: &mut egui::Ui, lines: &[Styled], bg: Color32, wrap: bool, theme: &Theme) {
     let font = FontId::monospace(13.0);
     let gutter = lines.len().to_string().len();
     let mut job = LayoutJob::default();
@@ -1127,6 +1194,11 @@ mod animation_tests {
             ("a.woff2", Kind::Font),
             ("a.glb", Kind::Model),
             ("a.pem", Kind::Certificate),
+            ("a.geojson", Kind::Geo),
+            ("a.json", Kind::Json),
+            ("a.jsonc", Kind::Code),
+            ("a.WKT", Kind::Geo),
+            ("a.wkb", Kind::Geo),
             ("a.sqlite", Kind::Table),
             ("a.ndjson", Kind::Table),
             ("a.npy", Kind::Table),
@@ -1150,7 +1222,7 @@ mod animation_tests {
     fn size_limits_by_kind() {
         let (mb, gb) = (1024 * 1024, 1024 * 1024 * 1024);
         // What has to be in memory as a whole.
-        for name in ["a.png", "a.pdf", "a.svg", "a.ipynb", "a.heic", "a.ttf", "a.pem", "a.rtf"] {
+        for name in ["a.png", "a.pdf", "a.svg", "a.ipynb", "a.heic", "a.ttf", "a.pem", "a.rtf", "a.geojson", "a.wkb"] {
             assert!(!too_large(name, 80 * mb, None), "{name}");
             assert!(too_large(name, 80 * mb + 1, None), "{name}");
         }
@@ -1540,6 +1612,30 @@ fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, ca
             Ok(mesh) => Loaded::Model(Box::new(crate::model3d::ModelView::new(mesh))),
             Err(e) => Loaded::Error(e),
         },
+        Kind::Geo => match crate::geoview::load(name, &bytes) {
+            Ok(data) => {
+                // Text formats can show their source too.
+                let source = looks_textual(&bytes).then(|| {
+                    let head = &bytes[..bytes.len().min(512 * 1024)];
+                    let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(head), crate::geoview::source_language(name), syntax_theme);
+                    (lines, bg)
+                });
+                Loaded::Geo(Box::new(crate::geoview::GeoView::new(data, source)))
+            }
+            Err(e) => Loaded::Error(e),
+        },
+        Kind::Json => {
+            // Too large for a tree, or not quite JSON (comments, several values): as text.
+            let parsed = (bytes.len() <= crate::jsonview::MAX_JSON).then(|| crate::jsonview::parse(&bytes).ok()).flatten();
+            match parsed {
+                Some(root) => {
+                    let head = &bytes[..bytes.len().min(512 * 1024)];
+                    let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(head), "json", syntax_theme);
+                    Loaded::Json(Box::new(crate::jsonview::JsonView::new(root, Some((lines, bg)))))
+                }
+                None => text_preview(&bytes[..bytes.len().min(MAX_TEXT)], "json", name, syntax_theme),
+            }
+        }
         Kind::Svg => render_svg(&bytes, max_texture),
         Kind::Markdown => {
             let text = String::from_utf8_lossy(&bytes);
@@ -1887,23 +1983,17 @@ fn parse_markdown_blocks(src: &str, syntax_theme: &str) -> Vec<MdBlock> {
 fn spans_job(spans: &[Span], size: f32, theme: &Theme, base: Color32, width: f32) -> LayoutJob {
     let mut job = LayoutJob::default();
     for s in spans {
+        // Reading view: Source Sans (or Source Serif, see Settings → Fonts) for prose,
+        // Source Code Pro for code.
+        let (family, slanted) = crate::fonts::reading_font(s.bold, s.italic);
         let mut fmt = TextFormat {
-            // Reading view: Source Serif for prose, Source Code Pro for code.
-            font_id: if s.code {
-                FontId::monospace(size * 0.88)
-            } else if s.bold {
-                FontId::new(size, egui::FontFamily::Name("serif-bold".into()))
-            } else if s.italic {
-                FontId::new(size, egui::FontFamily::Name("serif-italic".into()))
-            } else {
-                FontId::new(size, egui::FontFamily::Name("serif".into()))
-            },
+            font_id: if s.code { FontId::monospace(size * 0.88) } else { FontId::new(size, family) },
             color: if s.link {
                 theme.accent
             } else {
                 base
             },
-            italics: s.italic && s.code,
+            italics: s.italic && (s.code || slanted),
             ..Default::default()
         };
         if s.code {

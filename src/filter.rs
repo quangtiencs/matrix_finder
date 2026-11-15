@@ -9,11 +9,23 @@
 //!                         `age < 7d`, `modified >= '2024-01-01'`
 //!
 //! Fields: `name`, `ext`, `size`, `type` (`'dir'`/`'file'`), `modified` (date),
-//! `age` (e.g. `3d`, `12h`, `2w`), `hidden` (`true`/`false`).
-//! Operators: `= != <> < <= > >= LIKE NOT LIKE ILIKE GLOB IN NOT IN`, `AND OR NOT`, parentheses.
+//! `age` (e.g. `3d`, `12h`, `2w`), `hidden` (`true`/`false`), and `source` (alias
+//! `content`): the lines of a file, read like grep does (binary files never match), as in
+//! `source LIKE '%todo%'`.
+//! Operators: `= != <> < <= > >= LIKE NOT LIKE ILIKE GLOB IN NOT IN`, `AND OR NOT`, parentheses,
+//! and regular expressions: `REGEXP` / `RLIKE` (ignoring case), `~` (case-sensitive), `~*`
+//! (ignoring case), `!~` and `!~*` (no match), as in `name REGEXP '^img_[0-9]+'`.
 //! `LIKE` is case-insensitive: `%` = any run of characters, `_` = exactly one.
 use crate::vfs::Entry;
+use std::io::{BufRead, Read};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};
 use std::time::{Duration, SystemTime};
+
+/// Longer lines are read in pieces of this size (a match across two pieces is missed).
+const MAX_LINE: u64 = 1024 * 1024;
+/// A compiled regular expression may take this much memory.
+const MAX_REGEX: usize = 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub enum Filter {
@@ -49,6 +61,8 @@ pub enum Expr {
     Or(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
     Cmp { field: Field, op: Op, values: Vec<Value> },
+    /// `field REGEXP 'pattern'`; `negate` for `NOT REGEXP` and `!~`.
+    Regex { field: Field, re: regex::Regex, negate: bool },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -60,6 +74,8 @@ pub enum Field {
     Modified,
     Age,
     Hidden,
+    /// The lines of the file.
+    Source,
 }
 
 impl Filter {
@@ -105,13 +121,32 @@ impl Filter {
         Ok(Filter::Substring(s.to_lowercase()))
     }
 
+    /// Whether `e` passes, from what the listing knows: `source` never matches here.
     pub fn matches(&self, e: &Entry) -> bool {
+        self.matches_at(e, None, &AtomicBool::new(false))
+    }
+
+    /// Whether `e`, the file at `path`, passes. Reading its lines (for `source`) stops
+    /// early, without a match, once `stop` is set. This reads files: not on the UI thread.
+    pub fn matches_at(&self, e: &Entry, path: Option<&Path>, stop: &AtomicBool) -> bool {
         match self {
             Filter::All => true,
             Filter::Substring(s) => e.name.to_lowercase().contains(s),
             Filter::Exts(exts) => !e.is_dir && exts.iter().any(|x| *x == e.ext),
-            Filter::Expr(x) => eval(x, e),
+            Filter::Expr(x) => eval(x, e, path, stop),
         }
+    }
+
+    /// Whether it looks into files (`source`), which has to be done in the background.
+    pub fn reads_content(&self) -> bool {
+        fn walk(x: &Expr) -> bool {
+            match x {
+                Expr::And(a, b) | Expr::Or(a, b) => walk(a) || walk(b),
+                Expr::Not(a) => walk(a),
+                Expr::Cmp { field, .. } | Expr::Regex { field, .. } => *field == Field::Source,
+            }
+        }
+        matches!(self, Filter::Expr(x) if walk(x))
     }
 
     pub fn is_all(&self) -> bool {
@@ -127,11 +162,11 @@ fn looks_like_sql(s: &str) -> bool {
         .collect();
     let has_kw = words
         .iter()
-        .any(|w| matches!(*w, "LIKE" | "ILIKE" | "GLOB" | "IN" | "AND" | "OR" | "NOT"));
+        .any(|w| matches!(*w, "LIKE" | "ILIKE" | "GLOB" | "IN" | "AND" | "OR" | "NOT" | "REGEXP" | "RLIKE"));
     let starts_field = words.first().is_some_and(|w| {
-        matches!(*w, "NAME" | "EXT" | "SIZE" | "TYPE" | "MODIFIED" | "AGE" | "HIDDEN" | "NOT")
+        matches!(*w, "NAME" | "EXT" | "SIZE" | "TYPE" | "MODIFIED" | "AGE" | "HIDDEN" | "SOURCE" | "CONTENT" | "NOT")
     });
-    starts_field && (has_kw || s.contains(['=', '<', '>']))
+    starts_field && (has_kw || s.contains(['=', '<', '>', '~']))
 }
 
 fn glob_to_like(g: &str) -> String {
@@ -253,6 +288,19 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
         } else if ch == ',' {
             out.push(Tok::Comma);
             i += 1;
+        } else if ch == '~' || (ch == '!' && c.get(i + 1) == Some(&'~')) {
+            // Regular expressions: ~ ~* !~ !~*
+            let mut sym = ch.to_string();
+            i += 1;
+            if ch == '!' {
+                sym.push('~');
+                i += 1;
+            }
+            if c.get(i) == Some(&'*') {
+                sym.push('*');
+                i += 1;
+            }
+            out.push(Tok::Sym(sym));
         } else if "=<>!".contains(ch) {
             let mut sym = ch.to_string();
             if i + 1 < c.len() && "=<>".contains(c[i + 1]) {
@@ -263,7 +311,7 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, String> {
             out.push(Tok::Sym(sym));
         } else {
             let mut w = String::new();
-            while i < c.len() && !c[i].is_whitespace() && !"()',=<>!\"".contains(c[i]) {
+            while i < c.len() && !c[i].is_whitespace() && !"()',=<>!~\"".contains(c[i]) {
                 w.push(c[i]);
                 i += 1;
             }
@@ -341,12 +389,36 @@ impl Parser {
                 "modified" | "date" | "mtime" => Field::Modified,
                 "age" => Field::Age,
                 "hidden" => Field::Hidden,
+                "source" | "content" | "contents" => Field::Source,
                 other => return Err(format!("Unknown field '{other}'")),
             },
             Some(t) => return Err(format!("Expected a field, found '{}'", t.text())),
             None => return Err("Expected a field".into()),
         };
         let negate = self.eat_kw("NOT");
+        // Regular expressions: (case-sensitive, no match).
+        let regex = match self.peek() {
+            Some(Tok::Sym(s)) if !negate && s.contains('~') => Some((s == "~" || s == "!~", s.starts_with('!'))),
+            Some(t) if t.kw("REGEXP") || t.kw("RLIKE") => Some((false, negate)),
+            _ => None,
+        };
+        if let Some((case_sensitive, no_match)) = regex {
+            self.i += 1;
+            if !matches!(field, Field::Name | Field::Ext | Field::Source) {
+                return Err("REGEXP works on name, ext and source".into());
+            }
+            let pattern = match self.next() {
+                Some(Tok::Str(s)) | Some(Tok::Word(s)) => s,
+                Some(t) => return Err(format!("Expected a pattern, found '{}'", t.text())),
+                None => return Err("Expected a pattern".into()),
+            };
+            let re = regex::RegexBuilder::new(&pattern)
+                .case_insensitive(!case_sensitive)
+                .size_limit(MAX_REGEX)
+                .build()
+                .map_err(|e| format!("Bad regular expression: {}", e.to_string().lines().last().unwrap_or_default().trim()))?;
+            return Ok(Expr::Regex { field, re, negate: no_match });
+        }
         let op = match self.next() {
             Some(Tok::Sym(s)) if !negate => match s.as_str() {
                 "=" | "==" => Op::Eq,
@@ -390,6 +462,9 @@ impl Parser {
         } else {
             vec![self.value(field)?]
         };
+        if field == Field::Source && !matches!(op, Op::Like | Op::NotLike) {
+            return Err("source works with LIKE and REGEXP, e.g. source LIKE '%todo%'".into());
+        }
         Ok(Expr::Cmp { field, op, values })
     }
 
@@ -463,11 +538,64 @@ fn cmp_num(a: f64, op: Op, b: f64) -> bool {
     }
 }
 
-fn eval(x: &Expr, e: &Entry) -> bool {
+/// Whether some line of the file at `path` passes `test`, like grep. `None` for a binary
+/// file (a NUL byte in its first 64 KB), one that cannot be read, or once `stop` is set.
+pub fn grep(path: &Path, stop: &AtomicBool, mut test: impl FnMut(&str) -> bool) -> Option<bool> {
+    let f = std::fs::File::open(path).ok()?;
+    let mut r = std::io::BufReader::with_capacity(64 * 1024, f);
+    if r.fill_buf().ok()?.contains(&0) {
+        return None;
+    }
+    let mut line = Vec::new();
+    for n in 0u64.. {
+        if n % 4096 == 0 && stop.load(AtomicOrdering::Relaxed) {
+            return None;
+        }
+        line.clear();
+        if (&mut r).take(MAX_LINE).read_until(b'\n', &mut line).ok()? == 0 {
+            break;
+        }
+        while matches!(line.last(), Some(b'\n' | b'\r')) {
+            line.pop();
+        }
+        if test(&String::from_utf8_lossy(&line)) {
+            return Some(true);
+        }
+    }
+    Some(false)
+}
+
+/// A LIKE pattern for many lines: `%text%`, the usual one, is a plain search.
+fn line_matcher(pattern: &str) -> impl Fn(&str) -> bool + '_ {
+    let inner = pattern.strip_prefix('%').and_then(|p| p.strip_suffix('%')).filter(|p| !p.contains(['%', '_', '\\']));
+    let lower = inner.map(str::to_lowercase);
+    move |line: &str| match &lower {
+        Some(text) => line.to_lowercase().contains(text.as_str()),
+        None => like(line, pattern),
+    }
+}
+
+/// `source …` for a file: whether some line passes. Folders, binary files and what
+/// cannot be read never match, with or without NOT.
+fn source_matches(e: &Entry, path: Option<&Path>, stop: &AtomicBool, test: impl FnMut(&str) -> bool, negate: bool) -> bool {
+    let Some(path) = path.filter(|_| !e.is_dir && !e.is_parent) else { return false };
+    grep(path, stop, test).is_some_and(|found| found != negate)
+}
+
+fn eval(x: &Expr, e: &Entry, path: Option<&Path>, stop: &AtomicBool) -> bool {
     match x {
-        Expr::And(a, b) => eval(a, e) && eval(b, e),
-        Expr::Or(a, b) => eval(a, e) || eval(b, e),
-        Expr::Not(a) => !eval(a, e),
+        Expr::And(a, b) => eval(a, e, path, stop) && eval(b, e, path, stop),
+        Expr::Or(a, b) => eval(a, e, path, stop) || eval(b, e, path, stop),
+        Expr::Not(a) => !eval(a, e, path, stop),
+        Expr::Regex { field, re, negate } => match field {
+            Field::Source => source_matches(e, path, stop, |l| re.is_match(l), *negate),
+            Field::Ext => re.is_match(&e.ext) != *negate,
+            _ => re.is_match(&e.name) != *negate,
+        },
+        Expr::Cmp { field: Field::Source, op, values } => {
+            let Some(Value::Str(pattern)) = values.first() else { return false };
+            source_matches(e, path, stop, line_matcher(pattern), *op == Op::NotLike)
+        }
         Expr::Cmp { field, op, values } => {
             let text: Option<String> = match field {
                 Field::Name => Some(e.name.to_lowercase()),
@@ -617,5 +745,68 @@ mod tests {
         assert!(Filter::parse("name LIKE").is_err());
         assert!(Filter::parse("size > lots").is_err());
         assert!(Filter::parse("bogus = 1").is_ok()); // not SQL-like → substring
+    }
+
+    #[test]
+    fn regular_expressions_on_names() {
+        let img = file("IMG_0042.JPG", 10);
+        let other = file("img-cat.png", 10);
+        let f = Filter::parse(r"name REGEXP '^img_\d+\.jpe?g$'").unwrap();
+        assert!(f.matches(&img) && !f.matches(&other), "REGEXP ignores case");
+        let f = Filter::parse(r"name ~ '^IMG_\d'").unwrap();
+        assert!(f.matches(&img) && !f.matches(&other));
+        let f = Filter::parse(r"name ~ '^img_\d'").unwrap();
+        assert!(!f.matches(&img), "~ minds case");
+        let f = Filter::parse(r"name ~* '^img_\d'").unwrap();
+        assert!(f.matches(&img));
+        let f = Filter::parse(r"name !~ '^IMG' AND name !~* 'zzz'").unwrap();
+        assert!(!f.matches(&img) && f.matches(&other));
+        let f = Filter::parse("name NOT REGEXP 'cat|dog' AND ext RLIKE '^(jpg|png)$'").unwrap();
+        assert!(f.matches(&img) && !f.matches(&other));
+        // Upper case stays: \D is not \d.
+        let f = Filter::parse(r"name REGEXP '^\D+$'").unwrap();
+        assert!(!f.matches(&img) && f.matches(&other));
+        assert!(!Filter::parse("name REGEXP 'x'").unwrap().reads_content());
+        for bad in ["name REGEXP '('", "size REGEXP '1'", "name ~"] {
+            assert!(Filter::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn source_reads_lines_like_grep() {
+        let dir = std::env::temp_dir().join(format!("mf-grep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, bytes: &[u8]| {
+            std::fs::write(dir.join(name), bytes).unwrap();
+            Entry::new(name.into(), false, bytes.len() as u64, Some(SystemTime::now()))
+        };
+        let notes = write("notes.md", b"# Plan\r\n- TODO: ship it\r\n- done\r\n");
+        let code = write("main.rs", b"fn main() {\n    let x = 42;\n}\n");
+        let blob = write("blob.bin", b"\x00\x01TODO\n");
+        let sub = Entry::new("sub".into(), true, 0, None);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let stop = AtomicBool::new(false);
+        let at = |f: &Filter, e: &Entry| f.matches_at(e, Some(&dir.join(&e.name)), &stop);
+
+        let f = Filter::parse("source LIKE '%todo%'").unwrap();
+        assert!(f.reads_content());
+        assert!(at(&f, &notes) && !at(&f, &code) && !at(&f, &blob) && !at(&f, &sub));
+        // Without a path (the listing alone) it never matches.
+        assert!(!f.matches(&notes));
+        // A pattern is held against each line, as grep does: whole lines, \r\n trimmed.
+        assert!(at(&Filter::parse("source LIKE '- done'").unwrap(), &notes));
+        assert!(at(&Filter::parse("content LIKE 'fn %'").unwrap(), &code));
+        assert!(!at(&Filter::parse("source LIKE 'let%'").unwrap(), &code));
+        let f = Filter::parse("source NOT LIKE '%todo%'").unwrap();
+        assert!(!at(&f, &notes) && at(&f, &code) && !at(&f, &blob), "binary files never match");
+        let f = Filter::parse(r"source ~ 'let \w+ = \d+;' AND ext = 'rs'").unwrap();
+        assert!(at(&f, &code) && !at(&f, &notes));
+        let f = Filter::parse("source REGEXP '^- (todo|fixme)' OR name LIKE 'main%'").unwrap();
+        assert!(at(&f, &notes) && at(&f, &code));
+        assert!(Filter::parse("source = 'x'").is_err());
+        assert!(Filter::parse("source > 3").is_err());
+        stop.store(true, AtomicOrdering::Relaxed);
+        assert!(!at(&Filter::parse("source LIKE '%todo%'").unwrap(), &notes), "stopped");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

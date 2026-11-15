@@ -193,6 +193,117 @@ fn write_sqlite(path: &Path, rows: &[Order]) {
     }
 }
 
+/// A typical API answer, to explore as a tree (written out, to keep its keys in order).
+/// Made-up tasks: no people, places or businesses.
+fn write_api_json(path: &Path) {
+    let tasks = [
+        (1, "Write the release notes", false, 2, r#""docs", "release""#, 4, 1),
+        (2, "Fix the flaky archive test", true, 1, r#""tests""#, 2, 2),
+        (3, "Update the screenshots", false, 3, r#""docs", "images""#, 6, 0),
+    ];
+    let data: Vec<String> = tasks
+        .iter()
+        .map(|(id, title, done, priority, labels, total, checked)| {
+            format!("    {{\n      \"id\": {id},\n      \"title\": \"{title}\",\n      \"done\": {done},\n      \"priority\": {priority},\n      \"labels\": [{labels}],\n      \"checklist\": {{ \"total\": {total}, \"done\": {checked} }}\n    }}")
+        })
+        .collect();
+    let doc = format!(
+        "{{\n  \"status\": \"ok\",\n  \"page\": {{ \"number\": 1, \"size\": 3, \"total\": 42 }},\n  \"data\": [\n{}\n  ],\n  \"next\": \"https://api.example.com/tasks?page=2\",\n  \"error\": null\n}}\n",
+        data.join(",\n")
+    );
+    std::fs::write(path, doc).unwrap();
+}
+
+/// Hourly readings of a few weather stations.
+fn write_weather_h5(path: &Path) {
+    let (hours, stations) = (24usize, 5usize);
+    let mut r = Rng(7);
+    let temp: Vec<f32> = (0..hours * stations).map(|i| {
+        let (h, s) = (i / stations, i % stations);
+        let day = (std::f32::consts::TAU * (h as f32 - 9.0) / 24.0).sin();
+        ((24.0 + s as f32 * 1.5 + 5.0 * day + (r.next() % 100) as f32 / 100.0) * 10.0).round() / 10.0
+    }).collect();
+    let humidity: Vec<f32> = temp.iter().map(|t| ((120.0 - t * 1.6) * 10.0).round() / 10.0).collect();
+    let mut b = hdf5_pure::FileBuilder::new();
+    b.create_dataset("temperature_c").with_f32_data(&temp).with_shape(&[hours as u64, stations as u64]);
+    b.create_dataset("humidity_pct").with_f32_data(&humidity).with_shape(&[hours as u64, stations as u64]);
+    b.create_dataset("station_id").with_i32_data(&[48820, 48855, 48900, 48845, 48877]).with_shape(&[stations as u64]);
+    b.create_dataset("hour").with_i32_data(&(0..hours as i32).collect::<Vec<_>>()).with_shape(&[hours as u64]);
+    std::fs::write(path, b.finish().unwrap()).unwrap();
+}
+
+/// The header of a small transformer's weights, with zeros for the numbers.
+fn write_safetensors(path: &Path) {
+    let (vocab, dim, ffn, layers) = (4096u64, 64u64, 172u64, 4);
+    let mut tensors: Vec<(String, &str, Vec<u64>)> = vec![("model.embed_tokens.weight".into(), "BF16", vec![vocab, dim])];
+    for l in 0..layers {
+        for p in ["q_proj", "k_proj", "v_proj", "o_proj"] {
+            tensors.push((format!("model.layers.{l}.self_attn.{p}.weight"), "BF16", vec![dim, dim]));
+        }
+        tensors.push((format!("model.layers.{l}.mlp.gate_proj.weight"), "BF16", vec![ffn, dim]));
+        tensors.push((format!("model.layers.{l}.mlp.up_proj.weight"), "BF16", vec![ffn, dim]));
+        tensors.push((format!("model.layers.{l}.mlp.down_proj.weight"), "BF16", vec![dim, ffn]));
+        tensors.push((format!("model.layers.{l}.input_layernorm.weight"), "F32", vec![dim]));
+        tensors.push((format!("model.layers.{l}.post_attention_layernorm.weight"), "F32", vec![dim]));
+    }
+    tensors.push(("model.norm.weight".into(), "F32", vec![dim]));
+    tensors.push(("lm_head.weight".into(), "BF16", vec![vocab, dim]));
+    let mut header = serde_json::Map::new();
+    header.insert("__metadata__".into(), serde_json::json!({"format": "pt", "model": "tiny-llama-demo"}));
+    let mut at = 0u64;
+    for (name, dtype, shape) in &tensors {
+        let size = shape.iter().product::<u64>() * if *dtype == "F32" { 4 } else { 2 };
+        header.insert(name.clone(), serde_json::json!({"dtype": dtype, "shape": shape, "data_offsets": [at, at + size]}));
+        at += size;
+    }
+    let header = serde_json::to_string(&header).unwrap();
+    let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+    bytes.extend(header.as_bytes());
+    bytes.resize(bytes.len() + at as usize, 0);
+    std::fs::write(path, bytes).unwrap();
+}
+
+/// An odd polygon for the geometry view: a Koch snowflake with a star-shaped hole,
+/// in longitude and latitude (around Hoan Kiem Lake, Hanoi).
+fn write_snowflake_geojson(path: &Path) {
+    let (cx, cy, r) = (105.8524f64, 21.0287f64, 0.01f64);
+    // A triangle, counter-clockwise, each side then cut in a Koch bump four times.
+    let mut ring: Vec<[f64; 2]> = (0..3).map(|i| {
+        let a = std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * i as f64 / 3.0;
+        [cx + r * a.cos(), cy + r * a.sin()]
+    }).collect();
+    for _ in 0..4 {
+        let mut next = Vec::with_capacity(ring.len() * 4);
+        for i in 0..ring.len() {
+            let (a, b) = (ring[i], ring[(i + 1) % ring.len()]);
+            let d = [(b[0] - a[0]) / 3.0, (b[1] - a[1]) / 3.0];
+            let p1 = [a[0] + d[0], a[1] + d[1]];
+            // The bump points outwards: to the right of a counter-clockwise edge.
+            let (c, s) = ((-60f64).to_radians().cos(), (-60f64).to_radians().sin());
+            let peak = [p1[0] + d[0] * c - d[1] * s, p1[1] + d[0] * s + d[1] * c];
+            next.extend([a, p1, peak, [a[0] + 2.0 * d[0], a[1] + 2.0 * d[1]]]);
+        }
+        ring = next;
+    }
+    ring.push(ring[0]);
+    let mut star: Vec<[f64; 2]> = (0..10).map(|i| {
+        let a = std::f64::consts::FRAC_PI_2 - std::f64::consts::TAU * i as f64 / 10.0;
+        let k = if i % 2 == 0 { 0.42 } else { 0.17 };
+        [cx + r * k * a.cos(), cy + r * k * a.sin()]
+    }).collect();
+    star.push(star[0]);
+    let round = |v: &[[f64; 2]]| v.iter().map(|p| [(p[0] * 1e6).round() / 1e6, (p[1] * 1e6).round() / 1e6]).collect::<Vec<_>>();
+    let doc = serde_json::json!({
+        "type": "FeatureCollection",
+        "features": [{
+            "type": "Feature",
+            "properties": {"name": "Koch snowflake with a star-shaped hole"},
+            "geometry": {"type": "Polygon", "coordinates": [round(&ring), round(&star)]}
+        }]
+    });
+    std::fs::write(path, serde_json::to_string(&doc).unwrap()).unwrap();
+}
+
 /// A smooth ring, to show off the 3D view.
 fn write_torus_stl(path: &Path) {
     let (n, m) = (96, 48);
@@ -506,6 +617,10 @@ fn build_demo() -> Demo {
     touch(&formats.join("Source Sans 3.otf"), include_bytes!("../assets/fonts/SourceSans3-Regular.otf"));
     touch(&formats.join("server.pem"), include_bytes!("../assets/testdata/test-cert.pem"));
     write_torus_stl(&formats.join("torus.stl"));
+    write_snowflake_geojson(&formats.join("snowflake.geojson"));
+    write_api_json(&formats.join("api-response.json"));
+    write_weather_h5(&formats.join("weather.h5"));
+    write_safetensors(&formats.join("tiny-llm.safetensors"));
     write_sqlite(&formats.join("shop.sqlite"), &rows[..600]);
     write_epub(&formats.join("A Short Story.epub"));
     let jsonl: String = rows[..200].iter().map(|o| format!("{}\n", serde_json::json!({"order": o.id, "city": o.city, "product": o.product, "qty": o.qty, "paid": o.paid}))).collect();
@@ -1322,6 +1437,10 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         ("quickview-notebook", d.demo.join("papers"), "analysis.ipynb"),
         ("quickview-font", d.demo.join("formats"), "Source Sans 3.otf"),
         ("quickview-model", d.demo.join("formats"), "torus.stl"),
+        ("quickview-geometry", d.demo.join("formats"), "snowflake.geojson"),
+        ("quickview-json", d.demo.join("formats"), "api-response.json"),
+        ("quickview-hdf5", d.demo.join("formats"), "weather.h5"),
+        ("quickview-safetensors", d.demo.join("formats"), "tiny-llm.safetensors"),
         ("quickview-sqlite", d.demo.join("formats"), "shop.sqlite"),
         ("quickview-certificate", d.demo.join("formats"), "server.pem"),
         ("quickview-epub", d.demo.join("formats"), "A Short Story.epub"),
@@ -1334,11 +1453,26 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         if name.starts_with("table") || name.starts_with("quickview-") && name != "quickview-pdf" && name != "quickview-notebook" {
             cfg.quick_view_frac = 0.6;
         }
+        if name == "quickview-safetensors" {
+            // Room for every column, and for the file names.
+            cfg.show_sidebar = false;
+            cfg.quick_view_frac = 0.68;
+        }
         let mut h = app_harness(&cfg, gnome);
         h.state_mut().shot_pane(0, &dir, Some(file));
         settle(&mut h, 10);
         std::thread::sleep(Duration::from_millis(800));
         settle(&mut h, 10);
+        if name == "quickview-hdf5" {
+            // A dataset, not just the list of them.
+            h.get_all_by_label("temperature_c").next().expect("its tab").click();
+            settle(&mut h, 3);
+        }
+        if name == "quickview-json" {
+            // The title of the first task, as if clicked: its path shows above the tree.
+            h.state_mut().quick.as_mut().and_then(|q| q.json()).expect("a JSON tree").select(&[2, 0, 1]);
+            settle(&mut h, 3);
+        }
         if name == "table-parquet" {
             type_into(&mut h, egui::Rect::from_min_max(pos2(W * 0.6, 60.0), pos2(W, 200.0)), "Huế");
             settle(&mut h, 6);
@@ -1935,6 +2069,60 @@ fn type_to_search_in_a_file_window() {
     assert!(!h.state().palette.open);
 }
 
+/// `source LIKE` in the search box: the files are read in the background, in this
+/// folder while typing and in every subfolder with ↓ Enter; and regular expressions on names.
+#[test]
+#[ignore]
+fn search_file_contents_like_grep() {
+    let d = demo_env();
+    let dir = d.demo.join("grep");
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("a.txt"), "hello\nTODO: write tests\n").unwrap();
+    std::fs::write(dir.join("b.md"), "nothing to do here\n").unwrap();
+    std::fs::write(dir.join("sub/c.rs"), "fn main() {} // todo later\n").unwrap();
+    std::fs::write(dir.join("blob.dat"), b"\x00\x00TODO\n").unwrap();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &dir, None);
+    h.state_mut().active = 0;
+    settle(&mut h, 3);
+    let names = |app: &App| -> Vec<String> {
+        let tab = app.panes[0].tab();
+        let mut v: Vec<String> = tab.view.iter().map(|&i| tab.entries[i].name.clone()).filter(|n| n != "..").collect();
+        v.sort();
+        v
+    };
+    let done = |h: &mut Harness<'static, App>| wait_until(h, 5.0, |a| !a.panes[0].tab().is_scanning() && !a.panes[0].tab().is_loading());
+
+    // While typing: this folder only, binary files left out.
+    push(&mut h, Event::Text("source LIKE '%todo%'".into()));
+    settle(&mut h, 2);
+    done(&mut h);
+    assert_eq!(names(h.state()), ["a.txt"]);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    done(&mut h);
+    assert_eq!(names(h.state()), ["a.txt"], "Enter keeps it");
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert_eq!(names(h.state()), ["a.txt", "b.md", "blob.dat", "sub"]);
+
+    // Every subfolder, with a regular expression.
+    push(&mut h, Event::Text("source ~* '^(todo|fn)'".into()));
+    settle(&mut h, 2);
+    key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    done(&mut h);
+    assert!(h.state().panes[0].tab().search.is_some());
+    assert_eq!(names(h.state()), ["a.txt", Path::new("sub").join("c.rs").to_string_lossy().as_ref()]);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    done(&mut h);
+
+    // Names by regular expression, while typing.
+    push(&mut h, Event::Text(r"name ~ '^[ab]\.(txt|md)$'".into()));
+    settle(&mut h, 3);
+    assert_eq!(names(h.state()), ["a.txt", "b.md"]);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Windows and tabs by keyboard, numbered windows, and keys a terminal keeps. The keys
 /// here are bound in the settings, as the defaults differ by system.
 #[test]
@@ -2400,7 +2588,7 @@ fn too_large_files_are_not_opened() {
     let d = demo_env();
     let dir = d.demo.join("too-large");
     std::fs::create_dir_all(&dir).unwrap();
-    let names = ["a.png", "a.pdf", "a.csv", "a.parquet", "a.sqlite", "a.h5", "a.xlsx", "a.mp4", "a.stl", "a.heic", "a.nef", "a.epub", "a.txt", "a.bin", "a.zip", "a.tar.gz"];
+    let names = ["a.png", "a.pdf", "a.csv", "a.parquet", "a.sqlite", "a.h5", "a.xlsx", "a.mp4", "a.stl", "a.geojson", "a.heic", "a.nef", "a.epub", "a.txt", "a.bin", "a.zip", "a.tar.gz"];
     let size = 20u64 * 1024 * 1024 * 1024;
     for name in names {
         let path = dir.join(name);
@@ -2428,6 +2616,198 @@ fn too_large_files_are_not_opened() {
     for name in names {
         std::fs::remove_file(dir.join(name)).unwrap();
     }
+}
+
+/// Checking for updates: GitHub's answer (made up here; tests never go online) shows a
+/// newer version with its notes, can be skipped, and the check at start keeps quiet about
+/// a skipped version. Nothing is installed.
+#[test]
+#[ignore]
+fn update_check_offers_a_newer_version() {
+    let d = demo_env();
+    let release = |v: &str| {
+        format!(
+            r#"{{"tag_name": "v{v}", "name": "Matrix Finder {v}", "html_url": "https://github.com/quangtiencs/matrix_finder/releases/tag/v{v}", "published_at": "2026-12-01T08:00:00Z", "body": "- Faster previews\n- Fewer bugs", "assets": [{{"name": "MatrixFinder-{v}-macos-universal.dmg", "size": 39000000, "browser_download_url": "https://github.com/quangtiencs/matrix_finder/releases/download/v{v}/MatrixFinder-{v}-macos-universal.dmg"}}]}}"#
+        )
+    };
+    let answer = |a: crate::util::Res<String>| *crate::update::FAKE_ANSWER.lock().unwrap() = Some(a);
+    let cfg = settings("Breeze Light", &d);
+    assert!(!cfg.check_updates, "off by default");
+    let mut h = app_harness(&cfg, "gnome");
+    settle(&mut h, 2);
+    assert!(h.state().update_check.is_none(), "nothing is checked at start");
+
+    // Asked for: a newer version, with its notes.
+    answer(Ok(release("99.1.0")));
+    h.state_mut().check_for_updates(true);
+    wait_until(&mut h, 5.0, |a| a.update_found.is_some());
+    settle(&mut h, 3);
+    assert!(h.query_by_label("Matrix Finder 99.1.0").is_some());
+    assert!(h.query_by_label("Faster previews").is_some());
+    assert!(h.query_by_label(&t("Open release page")).is_some());
+    if let Ok(out) = std::env::var("MF_SHOT_DIR") {
+        h.render().unwrap().save(format!("{out}/update.png")).unwrap();
+    }
+    h.get_by_label(&t("Skip this version")).click();
+    settle(&mut h, 3);
+    assert!(h.state().update_found.is_none());
+    assert_eq!(h.state().cfg.update_skip, "v99.1.0");
+    assert!(h.state().cfg.update_checked > 0);
+
+    // At start, a skipped version is not offered again; a newer one is.
+    h.state_mut().check_for_updates(false);
+    wait_until(&mut h, 5.0, |a| a.update_check.is_none());
+    settle(&mut h, 2);
+    assert!(h.state().update_found.is_none());
+    answer(Ok(release("99.2.0")));
+    h.state_mut().check_for_updates(false);
+    wait_until(&mut h, 5.0, |a| a.update_found.is_some());
+    h.get_by_label(&t("Later")).click();
+    settle(&mut h, 2);
+    assert!(h.state().update_found.is_none());
+    assert_eq!(h.state().cfg.update_skip, "v99.1.0", "Later skips nothing");
+
+    // Up to date, or offline: told only when asked.
+    answer(Ok(release(env!("CARGO_PKG_VERSION"))));
+    h.state_mut().check_for_updates(true);
+    wait_until(&mut h, 5.0, |a| a.update_check.is_none());
+    assert!(h.state().toasts.iter().any(|x| x.text.starts_with(&t("Matrix Finder is up to date"))));
+    assert!(!h.state().toasts.iter().any(|x| x.text == t("Checking for updates…")), "replaced by the answer");
+    answer(Err("Could not reach GitHub: offline".into()));
+    h.state_mut().toasts.clear();
+    h.state_mut().check_for_updates(false);
+    wait_until(&mut h, 5.0, |a| a.update_check.is_none());
+    assert!(h.state().toasts.is_empty(), "the check at start stays quiet");
+    h.state_mut().check_for_updates(true);
+    wait_until(&mut h, 5.0, |a| a.update_check.is_none());
+    assert!(h.state().toasts.iter().any(|x| x.error && x.text.contains("offline")));
+    *crate::update::FAKE_ANSWER.lock().unwrap() = None;
+}
+
+/// A long file name is cut to fit the title row of Quick View: it never runs under the
+/// buttons at the end of the row.
+#[test]
+#[ignore]
+fn long_names_leave_room_for_the_buttons() {
+    let d = demo_env();
+    let dir = d.demo.join("long-names");
+    std::fs::create_dir_all(&dir).unwrap();
+    let long = "Báo cáo tổng hợp số liệu khách hàng theo từng tỉnh thành và từng quý của năm tài chính 2026 - bản cuối cùng đã duyệt";
+    let files: [(&str, Vec<u8>, &str); 5] = [
+        ("json", br#"{"a": [1, 2, {"b": null}]}"#.to_vec(), "Expand all"),
+        ("csv", b"a,b\n1,2\n".to_vec(), "Source"),
+        ("rs", b"fn main() {}\n".to_vec(), "Wrap"),
+        ("png", photo(64, 48, 3, image::ImageFormat::Png), "Fit"),
+        ("stl", b"solid t\nfacet normal 0 0 1\nouter loop\nvertex 0 0 0\nvertex 1 0 0\nvertex 0 1 0\nendloop\nendfacet\nendsolid t\n".to_vec(), "Reset view"),
+    ];
+    for (ext, bytes, _) in &files {
+        std::fs::write(dir.join(format!("{long}.{ext}")), bytes).unwrap();
+    }
+    for frac in [0.0, 0.6] {
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.quick_view = true;
+    if frac > 0.0 {
+        cfg.quick_view_frac = frac;
+    }
+    let mut h = app_harness(&cfg, "gnome");
+    for (ext, _, button) in &files {
+        let name = format!("{long}.{ext}");
+        h.state_mut().shot_pane(0, &dir, Some(&name));
+        wait_until(&mut h, 5.0, |a| a.quick.as_ref().is_some_and(|q| q.name == name && q.is_ready()));
+        settle(&mut h, 3);
+        let button = h.get_by_label(&t(button)).bounding_box().unwrap();
+        // The title, not the file's row in the list or the status bar.
+        let title = h.get_all_by_label(&name).filter_map(|n| n.bounding_box()).find(|r| r.y1 < 150.0 && r.x0 > f64::from(W) * 0.35).unwrap_or_else(|| panic!("no title for {ext}"));
+        let beside = title.y0 < button.y1 && title.y1 > button.y0;
+        assert!(!beside || title.x1 <= button.x0, "{ext}: the name ({:.0}…{:.0}) runs under {:.0}", title.x0, title.x1, button.x0);
+        assert!(title.x1 - title.x0 > 100.0, "{ext}: some of the name shows ({:.0}…{:.0})", title.x0, title.x1);
+        if let Ok(out) = std::env::var("MF_SHOT_DIR") {
+            h.render().unwrap().save(format!("{out}/long-{ext}-{frac}.png")).unwrap();
+        }
+    }
+    }
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// JSON in Quick View: a tree whose rows give their path, in the style chosen.
+#[test]
+#[ignore]
+fn json_tree_copies_paths() {
+    let d = demo_env();
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.quick_view = true;
+    cfg.quick_view_frac = 0.6;
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().shot_pane(0, &d.demo.join("formats"), Some("api-response.json"));
+    wait_until(&mut h, 5.0, |a| a.quick.as_ref().is_some_and(|q| q.name == "api-response.json" && q.is_ready()));
+    let status = h.state().quick.as_ref().unwrap().describe();
+    assert!(status.starts_with("json values=41 depth=4"), "{status}");
+    settle(&mut h, 3);
+    let copied = |h: &mut Harness<'static, App>| {
+        h.get_by_label(&t("Copy path")).click();
+        h.step();
+        h.output().platform_output.commands.iter().find_map(|c| match c {
+            egui::OutputCommand::CopyText(s) => Some(s.clone()),
+            _ => None,
+        })
+    };
+    h.state_mut().quick.as_mut().and_then(|q| q.json()).unwrap().select(&[2, 0, 1]);
+    settle(&mut h, 2);
+    assert_eq!(copied(&mut h).as_deref(), Some("j['data'][0]['title']"));
+    // Another style, kept for the next file.
+    h.get_by_label("jq").click();
+    settle(&mut h, 2);
+    assert_eq!(copied(&mut h).as_deref(), Some(".data[0].title"));
+    h.get_by_label("JSONPath").click();
+    settle(&mut h, 2);
+    assert_eq!(copied(&mut h).as_deref(), Some("$.data[0].title"));
+    h.get_by_label("Python").click();
+    settle(&mut h, 2);
+    // Folders open and close; the source is there too.
+    h.get_by_label(&t("Collapse all")).click();
+    settle(&mut h, 2);
+    assert!(h.state().quick.as_ref().unwrap().describe().ends_with("rows=6"), "{}", h.state().quick.as_ref().unwrap().describe());
+    h.get_by_label(&t("Source")).click();
+    settle(&mut h, 2);
+    assert!(h.query_by_label(&t("Copy path")).is_none());
+    // Not JSON after all: shown as text.
+    std::fs::write(d.demo.join("formats/broken.json"), "{\"a\": 1, // a comment\n}").unwrap();
+    h.state_mut().shot_pane(0, &d.demo.join("formats"), Some("broken.json"));
+    wait_until(&mut h, 5.0, |a| a.quick.as_ref().is_some_and(|q| q.name == "broken.json" && q.is_ready()));
+    assert!(h.state().quick.as_ref().unwrap().describe().starts_with("code"));
+}
+
+/// GeoJSON in Quick View: the shapes are drawn, moved and zoomed, and the source shown.
+#[test]
+#[ignore]
+fn geometry_preview_moves_and_shows_its_source() {
+    let d = demo_env();
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.quick_view = true;
+    cfg.quick_view_frac = 0.6;
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().shot_pane(0, &d.demo.join("formats"), Some("snowflake.geojson"));
+    wait_until(&mut h, 5.0, |a| a.quick.as_ref().is_some_and(|q| q.name == "snowflake.geojson" && q.is_ready()));
+    let status = h.state().quick.as_ref().unwrap().describe();
+    assert!(status.starts_with(r#"geo GeoJSON [("Polygon", 1)] features=Some(1) vertices=780"#), "{status}");
+    settle(&mut h, 3);
+    let before = h.render().unwrap();
+    let middle = pos2(W * 0.7, H * 0.55);
+    drag(&mut h, middle, middle + egui::vec2(120.0, 40.0));
+    move_to(&mut h, middle);
+    push(&mut h, Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 240.0), modifiers: Modifiers::NONE });
+    settle(&mut h, 4);
+    let after = h.render().unwrap();
+    assert!(before.as_raw() != after.as_raw(), "dragging and zooming changed the view");
+    h.get_by_label(&t("Reset view")).click();
+    settle(&mut h, 4);
+    // The source, then back.
+    h.get_by_label(&t("Source")).click();
+    settle(&mut h, 3);
+    assert!(h.query_by_label(&t("Reset view")).is_none());
+    h.get_by_label(&t("Source")).click();
+    settle(&mut h, 3);
+    assert!(h.query_by_label(&t("Reset view")).is_some());
 }
 
 /// A huge image at full size: only the checkerboard squares in view get drawn.

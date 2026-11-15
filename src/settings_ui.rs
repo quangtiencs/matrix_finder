@@ -704,6 +704,39 @@ impl App {
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.confirm_dnd, &t("Ask before drag & drop copies or moves"), "");
                 });
+                settings_section(ui, th, &t("Updates"), "");
+                card(ui, th, |ui| {
+                    changed |= toggle_row(
+                        ui,
+                        th,
+                        &mut self.cfg.check_updates,
+                        &t("Check for updates when Matrix Finder starts"),
+                        &t("At most once a day. Only GitHub is asked for the latest release; nothing about you or your files is sent. Installing stays up to you."),
+                    );
+                    row_line(ui, th);
+                    ui.horizontal(|ui| {
+                        let checking = self.update_check.is_some();
+                        if ui.add_enabled(!checking, egui::Button::new(t("Check now"))).clicked() {
+                            self.check_for_updates(true);
+                        }
+                        let last = match self.cfg.update_checked {
+                            0 => t("Never checked"),
+                            secs => chrono::DateTime::from_timestamp(secs, 0)
+                                .map(|d| format!("{} {}", t("Last checked"), d.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")))
+                                .unwrap_or_default(),
+                        };
+                        ui.label(RichText::new(format!("{} {} · {last}", t("Version"), env!("CARGO_PKG_VERSION"))).size(11.5).color(th.weak));
+                    });
+                    if !self.cfg.update_skip.is_empty() {
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new(format!("{} {}", t("Skipped version:"), self.cfg.update_skip)).size(11.5).color(th.weak));
+                            if ui.small_button(t("Offer it again")).clicked() {
+                                self.cfg.update_skip.clear();
+                                changed = true;
+                            }
+                        });
+                    }
+                });
             }
             SettingsPage::Bookmarks => changed |= self.bookmark_settings(ui, th),
             SettingsPage::QuickFilters => changed |= self.quick_filter_settings(ui, th),
@@ -798,6 +831,21 @@ impl App {
                 ui.label(RichText::new("The quick brown fox jumps over the lazy dog").font(bold(15.0)).color(th.strong()));
                 ui.label(RichText::new("Thư mục tiếng Việt · Ăă Đđ Ơơ Ưư · 0123456789").color(th.text));
                 ui.label(RichText::new("report-final.pdf · 2.4 MB · 2026-11-04 16:30").size(12.0).color(th.weak));
+            });
+            ui.add_space(4.0);
+        });
+        settings_section(ui, th, &t("Reading"), &t("Markdown, the text of notebooks, EPUB and other documents in Quick View."));
+        card(ui, th, |ui| {
+            ui.add_space(4.0);
+            for (font, label) in [(crate::config::ReadingFont::Sans, "Source Sans 3"), (crate::config::ReadingFont::Serif, "Source Serif 4")] {
+                changed |= ui.radio_value(&mut self.cfg.reading_font, font, label).changed();
+            }
+            ui.add_space(4.0);
+            crate::fonts::set_reading_serif(self.cfg.reading_font == crate::config::ReadingFont::Serif);
+            let sample = crate::preview::parse_markdown("**Quick View** reads *Markdown* like this: plain words, `code` and [links](https://example.com).\n\nThư mục tiếng Việt · Ăă Đđ Ơơ Ưư", th.syntax);
+            egui::Frame::new().fill(th.bg).stroke(Stroke::new(1.0_f32, th.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                crate::preview::markdown_ui(ui, &sample, th);
             });
             ui.add_space(4.0);
         });
