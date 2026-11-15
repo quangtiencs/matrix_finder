@@ -534,12 +534,12 @@ source ~ 'fn \w+\(' AND ext = 'rs'
 
 ## 🛠️ Build from source
 
-### Install script (macOS, Ubuntu/Debian, Fedora)
+### Install script (macOS, Debian, Ubuntu, Kali, Fedora)
 
 `scripts/install.sh` builds Matrix Finder and installs it. It installs the packages and Rust it needs (it asks first), builds, and installs:
 
 - **macOS**: `Matrix Finder.app` in `/Applications` (or `~/Applications`) and a `matrix_finder` command.
-- **Linux**: the `matrix_finder` command plus a menu entry and icons in `~/.local` (`--system` installs for all users under `/usr/local`).
+- **Linux**: the `matrix_finder` command plus a menu entry and icons in `~/.local` (`--system` installs for all users under `/usr/local`). Debian-based systems (Debian, Ubuntu, Kali, Mint, Pop!_OS, Raspberry Pi OS…) install packages with `apt`, Fedora-based ones with `dnf`.
 
 Install the newest release:
 
@@ -547,7 +547,7 @@ Install the newest release:
 curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash
 ```
 
-Options go after `bash -s --` (e.g. `| bash -s -- --version 0.3.0`). From a checkout of this repository:
+Options go after `bash -s --` (e.g. `| bash -s -- --version 0.3.0`). `| sh` and `sh install.sh` work too: where `sh` is not bash (dash on Debian, Ubuntu and Kali), the script runs itself again in bash. From a checkout of this repository:
 
 ```bash
 scripts/install.sh                     # build and install this checkout
