@@ -170,8 +170,14 @@ pub struct TermSession {
     selecting: bool,
     /// Mouse button held while reporting to the program.
     report_button: Option<u8>,
+    /// Where that button went down (pointer and cell), and whether the pointer has
+    /// since moved far enough to be a drag.
+    report_press: Option<(Pos2, (usize, usize))>,
+    report_dragging: bool,
     last_report_cell: Option<(usize, usize)>,
     skip_text: bool,
+    /// Whether the program was last told the terminal has focus (focus reports, mode 1004).
+    reported_focus: Option<bool>,
     /// Link under the right-click menu.
     menu_link: Option<Arc<str>>,
     pub want_focus: bool,
@@ -234,7 +240,7 @@ impl TermSession {
         let dirty = Arc::new(AtomicBool::new(true));
         let output = Arc::new(AtomicBool::new(false));
         let listener = Listener { tx, ctx: ctx.clone(), dirty: dirty.clone(), output: output.clone() };
-        let config = Config { scrolling_history: scrollback.clamp(100, 200_000), kitty_keyboard: false, ..Default::default() };
+        let config = Config { scrolling_history: scrollback.clamp(100, 200_000), kitty_keyboard: true, ..Default::default() };
         let term = Arc::new(FairMutex::new(Term::new(config, &Size { cols: 80, lines: 24 }, listener.clone())));
         let ev = EventLoop::new(term.clone(), listener, pty, true, false).map_err(|e| e.to_string())?;
         let sender = ev.channel();
@@ -268,8 +274,11 @@ impl TermSession {
             scroll_acc: 0.0,
             selecting: false,
             report_button: None,
+            report_press: None,
+            report_dragging: false,
             last_report_cell: None,
             skip_text: false,
+            reported_focus: None,
             menu_link: None,
             want_focus: true,
             theme: None,
@@ -398,6 +407,12 @@ impl TermSession {
 
     /// The shell waits at its prompt: it runs, and no other program has the terminal
     /// (none in the foreground, which only Unix can tell, and no full-screen one).
+    /// The modes the program has set (for tests).
+    #[cfg(test)]
+    pub fn mode(&self) -> TermMode {
+        *self.term.lock().mode()
+    }
+
     pub fn is_idle(&self) -> bool {
         self.exited.is_none() && self.foreground_pid().is_none() && !self.term.lock().mode().contains(TermMode::ALT_SCREEN)
     }
@@ -584,6 +599,7 @@ impl TermSession {
                 m.set_focus_lock_filter(self.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
             });
         }
+        self.report_focus(focused && ui.input(|i| i.focused));
 
         // Cell metrics and grid size.
         let size = o.font_size.clamp(6.0, 48.0);
@@ -943,10 +959,28 @@ impl TermSession {
 
     // ------------------------------------------------------------ input
 
+    /// Tell a program that asked (mode 1004) when the terminal gains or loses focus:
+    /// the pane being active and the window being in front.
+    fn report_focus(&mut self, has: bool) {
+        if !self.term.lock().mode().contains(TermMode::FOCUS_IN_OUT) || self.exited.is_some() {
+            self.reported_focus = None;
+            return;
+        }
+        // Programs take the terminal as focused when they turn the reports on.
+        let before = self.reported_focus.unwrap_or(true);
+        if before != has {
+            self.write(if has { &b"\x1b[I"[..] } else { &b"\x1b[O"[..] });
+        }
+        self.reported_focus = Some(has);
+    }
+
     fn keyboard(&mut self, ui: &egui::Ui) {
         let (events, mods) = ui.input(|i| (i.events.clone(), i.modifiers));
         let mode = *self.term.lock().mode();
         let mac = cfg!(target_os = "macos");
+        let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
+        // Ctrl+letter, in the form the program asked for.
+        let ctrl = |letter: u8, legacy: u8| -> Vec<u8> { if kitty { format!("\x1b[{};5u", letter.to_ascii_lowercase()).into_bytes() } else { vec![legacy] } };
         let mut typed = false;
         for e in events {
             match e {
@@ -973,7 +1007,7 @@ impl TermSession {
                         }
                         None if mac => {}
                         None => {
-                            self.write(&b"\x03"[..]);
+                            self.write(ctrl(b'c', 0x03));
                             typed = true;
                         }
                     }
@@ -984,7 +1018,7 @@ impl TermSession {
                             ui.ctx().copy_text(s);
                         }
                     } else {
-                        self.write(&b"\x18"[..]);
+                        self.write(ctrl(b'x', 0x18));
                         typed = true;
                     }
                 }
@@ -994,11 +1028,19 @@ impl TermSession {
                     if mac || mods.shift || !mode.contains(TermMode::ALT_SCREEN) {
                         self.paste(&s);
                     } else {
-                        self.write(&b"\x16"[..]);
+                        self.write(ctrl(b'v', 0x16));
                         typed = true;
                     }
                 }
-                egui::Event::Key { key, pressed: true, modifiers: m, .. } => {
+                egui::Event::Key { key, pressed: false, modifiers: m, .. } => {
+                    // Key releases only for programs that asked for them.
+                    if kitty && !(mac && m.mac_cmd) {
+                        if let Some((bytes, _)) = kitty_key_bytes(key, m, mode, mac, KeyEvent::Release) {
+                            self.write(bytes);
+                        }
+                    }
+                }
+                egui::Event::Key { key, pressed: true, repeat, modifiers: m, .. } => {
                     // Scrollback navigation stays local unless a full-screen app runs.
                     if m.shift && !m.ctrl && !mode.contains(TermMode::ALT_SCREEN) {
                         let s = match key {
@@ -1016,10 +1058,14 @@ impl TermSession {
                     if mac && m.mac_cmd {
                         continue; // app shortcuts
                     }
-                    if let Some(bytes) = key_bytes(key, m, mode, mac) {
-                        if m.alt && !m.ctrl && !mac && is_text_key(key) {
-                            self.skip_text = true;
-                        }
+                    let encoded = if kitty {
+                        kitty_key_bytes(key, m, mode, mac, if repeat { KeyEvent::Repeat } else { KeyEvent::Press })
+                    } else {
+                        // Alt+key types its text too (not on macOS, where Option composes).
+                        key_bytes(key, m, mode, mac).map(|b| (b, m.alt && !m.ctrl && !mac && is_text_key(key)))
+                    };
+                    if let Some((bytes, replaces_text)) = encoded {
+                        self.skip_text |= replaces_text;
                         self.write(bytes);
                         typed = true;
                     }
@@ -1027,6 +1073,8 @@ impl TermSession {
                 _ => {}
             }
         }
+        // The text of a key sent as a sequence comes in the same frame as the key.
+        self.skip_text = false;
         if typed {
             self.scroll_to_bottom();
         }
@@ -1101,11 +1149,28 @@ impl TermSession {
                             PointerButton::Secondary => 2,
                             _ => continue,
                         };
-                        let (row, col, _) = self.grid_pos(*pos, origin);
+                        let (mut row, mut col, _) = self.grid_pos(*pos, origin);
+                        if *pressed {
+                            self.report_press = Some((*pos, (row, col)));
+                            self.report_dragging = false;
+                        } else if let Some((_, cell)) = self.report_press.take().filter(|_| !self.report_dragging) {
+                            // A click that wobbled into the next cell is still a click there.
+                            (row, col) = cell;
+                        }
                         self.report(b, row, col, *pressed, mode, mods);
                         self.report_button = pressed.then_some(b);
+                        self.last_report_cell = Some((row, col));
                     }
                     egui::Event::PointerMoved(pos) if rect.contains(*pos) => {
+                        // A button held is a drag only once the pointer has really moved: a
+                        // few pixels of trackpad wobble across a cell's edge would otherwise
+                        // turn a click into a text selection (Claude Code then drops the click).
+                        if let (Some(_), Some((at, _)), false) = (self.report_button, self.report_press, self.report_dragging) {
+                            if (*pos - at).length() < DRAG_THRESHOLD.max(self.cell.x) {
+                                continue;
+                            }
+                            self.report_dragging = true;
+                        }
                         let (row, col, _) = self.grid_pos(*pos, origin);
                         if self.last_report_cell == Some((row, col)) {
                             continue;
@@ -1345,6 +1410,10 @@ fn next_id() -> u64 {
 }
 
 
+/// How far (in points) the pointer moves with a button held before it is reported as
+/// a drag; at least a cell's width.
+const DRAG_THRESHOLD: f32 = 6.0;
+
 fn is_text_key(k: Key) -> bool {
     letter(k).is_some() || digit(k).is_some() || matches!(k, Key::Space | Key::Minus | Key::Period | Key::Comma | Key::Slash | Key::Semicolon | Key::Equals | Key::OpenBracket | Key::CloseBracket | Key::Backslash | Key::Backtick | Key::Quote)
 }
@@ -1369,6 +1438,128 @@ fn digit(k: Key) -> Option<u8> {
         Num9 => b'9',
         _ => return None,
     })
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum KeyEvent {
+    Press = 1,
+    Repeat = 2,
+    Release = 3,
+}
+
+/// The character a text key types without Shift (US layout): its kitty key code.
+fn key_char(k: Key) -> Option<u8> {
+    if let Some(l) = letter(k) {
+        return Some(l.to_ascii_lowercase());
+    }
+    digit(k).or(Some(match k {
+        Key::Space => b' ',
+        Key::Minus => b'-',
+        Key::Period => b'.',
+        Key::Comma => b',',
+        Key::Slash => b'/',
+        Key::Semicolon => b';',
+        Key::Equals => b'=',
+        Key::OpenBracket => b'[',
+        Key::CloseBracket => b']',
+        Key::Backslash => b'\\',
+        Key::Backtick => b'`',
+        Key::Quote => b'\'',
+        _ => return None,
+    }))
+}
+
+/// Bytes for a key under the kitty keyboard protocol, as far as the program turned it
+/// on (`CSI code ; modifiers u`), and whether they stand for the key's text too (which
+/// then is not typed). `None` = no bytes: the key types its text, or the event is not
+/// reported. See <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>.
+fn kitty_key_bytes(key: Key, m: Modifiers, mode: TermMode, mac: bool, event: KeyEvent) -> Option<(Vec<u8>, bool)> {
+    let all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
+    let events = mode.contains(TermMode::REPORT_EVENT_TYPES);
+    if event != KeyEvent::Press && !events {
+        return None;
+    }
+    let text_key = key_char(key);
+    // On macOS, Option with a text key composes a character (é, ∑): that is text.
+    if mac && m.alt && !m.ctrl && text_key.is_some() && !all {
+        return None;
+    }
+    let mods = 1 + m.shift as u8 + 2 * m.alt as u8 + 4 * m.ctrl as u8;
+    let ev = if events && event != KeyEvent::Press { format!(":{}", event as u8) } else { String::new() };
+    // `;modifiers[:event]`, left out when there is nothing to say.
+    let tail = if mods > 1 || !ev.is_empty() { format!(";{mods}{ev}") } else { String::new() };
+    let csi_u = |code: u32, alternate: Option<u8>| -> Vec<u8> {
+        let alt = alternate.filter(|_| mode.contains(TermMode::REPORT_ALTERNATE_KEYS)).map(|a| format!(":{a}")).unwrap_or_default();
+        format!("\x1b[{code}{alt}{tail}u").into_bytes()
+    };
+    // Keys that keep their legacy sequences, with modifiers and event types added.
+    let functional = |legacy: Option<Vec<u8>>, ending: &str| -> Option<(Vec<u8>, bool)> {
+        if tail.is_empty() {
+            return legacy.map(|b| (b, false));
+        }
+        let number = if ending.ends_with('~') { ending.trim_end_matches('~') } else { "1" };
+        let last = if ending.ends_with('~') { "~" } else { ending };
+        Some((format!("\x1b[{number}{tail}{last}").into_bytes(), false))
+    };
+    let legacy = || key_bytes(key, Modifiers::NONE, mode, mac);
+    match key {
+        Key::ArrowUp => functional(legacy(), "A"),
+        Key::ArrowDown => functional(legacy(), "B"),
+        Key::ArrowRight => functional(legacy(), "C"),
+        Key::ArrowLeft => functional(legacy(), "D"),
+        Key::Home => functional(legacy(), "H"),
+        Key::End => functional(legacy(), "F"),
+        Key::F1 => functional(legacy(), "P"),
+        Key::F2 => functional(legacy(), "Q"),
+        Key::F3 => functional(legacy(), "13~"),
+        Key::F4 => functional(legacy(), "S"),
+        Key::Insert => functional(legacy(), "2~"),
+        Key::Delete => functional(legacy(), "3~"),
+        Key::PageUp => functional(legacy(), "5~"),
+        Key::PageDown => functional(legacy(), "6~"),
+        Key::F5 => functional(legacy(), "15~"),
+        Key::F6 => functional(legacy(), "17~"),
+        Key::F7 => functional(legacy(), "18~"),
+        Key::F8 => functional(legacy(), "19~"),
+        Key::F9 => functional(legacy(), "20~"),
+        Key::F10 => functional(legacy(), "21~"),
+        Key::F11 => functional(legacy(), "23~"),
+        Key::F12 => functional(legacy(), "24~"),
+        Key::Escape => Some((csi_u(27, None), false)),
+        // Plain Enter, Tab and Backspace stay as they were, so a shell left in this
+        // mode by a program that crashed still works; with a modifier they are told apart.
+        Key::Enter | Key::Tab | Key::Backspace => {
+            let code = match key {
+                Key::Enter => 13,
+                Key::Tab => 9,
+                _ => 127,
+            };
+            if !all && mods == 1 {
+                return (event == KeyEvent::Press || event == KeyEvent::Repeat).then(|| (legacy().unwrap_or_default(), false));
+            }
+            Some((csi_u(code, None), false))
+        }
+        _ => {
+            let code = text_key?;
+            // Shift alone types a capital or a symbol: text, unless every key is reported.
+            if !all && !m.ctrl && !m.alt {
+                return None;
+            }
+            let shifted = (m.shift && code.is_ascii_lowercase()).then(|| code.to_ascii_uppercase());
+            let mut bytes = csi_u(u32::from(code), shifted);
+            // The text it types, with every key reported and text asked for.
+            if all && mode.contains(TermMode::REPORT_ASSOCIATED_TEXT) && event != KeyEvent::Release && !m.ctrl && code.is_ascii_graphic() {
+                let text = shifted.unwrap_or(code);
+                bytes.pop();
+                if tail.is_empty() {
+                    bytes.extend(b";1");
+                }
+                bytes.extend(format!(";{text}u").into_bytes());
+            }
+            // Without Ctrl the key also types its text, which these bytes replace.
+            Some((bytes, !m.ctrl))
+        }
+    }
 }
 
 /// Bytes sent for a key press (xterm conventions). `None` = handled as text.
@@ -1649,6 +1840,40 @@ mod tests {
         assert_eq!(key_bytes(Key::A, Modifiers::NONE, none, false), None, "plain letters arrive as text");
         assert_eq!(key_bytes(Key::F5, Modifiers::NONE, none, false), Some(b"\x1b[15~".to_vec()));
         assert_eq!(key_bytes(Key::Tab, Modifiers::SHIFT, none, false), Some(b"\x1b[Z".to_vec()));
+    }
+
+    #[test]
+    fn kitty_keys() {
+        let k = |key, m, mode| kitty_key_bytes(key, m, mode, false, KeyEvent::Press).map(|(b, t)| (String::from_utf8(b).unwrap(), t));
+        let shift = Modifiers::SHIFT;
+        let ctrl = Modifiers::CTRL;
+        let flags = TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS;
+        // What Claude Code asks for (flags 1 and 4).
+        assert_eq!(k(Key::Enter, shift, flags), Some(("\x1b[13;2u".into(), false)));
+        assert_eq!(k(Key::Enter, Modifiers::NONE, flags), Some(("\r".into(), false)), "plain Enter stays legacy");
+        assert_eq!(k(Key::Tab, shift, flags), Some(("\x1b[9;2u".into(), false)));
+        assert_eq!(k(Key::Backspace, Modifiers::ALT, flags), Some(("\x1b[127;3u".into(), false)));
+        assert_eq!(k(Key::Escape, Modifiers::NONE, flags), Some(("\x1b[27u".into(), false)));
+        assert_eq!(k(Key::C, ctrl, flags), Some(("\x1b[99;5u".into(), false)));
+        assert_eq!(k(Key::A, Modifiers { alt: true, shift: true, ..Default::default() }, flags), Some(("\x1b[97:65;4u".into(), true)), "with its shifted key");
+        assert_eq!(k(Key::A, shift, flags), None, "Shift alone types text");
+        assert_eq!(k(Key::A, Modifiers::NONE, flags), None);
+        assert_eq!(k(Key::ArrowUp, Modifiers::NONE, flags), Some(("\x1b[A".into(), false)));
+        assert_eq!(k(Key::ArrowUp, ctrl, flags), Some(("\x1b[1;5A".into(), false)));
+        assert_eq!(k(Key::PageDown, shift, flags), Some(("\x1b[6;2~".into(), false)));
+        // Every key as a sequence, with the text it types.
+        let all = flags | TermMode::REPORT_ALL_KEYS_AS_ESC | TermMode::REPORT_ASSOCIATED_TEXT;
+        assert_eq!(k(Key::A, Modifiers::NONE, all), Some(("\x1b[97;1;97u".into(), true)));
+        assert_eq!(k(Key::A, shift, all), Some(("\x1b[97:65;2;65u".into(), true)));
+        assert_eq!(k(Key::Enter, Modifiers::NONE, all), Some(("\x1b[13u".into(), false)));
+        // Releases only when asked for, and not of plain Enter.
+        let ev = flags | TermMode::REPORT_EVENT_TYPES;
+        let release = |key, m, mode| kitty_key_bytes(key, m, mode, false, KeyEvent::Release).map(|(b, _)| String::from_utf8(b).unwrap());
+        assert_eq!(release(Key::Escape, Modifiers::NONE, flags), None);
+        assert_eq!(release(Key::Escape, Modifiers::NONE, ev), Some("\x1b[27;1:3u".into()));
+        assert_eq!(release(Key::Enter, Modifiers::NONE, ev), None);
+        // macOS Option composes text.
+        assert_eq!(kitty_key_bytes(Key::E, Modifiers::ALT, flags, true, KeyEvent::Press), None);
     }
 
     #[test]
