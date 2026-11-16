@@ -1312,7 +1312,7 @@ mod animation_tests {
         }
         assert!(too_large("a.eml", 80 * mb + 1, None));
         // Only the header is read of these.
-        for name in ["a.safetensors", "a.onnx", "a.npz", "a.gguf", "a.pt", "a.mat", "a.nc", "a.orc", "a.dta", "a.sav", "a.sas7bdat", "a.duckdb"] {
+        for name in ["a.safetensors", "a.onnx", "a.npy", "a.npz", "a.gguf", "a.pt", "a.mat", "a.nc", "a.orc", "a.dta", "a.sav", "a.sas7bdat", "a.duckdb"] {
             assert!(!too_large(name, 100 * gb, None), "{name}");
             assert!(too_large(name, 20 * mb, Some(16 * mb)), "{name}");
         }

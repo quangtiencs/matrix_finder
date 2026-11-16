@@ -119,6 +119,10 @@ impl Drop for TempDir {
 
 // ---------------------------------------------------------------- HEIC, HEIF, AVIF
 
+/// FFmpeg reads only local files: a "video" that is really a playlist (HLS, concat)
+/// would otherwise make it fetch addresses from the network just by being previewed.
+const FFMPEG_LOCAL_ONLY: [&str; 2] = ["-protocol_whitelist", "file"];
+
 /// Adds a tool's arguments for an input and an output file.
 type AddArgs = fn(&mut Command, &Path, &Path);
 
@@ -136,11 +140,18 @@ pub fn decode_heif(path: &Path, cancel: &Cancel) -> Res<Vec<u8>> {
         ("heif-convert", |c, i, o| {
             c.arg(i).arg(o);
         }),
+        // Told the format: ImageMagick otherwise goes by the content, and some of its
+        // formats (MSL, MVG) are scripts that read, write and delete files.
         ("magick", |c, i, o| {
-            c.arg(i).arg(o);
+            let coder = if crate::util::ext_of(&i.to_string_lossy()) == "avif" { "avif" } else { "heic" };
+            let mut input = std::ffi::OsString::from(format!("{coder}:"));
+            input.push(i);
+            let mut output = std::ffi::OsString::from("png:");
+            output.push(o);
+            c.arg(input).arg(output);
         }),
         ("ffmpeg", |c, i, o| {
-            c.args(["-nostdin", "-v", "error", "-i"]).arg(i).args(["-frames:v", "1", "-y"]).arg(o);
+            c.args(["-nostdin", "-v", "error"]).args(FFMPEG_LOCAL_ONLY).arg("-i").arg(i).args(["-frames:v", "1", "-y"]).arg(o);
         }),
     ];
     let mut found_a_tool = false;
@@ -668,7 +679,7 @@ pub fn video_thumbnail(path: &Path, duration: Option<f64>, cancel: &Cancel) -> O
         // A little way in: first frames are often black.
         let at = duration.map_or(0.0, |d| (d * 0.1).min(30.0));
         let mut cmd = Command::new(ffmpeg);
-        cmd.args(["-nostdin", "-v", "error", "-ss", &format!("{at:.2}"), "-i"]).arg(path);
+        cmd.args(["-nostdin", "-v", "error"]).args(FFMPEG_LOCAL_ONLY).args(["-ss", &format!("{at:.2}"), "-i"]).arg(path);
         cmd.args(["-frames:v", "1", "-vf", &format!("scale='min({WIDTH},iw)':-2"), "-y"]).arg(&out);
         if run_tool(cmd, TOOL_TIMEOUT, cancel) {
             if let Ok(png) = std::fs::read(&out) {

@@ -134,7 +134,7 @@ fn hdf5_path(path: &Path, format: &'static str) -> Res<TableData> {
 }
 
 fn hdf5_bytes(bytes: Vec<u8>, format: &'static str) -> Res<TableData> {
-    let file = hdf5_pure::File::from_bytes(bytes).map_err(|e| format!("HDF5: {e}"))?;
+    let file = crate::scidata::hdf5_from_memory(bytes)?;
     Ok(hdf5_listing(&file, format))
 }
 

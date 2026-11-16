@@ -693,6 +693,46 @@ fn write_file_from(reader: &mut dyn Read, out: &Path, progress: &Progress) -> Re
     Ok(())
 }
 
+/// The macOS quarantine mark of a downloaded archive, given to what is extracted from
+/// it, as Archive Utility does: Gatekeeper then still checks an app or script that came
+/// in a downloaded archive before it first runs. Nothing elsewhere.
+struct Quarantine(Option<Vec<u8>>);
+
+impl Quarantine {
+    const NAME: &'static [u8] = b"com.apple.quarantine\0";
+
+    #[cfg(target_os = "macos")]
+    fn of(path: &Path) -> Self {
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(p) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return Self(None) };
+        let mut buf = vec![0u8; 1024];
+        // SAFETY: both strings are NUL-terminated and `buf` is as long as said.
+        let n = unsafe { libc::getxattr(p.as_ptr(), Self::NAME.as_ptr().cast(), buf.as_mut_ptr().cast(), buf.len(), 0, 0) };
+        Self((n > 0).then(|| {
+            buf.truncate(n as usize);
+            buf
+        }))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn of(_: &Path) -> Self {
+        Self(None)
+    }
+
+    /// Give the mark to an extracted file or folder (not through a symbolic link).
+    fn mark(&self, path: &Path) {
+        #[cfg(target_os = "macos")]
+        if let Some(value) = &self.0 {
+            use std::os::unix::ffi::OsStrExt;
+            let Ok(p) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return };
+            // SAFETY: as above; `value` is passed with its length.
+            unsafe { libc::setxattr(p.as_ptr(), Self::NAME.as_ptr().cast(), value.as_ptr().cast(), value.len(), 0, libc::XATTR_NOFOLLOW) };
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = (path, &self.0);
+    }
+}
+
 /// Extract `selection` (full inner paths; empty = everything) into `dest`,
 /// stripping the `strip` prefix (the directory currently browsed). `policy` decides what
 /// happens to files that already exist.
@@ -700,6 +740,7 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
     let fmt = ArchiveFormat::detect(path).ok_or("Unknown archive format")?;
     std::fs::create_dir_all(dest).map_err(es)?;
     let real_dest = dest.canonicalize().map_err(es)?;
+    let quarantine = Quarantine::of(path);
     match fmt {
         ArchiveFormat::Zip => {
             let mut z = zip::ZipArchive::new(BufReader::new(File::open(path).map_err(es)?)).map_err(es)?;
@@ -732,12 +773,14 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                 progress.set_current(&name);
                 if f.is_dir() {
                     std::fs::create_dir_all(&out).map_err(es)?;
+                    quarantine.mark(&out);
                 } else {
                     let Some(out) = resolve_out(out, policy) else {
                         progress.add(f.size());
                         continue;
                     };
                     write_file_from(&mut f, &out, progress)?;
+                    quarantine.mark(&out);
                     #[cfg(unix)]
                     if let Some(mode) = f.unix_mode() {
                         use std::os::unix::fs::PermissionsExt;
@@ -772,12 +815,14 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                     progress.set_current(&name);
                     if entry.is_directory() {
                         let _ = std::fs::create_dir_all(&out);
+                        quarantine.mark(&out);
                     } else if let Some(out) = resolve_out(out, policy) {
                         let mut whole = SevenzWhole { inner: reader, left: entry.size(), short: &short };
                         if let Err(e) = write_file_from(&mut whole, &out, progress) {
                             err = Some(e);
                             return Ok(false);
                         }
+                        quarantine.mark(&out);
                     } else {
                         let skipped = std::io::copy(reader, &mut std::io::sink())?;
                         progress.add(skipped);
@@ -808,6 +853,7 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                 arch = match target {
                     Some(out) if e.is_directory() => {
                         std::fs::create_dir_all(&out).map_err(es)?;
+                        quarantine.mark(&out);
                         header.skip().map_err(rar_err)?
                     }
                     Some(out) => {
@@ -817,6 +863,7 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                             std::fs::create_dir_all(p).map_err(es)?;
                         }
                         let next = header.extract_to(&out).map_err(rar_err)?;
+                        quarantine.mark(&out);
                         progress.add(size);
                         next
                     }
@@ -863,6 +910,7 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                 } else {
                     e.unpack(&out).map_err(es)?;
                 }
+                quarantine.mark(&out);
                 progress.add(size);
             }
         }
@@ -873,7 +921,9 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
             let out = dest.join(&name);
             // Never overwritten: `report.txt.gz` often sits beside its own `report.txt`.
             if policy != Conflict::Skip || !out.exists() {
-                write_file_from(&mut r, &crate::util::unique_path(&out), progress)?;
+                let out = crate::util::unique_path(&out);
+                write_file_from(&mut r, &out, progress)?;
+                quarantine.mark(&out);
             }
         }
     }
@@ -1273,6 +1323,37 @@ fn create_rar(sources: &[PathBuf], has_exclude: bool, dest: &Path, level: u32, p
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// What comes out of a downloaded (quarantined) archive is quarantined too, so
+    /// Gatekeeper still checks it; nothing else is marked.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn extracted_files_keep_the_archive_quarantine() {
+        let d = tmpdir("quarantine");
+        let zip_path = d.join("download.zip");
+        {
+            let mut w = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+            w.start_file("app/run.command", zip::write::SimpleFileOptions::default()).unwrap();
+            w.write_all(b"#!/bin/sh\necho hi\n").unwrap();
+            w.finish().unwrap();
+        }
+        let value = b"0083;00000000;Safari;";
+        let set = |p: &Path| {
+            use std::os::unix::ffi::OsStrExt;
+            let c = std::ffi::CString::new(p.as_os_str().as_bytes()).unwrap();
+            // SAFETY: NUL-terminated strings and a buffer of the given length.
+            unsafe { libc::setxattr(c.as_ptr(), Quarantine::NAME.as_ptr().cast(), value.as_ptr().cast(), value.len(), 0, 0) };
+        };
+        let out = d.join("out");
+        extract(&zip_path, &out, &[], "", Conflict::Overwrite, &Progress::default()).unwrap();
+        assert!(Quarantine::of(&out.join("app/run.command")).0.is_none(), "not downloaded: not marked");
+        set(&zip_path);
+        let out = d.join("out2");
+        extract(&zip_path, &out, &[], "", Conflict::Overwrite, &Progress::default()).unwrap();
+        assert_eq!(Quarantine::of(&out.join("app/run.command")).0.as_deref(), Some(&value[..]));
+        assert_eq!(Quarantine::of(&out.join("app")).0, None, "folders made on the way are not entries");
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     fn tmpdir(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("matrix_finder-test-{}-{}", name, std::process::id()));

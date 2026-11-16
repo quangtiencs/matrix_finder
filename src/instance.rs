@@ -77,7 +77,7 @@ impl Server {
         let port = listener.local_addr().ok()?.port();
         let token = new_token();
         let info = Info { port, token: token.clone(), pid: std::process::id() };
-        write_private(&info_file(), &serde_json::to_string(&info).ok()?).ok()?;
+        crate::util::write_private(&info_file(), &serde_json::to_string(&info).ok()?).ok()?;
         let (tx, rx) = channel();
         let want = token.clone();
         std::thread::Builder::new()
@@ -137,18 +137,6 @@ fn new_token() -> String {
             format!("{:016x}", h.finish())
         })
         .collect()
-}
-
-/// Write `text` to `path` (via a temporary file) so only the user can read it.
-fn write_private(path: &Path, text: &str) -> std::io::Result<()> {
-    std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")))?;
-    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
-    let mut o = std::fs::OpenOptions::new();
-    o.write(true).create(true).truncate(true);
-    #[cfg(unix)]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
-    o.open(&tmp)?.write_all(text.as_bytes())?;
-    std::fs::rename(&tmp, path)
 }
 
 /// Command line: `matrix_finder [--new-tab | --new-window] [FOLDER]`.

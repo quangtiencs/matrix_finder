@@ -94,7 +94,7 @@ fn is_torch_bin(name: &str) -> bool {
 
 /// Formats of which only a header or an index is read, so a file of any size opens.
 pub fn reads_header_only(name: &str) -> bool {
-    matches!(ext_of(name).as_str(), "npz" | "safetensors" | "onnx" | "gguf" | "pt" | "pth" | "ckpt" | "mat" | "nc" | "nc4" | "cdf" | "orc" | "dta" | "sav" | "zsav" | "sas7bdat" | "duckdb" | "ddb")
+    matches!(ext_of(name).as_str(), "npy" | "npz" | "safetensors" | "onnx" | "gguf" | "pt" | "pth" | "ckpt" | "mat" | "nc" | "nc4" | "cdf" | "orc" | "dta" | "sav" | "zsav" | "sas7bdat" | "duckdb" | "ddb")
         || is_torch_bin(name)
 }
 

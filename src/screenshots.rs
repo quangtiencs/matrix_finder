@@ -626,6 +626,27 @@ fn build_demo() -> Demo {
     write_epub(&formats.join("A Short Story.epub"));
     let jsonl: String = rows[..200].iter().map(|o| format!("{}\n", serde_json::json!({"order": o.id, "city": o.city, "product": o.product, "qty": o.qty, "paid": o.paid}))).collect();
     touch(&formats.join("orders.jsonl"), jsonl.as_bytes());
+    // Git repositories among the demo folders, so the list shows their branches (made
+    // after the archives above, which must not hold a `.git`). Skipped without git.
+    for (dir, branch, dirty) in [("docs", "main", false), ("papers", "main", false), ("src", "feature/sql-filter", true)] {
+        let dir = demo.join(dir);
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .arg("-C")
+                .arg(&dir)
+                .args(args)
+                .env("GIT_AUTHOR_DATE", "2026-11-04T16:30:00")
+                .env("GIT_COMMITTER_DATE", "2026-11-04T16:30:00")
+                .output()
+                .is_ok_and(|o| o.status.success())
+        };
+        if git(&["init", "-q", "-b", branch]) && git(&["add", "-A"]) {
+            git(&["-c", "user.email=demo@example.com", "-c", "user.name=Demo", "commit", "-qm", "Start"]);
+            if dirty {
+                touch(&dir.join("sql.rs"), b"// work in progress\n");
+            }
+        }
+    }
     // A home-like folder with one file of each kind (icons).
     let h2 = demo.join("home");
     for d in ["Desktop", "Documents", "Downloads", "Music", "Pictures", "Projects", "Videos"] {
@@ -1233,6 +1254,76 @@ fn terminal_startup_script_after_shell_start() {
     assert_eq!(std::fs::read_to_string(&out).unwrap_or_default(), "from-zshrc\nfrom-zprofile\n");
 }
 
+/// Git folders in the list: `(git) [branch]` after the name, cut with "…" when long, in
+/// the name's colour, or (if asked for) green when everything is committed and orange
+/// with changes. Off in Settings, they are plain folders again.
+#[test]
+#[ignore]
+fn git_folders_show_badges_and_branches() {
+    let d = demo_env();
+    let root = d.home.join("Projects");
+    let _ = std::fs::remove_dir_all(&root);
+    let git = |dir: &Path, args: &[&str]| {
+        let ok = std::process::Command::new("git").arg("-C").arg(dir).args(args).output().is_ok_and(|o| o.status.success());
+        assert!(ok, "git {args:?}");
+    };
+    let repo = |name: &str, branch: &str| {
+        let dir = root.join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q", "-b", branch]);
+        touch(&dir.join("README.md"), b"# demo\n");
+        git(&dir, &["add", "-A"]);
+        git(&dir, &["-c", "user.email=demo@example.com", "-c", "user.name=Demo", "commit", "-qm", "init"]);
+        dir
+    };
+    repo("matrix_finder", "main");
+    let web = repo("website", "feature/redesign-landing-page-with-new-hero");
+    touch(&web.join("index.html"), b"<h1>new</h1>");
+    let notes = repo("notes", "main");
+    git(&notes, &["checkout", "-q", "--detach"]);
+    std::fs::create_dir_all(root.join("photos")).unwrap();
+    let ctx = egui::Context::default();
+    let look = |name: &str| crate::gitinfo::wait_for(&root.join(name), true, &ctx);
+    use crate::gitinfo::State;
+    assert!(matches!(look("matrix_finder"), Some(r) if r.branch == "main" && r.state == State::Clean && !r.detached));
+    assert!(matches!(look("website"), Some(r) if r.branch.starts_with("feature/") && r.state == State::Dirty && r.untracked == 1));
+    assert!(matches!(look("notes"), Some(r) if r.detached && r.branch.len() == 7));
+    assert_eq!(look("photos"), None);
+    use crate::config::GitStyle;
+    for (theme, colored, style, file) in [
+        ("Breeze Light", false, GitStyle::Text, "git-folders-light"),
+        ("Breeze Light", true, GitStyle::Text, "git-folders-color"),
+        ("Breeze Light", false, GitStyle::Filled, "git-folders-filled"),
+        ("Breeze Light", true, GitStyle::Filled, "git-folders-filled-color"),
+        ("Breeze Dark", false, GitStyle::Filled, "git-folders-dark-filled"),
+        ("Breeze Dark", true, GitStyle::Text, "git-folders-dark"),
+    ] {
+        let mut cfg = settings(theme, &d);
+        cfg.git_status = colored;
+        cfg.git_style = style;
+        let mut h = app_harness(&cfg, "gnome");
+        h.state_mut().shot_pane(0, &root, Some("photos"));
+        wait_until(&mut h, 8.0, |_| false);
+        shot(&mut h, file);
+    }
+    // The switches in Settings → Files & layout → Git.
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    assert!(h.state().cfg.git_branches && h.state().cfg.git_label && !h.state().cfg.git_status, "default: branches, (git), one colour");
+    h.state_mut().open_settings(SettingsPage::Files);
+    settle(&mut h, 4);
+    scroll_settings(&mut h, 220.0);
+    h.query_all_by_label("Colour by commit state").last().expect("the switch").click();
+    settle(&mut h, 3);
+    assert!(h.state().cfg.git_status);
+    shot(&mut h, "git-settings");
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.git_branches = false;
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().shot_pane(0, &root, Some("photos"));
+    wait_until(&mut h, 2.0, |_| false);
+    shot(&mut h, "git-folders-off");
+}
+
 /// A full-screen program like Claude Code: it turns on the kitty keyboard protocol, mouse
 /// reports (SGR, with motion) and focus reports, and gets the clicks, keys and focus
 /// changes in the forms it asked for.
@@ -1432,6 +1523,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         app.shot_pane(0, &d.demo, Some("bundle.zip"));
         app.shot_pane(1, &d.demo.join("home"), Some(".."));
         app.shot_focus(0);
+        wait_for_git(&mut h, d);
         shot(&mut h, "panels");
     }
 
@@ -1456,6 +1548,29 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             image::imageops::overlay(&mut out, &small, (i as i64 % 2) * W as i64 / 2, (i as i64 / 2) * H as i64 / 2);
         }
         save(&out, "native-themes");
+    }
+
+    // The filter language: an SQL-like query filters the folder as it is typed.
+    if want("sql-filter") {
+        let mut cfg = settings(mode.theme, d);
+        cfg.quick_view = true;
+        cfg.quick_view_frac = 0.48;
+        let mut h = app_harness(&cfg, gnome);
+        let app = h.state_mut();
+        app.shot_pane(0, &d.demo, None);
+        app.shot_focus(0);
+        settle(&mut h, 3);
+        // Typed straight into the list: the small search box takes the query.
+        push(&mut h, Event::Text("name LIKE 'order%' AND size > 15KB".into()));
+        settle(&mut h, 6);
+        assert_eq!(h.state().panes[0].tab().view.iter().filter(|&&i| !h.state().panes[0].tab().entries[i].is_parent).count(), 3, "the three orders files");
+        // The Parquet one, previewed.
+        key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+        key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+        settle(&mut h, 10);
+        std::thread::sleep(Duration::from_millis(600));
+        settle(&mut h, 10);
+        shot(&mut h, "sql-filter");
     }
 
     if want("palette") {
@@ -1982,7 +2097,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
 /// The four scenes of `docs/showcase.png`, left to right and top to bottom:
 /// (mode, scene). Light and dark both appear; `terminal-tabs` is light files beside a dark terminal in either mode.
 /// The four windows of `docs/showcase.png`: the Breeze Light interface, with a dark terminal.
-const SHOWCASE: [(&str, &str); 4] = [("light", "panels"), ("light", "terminal-tabs"), ("light", "table-parquet"), ("light", "disk-usage")];
+const SHOWCASE: [(&str, &str); 4] = [("light", "panels"), ("light", "terminal-tabs"), ("light", "quickview-hdf5"), ("light", "quickview-json")];
 
 /// Coverage (0..=1) of a rectangle with rounded corners at pixel (`x`, `y`).
 fn rounded_coverage(x: u32, y: u32, w: u32, h: u32, radius: f32) -> f32 {
@@ -1996,6 +2111,15 @@ fn rounded_coverage(x: u32, y: u32, w: u32, h: u32, radius: f32) -> f32 {
 fn over(bottom: image::Rgba<u8>, top: [u8; 3], a: f32) -> image::Rgba<u8> {
     let mix = |b: u8, t: u8| (b as f32 * (1.0 - a) + t as f32 * a).round() as u8;
     image::Rgba([mix(bottom.0[0], top[0]), mix(bottom.0[1], top[1]), mix(bottom.0[2], top[2]), 255])
+}
+
+/// Wait until the demo's git folders show their branches.
+fn wait_for_git(h: &mut Harness<'static, App>, d: &Demo) {
+    let ctx = h.ctx.clone();
+    for name in ["docs", "papers", "src"] {
+        let _ = crate::gitinfo::wait_for(&d.demo.join(name), false, &ctx);
+    }
+    settle(h, 4);
 }
 
 /// Combine four scenes into one image: windows with rounded corners and a soft
@@ -2125,26 +2249,37 @@ fn type_to_search_in_a_file_window() {
     let all = names(h.state());
     assert!(all.len() > 2, "{all:?}");
 
-    // Two letters typed in one frame, then more in the open box.
+    let text = |app: &App| app.type_search.as_ref().map(|s| s.text.clone());
+    // Two letters typed in one frame, then more in the small search box (not the palette).
     push(&mut h, Event::Text("ph".into()));
     settle(&mut h, 2);
-    assert!(h.state().palette.open);
-    assert_eq!(h.state().palette.query(), "ph");
-    push(&mut h, Event::Text("oto".into()));
+    assert!(!h.state().palette.open, "no command palette");
+    assert_eq!(text(h.state()).as_deref(), Some("ph"));
+    push(&mut h, Event::Text("otox".into()));
     settle(&mut h, 2);
-    assert_eq!(h.state().palette.query(), "photo");
+    key_press(&mut h, Key::Backspace, None, Modifiers::NONE);
+    assert_eq!(text(h.state()).as_deref(), Some("photo"), "Backspace edits the search, not the folder");
     assert_eq!(names(h.state()), ["photo.jpg"], "filtered while typing");
+    let tab = h.state().panes[0].tab();
+    assert_eq!(tab.cursor_entry().map(|e| e.name.as_str()), Some("photo.jpg"), "the cursor is on the first match");
 
     // Esc: closed, the whole folder again.
     key_press(&mut h, Key::Escape, None, Modifiers::NONE);
-    assert!(!h.state().palette.open);
+    assert!(h.state().type_search.is_none());
+    assert_eq!(names(h.state()), all);
+
+    // Backspace over the last letter closes it too.
+    push(&mut h, Event::Text("s".into()));
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Backspace, None, Modifiers::NONE);
+    assert!(h.state().type_search.is_none());
     assert_eq!(names(h.state()), all);
 
     // Enter keeps the filter.
     push(&mut h, Event::Text("SHA".into()));
     settle(&mut h, 2);
     key_press(&mut h, Key::Enter, None, Modifiers::NONE);
-    assert!(!h.state().palette.open);
+    assert!(h.state().type_search.is_none() && !h.state().palette.open);
     assert_eq!(h.state().panes[0].tab().filter_text, "SHA");
     assert_eq!(names(h.state()), ["SHA256SUMS"]);
     key_press(&mut h, Key::Escape, None, Modifiers::NONE);
@@ -2165,7 +2300,7 @@ fn type_to_search_in_a_file_window() {
     settle(&mut h, 1);
     h.input_mut().modifiers = Modifiers::NONE;
     settle(&mut h, 1);
-    assert!(!h.state().palette.open);
+    assert!(!h.state().palette.open && h.state().type_search.is_none());
 }
 
 /// `source LIKE` in the search box: the files are read in the background, in this

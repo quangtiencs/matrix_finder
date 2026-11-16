@@ -214,6 +214,16 @@ pub enum BookmarkBar {
     Horizontal,
 }
 
+/// How a git folder's branch looks after its name.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum GitStyle {
+    /// `(git) [branch]` in grey (or the state's colour).
+    #[default]
+    Text,
+    /// `git · branch` in white on a grey (or the state's colour) label.
+    Filled,
+}
+
 /// When the sidebar lists the drives.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum SidebarDrives {
@@ -387,6 +397,14 @@ pub struct Settings {
     pub terminal: TerminalKind,
     pub custom_terminal: String,
     pub show_hidden: bool,
+    /// Git folders show their branch after the name in the file list: `name (git) [branch]`.
+    pub git_branches: bool,
+    /// With `(git)` before the branch.
+    pub git_label: bool,
+    pub git_style: GitStyle,
+    /// The branch is coloured by whether everything is committed (runs `git status`);
+    /// off, it is in the colour of the name and git never runs.
+    pub git_status: bool,
     pub confirm_delete: bool,
     pub use_trash: bool,
     pub split_horizontal: bool,
@@ -528,6 +546,10 @@ impl Default for Settings {
             terminal: TerminalKind::Native,
             custom_terminal: String::new(),
             show_hidden: false,
+            git_branches: true,
+            git_label: true,
+            git_style: GitStyle::Text,
+            git_status: false,
             confirm_delete: true,
             use_trash: true,
             split_horizontal: false,
@@ -718,7 +740,14 @@ impl Settings {
     }
 
     pub fn save(&self) -> Res<()> {
-        std::fs::create_dir_all(config_dir()).map_err(es)?;
+        let dir = config_dir();
+        std::fs::create_dir_all(&dir).map_err(es)?;
+        // Saved passwords are in it: only the user may look inside.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
+        }
         self.export_to(&config_file(), true)
     }
 
@@ -731,7 +760,12 @@ impl Settings {
             }
         }
         let json = serde_json::to_string_pretty(&copy).map_err(es)?;
-        std::fs::write(path, json).map_err(es)
+        // With passwords, readable by the user alone.
+        if with_secrets {
+            crate::util::write_private(path, &json).map_err(es)
+        } else {
+            std::fs::write(path, json).map_err(es)
+        }
     }
 
     pub fn import_from(path: &Path) -> Res<Self> {

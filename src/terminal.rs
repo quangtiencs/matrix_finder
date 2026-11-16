@@ -231,6 +231,9 @@ fn native_terminal(dir: &Path, run: Option<Vec<String>>) -> Res<()> {
     let d = dir.to_string_lossy().to_string();
     match run {
         None => spawn(command("open", &sv(&["-a", "Terminal", &d]), dir)),
+        // Terminal types the script's line into its shell, where a control character
+        // would be a key press.
+        Some(r) if !crate::termview::is_typeable(&format!("{d} {}", sh_join(&r))) => Err(crate::i18n::t("This folder's name has control characters: it is not typed into the terminal")),
         Some(r) => {
             let line = format!("cd {} && exec {}", sh_quote(&d), sh_join(&r));
             let script = format!("tell application \"Terminal\"\nactivate\ndo script {}\nend tell", as_quote(&line));

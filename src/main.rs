@@ -22,6 +22,7 @@ mod fontfallback;
 mod fonts;
 mod fontview;
 mod geoview;
+mod gitinfo;
 mod i18n;
 mod jsonview;
 mod layout;

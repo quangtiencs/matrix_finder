@@ -424,6 +424,12 @@ impl TermSession {
         if self.exited.is_some() || self.term.lock().mode().contains(TermMode::ALT_SCREEN) {
             return false;
         }
+        // Typed into the shell, a control character in a path (a folder can be named
+        // `x<Ctrl+C>rm …`) is a key press, not text: it could end the quoting and run
+        // the rest. Such a line is not typed at all.
+        if !is_typeable(line) {
+            return false;
+        }
         // Esc clears the prompt line in cmd and PowerShell (PSReadLine); Ctrl+E
         // Ctrl+U in POSIX shells, fish and nu.
         let clear = match self.shell_name().to_lowercase().as_str() {
@@ -506,11 +512,10 @@ impl TermSession {
                 TEvent::Title(t) => self.title = t,
                 TEvent::ResetTitle => self.title.clear(),
                 TEvent::ClipboardStore(_, s) => ctx.copy_text(s),
-                TEvent::ClipboardLoad(_, f) => {
-                    if let Some(text) = clipboard_get(false) {
-                        self.write(f(&text).into_bytes());
-                    }
-                }
+                // A program asking for the clipboard (OSC 52) gets no answer: any output,
+                // a file shown with `cat` or a server over ssh, could ask, and the
+                // clipboard often holds a password. Copying to it is fine.
+                TEvent::ClipboardLoad(..) => {}
                 TEvent::ColorRequest(i, f) => {
                     let c = palette_color(i, self.ansi);
                     self.write(f(Rgb { r: c.r(), g: c.g(), b: c.b() }).into_bytes());
@@ -1373,15 +1378,40 @@ impl TermSession {
     }
 }
 
+/// Open a link clicked in the terminal. A program decides what an OSC 8 link points
+/// to, whatever text it shows, so only web and mail links go to their app; a file link
+/// shows its folder here and is never opened (it could be a script or an app).
 fn open_link(url: &str, out: &mut TermResponse) {
-    if let Some(p) = url.strip_prefix("file://") {
-        let path = PathBuf::from(p.trim_start_matches("localhost"));
-        if path.is_dir() {
-            out.open_dir = Some(path);
-            return;
+    match link_target(url) {
+        Some(LinkTarget::Web) => {
+            let _ = open::that_detached(url);
         }
+        Some(LinkTarget::Folder(dir)) => out.open_dir = Some(dir),
+        None => {}
     }
-    let _ = open::that_detached(url);
+}
+
+#[derive(Debug, PartialEq)]
+enum LinkTarget {
+    Web,
+    Folder(PathBuf),
+}
+
+fn link_target(url: &str) -> Option<LinkTarget> {
+    let scheme = url.split_once(':').map(|(s, _)| s.to_ascii_lowercase())?;
+    match scheme.as_str() {
+        "http" | "https" | "mailto" => Some(LinkTarget::Web),
+        "file" => {
+            let rest = url.strip_prefix("file://").or_else(|| url.strip_prefix("FILE://"))?;
+            let path = PathBuf::from(rest.trim_start_matches("localhost"));
+            if path.is_dir() {
+                Some(LinkTarget::Folder(path))
+            } else {
+                path.parent().filter(|p| p.is_dir()).map(|p| LinkTarget::Folder(p.to_path_buf()))
+            }
+        }
+        _ => None,
+    }
 }
 
 /// The command name of process `pid`, if the system tells.
@@ -1409,6 +1439,11 @@ fn next_id() -> u64 {
     N.fetch_add(1, Ordering::Relaxed)
 }
 
+
+/// Whether `line` can be typed at a shell prompt as text: no control characters.
+pub fn is_typeable(line: &str) -> bool {
+    !line.chars().any(|c| c.is_control())
+}
 
 /// How far (in points) the pointer moves with a button held before it is reported as
 /// a drag; at least a cell's width.
@@ -1840,6 +1875,22 @@ mod tests {
         assert_eq!(key_bytes(Key::A, Modifiers::NONE, none, false), None, "plain letters arrive as text");
         assert_eq!(key_bytes(Key::F5, Modifiers::NONE, none, false), Some(b"\x1b[15~".to_vec()));
         assert_eq!(key_bytes(Key::Tab, Modifiers::SHIFT, none, false), Some(b"\x1b[Z".to_vec()));
+    }
+
+    #[test]
+    fn links_and_typed_lines() {
+        assert_eq!(link_target("https://example.com/x"), Some(LinkTarget::Web));
+        assert_eq!(link_target("MAILTO:a@b.c"), Some(LinkTarget::Web));
+        assert_eq!(link_target("vscode://some/action"), None, "other apps' schemes are not opened");
+        assert_eq!(link_target("smb://server/share"), None);
+        let tmp = std::env::temp_dir();
+        assert_eq!(link_target(&format!("file://{}", tmp.display())), Some(LinkTarget::Folder(tmp.clone())));
+        // A file (a script, an app) is never opened: its folder is shown.
+        let script = tmp.join("matrix-finder-link-test.command");
+        assert_eq!(link_target(&format!("file://{}", script.display())), Some(LinkTarget::Folder(tmp.clone())));
+        assert!(is_typeable("cd '/tmp/a b'"));
+        assert!(!is_typeable("cd '/tmp/x\u{3}touch PWN #'"));
+        assert!(!is_typeable("cd '/tmp/x\ny'"));
     }
 
     #[test]

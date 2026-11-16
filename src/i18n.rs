@@ -131,6 +131,7 @@ mod tests {
             include_str!("datameta.rs"),
             include_str!("mail.rs"),
             include_str!("records.rs"),
+            include_str!("gitinfo.rs"),
         ];
         let keys: std::collections::HashSet<&str> = KEYS.iter().copied().collect();
         let mut missing = vec![];
