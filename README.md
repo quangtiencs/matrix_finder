@@ -81,7 +81,7 @@ Browse zip, 7z, rar and tar.* like folders, preview the files inside, and create
 <td valign="top">
 
 ### 👁️ Quick View
-Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 languages, **JSON as a tree** with paths to copy, plus **Parquet / Avro / Excel / CSV / NumPy / HDF5 / R** tables, **safetensors / ONNX** model weights and **GeoJSON / WKT / WKB** geometry.
+Previews for PDF, **Word / PowerPoint**, Jupyter notebooks, images (PSD, EXR, TGA…), **audio** with its cover, SVG, Markdown, code in ~60 languages, **JSON as a tree** with paths to copy, plus **Parquet / Avro / Excel / CSV / NumPy / HDF5 / R** tables, **safetensors / ONNX / GGUF / PyTorch** model weights, **MATLAB / NetCDF / Stata / SPSS / SAS / DuckDB** variables and **GeoJSON / GPX / KML / shapefile** geometry.
 
 </td>
 <td valign="top">
@@ -103,6 +103,12 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
 | Feature | Details |
 |---|---|
+| 📄 **Office documents** <sup>0.9</sup> | **Word** (`.docx`) with headings, lists and tables, **PowerPoint** (`.pptx`) and ODF presentations slide by slide, and the picture saved in **Pages, Keynote and Numbers** files |
+| 🎵 **Audio** <sup>0.9</sup> | MP3, FLAC, WAV, Ogg, Opus, M4A, AIFF and more: title, artist, album, track, duration, bitrate and sample rate, with the cover picture. No sound is decoded |
+| 🧠 **GGUF and PyTorch** <sup>0.9</sup> | llama.cpp's **GGUF** models and **PyTorch** checkpoints (`.pt`, `.pth`, `.ckpt`, `pytorch_model.bin`) list every tensor with its shape, type and size, plus their metadata. Only the header is read; a checkpoint's pickle is read as data and never run |
+| 🧪 **Scientific and statistical data** <sup>0.9</sup> | **MATLAB**, **NetCDF**, **ORC**, **Stata**, **SPSS**, **SAS** and **DuckDB** files list their variables or columns (names, shapes, types, labels) from their header, so files of any size open at once |
+| 🗺️ **More geometry** <sup>0.9</sup> | **GPX** tracks, **KML / KMZ**, ESRI **shapefiles** and **GeoPackage** are drawn like GeoJSON |
+| ✉️ **Mail, calendars, contacts, subtitles** <sup>0.9</sup> | `.eml` and `.mbox` messages with their attachments listed, `.ics` events, `.vcf` contacts and `.srt` / `.vtt` subtitles as tables; comic books (`.cbz`, `.cbr`, `.cb7`) show their cover |
 | 🔔 **Check for updates** <sup>0.8</sup> | *Check for updates…* asks GitHub for the latest release and shows what is new, with links to download it; you install it yourself. Checking at start is a setting, off by default |
 | 🌲 **JSON tree** <sup>0.8</sup> | JSON files open as a tree in Quick View. Click a row to get its path, `j['data'][0]['name']`, and copy it in Python, JavaScript, jq or JSONPath style; right-click to copy the value |
 | 🔍 **Search inside files** <sup>0.8</sup> | `source LIKE '%TODO%'` in the search box finds files with a matching line, like grep, in the folder or (<kbd>↓</kbd> <kbd>Enter</kbd>) every subfolder. Names, extensions and lines also take **regular expressions**: `name REGEXP '^img_\d+'`, `name ~ '^IMG'`, `source ~ 'fn \w+'` |
@@ -274,10 +280,12 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 - **Quick View** (<kbd>F3</kbd> shows and hides it; also <kbd>Ctrl</kbd>+<kbd>Q</kbd>) or the viewer window (<kbd>Shift</kbd>+<kbd>F3</kbd>) shows:
   - **PDF**
   - **Jupyter notebooks**
-  - images: PNG, JPEG, GIF, WebP, BMP, ICO and TIFF, with animated GIF and WebP playing
+  - images: PNG, JPEG, GIF, WebP, BMP, ICO, TIFF, TGA, QOI, PNM, DDS, OpenEXR and Radiance HDR, with animated GIF and WebP playing; *Details* shows a photo's EXIF facts (camera, exposure, location)
+  - **Photoshop** (PSD, PSB): the merged picture the file keeps, read in place so the layers are stepped over
   - **HEIC/HEIF and AVIF** (macOS decodes them itself; elsewhere libheif, ImageMagick or FFmpeg is needed)
   - **camera RAW** (CR2, NEF, ARW, DNG): the preview the camera embedded, with its exposure details
-  - **video** (MP4, MOV, MKV, WebM): duration, resolution and codecs, plus a thumbnail (FFmpeg, or Quick Look for MP4 and MOV on macOS)
+  - **video** (MP4, MOV, MKV, WebM, AVI, and with FFmpeg also WMV, FLV, MPEG, M2TS, 3GP and Ogg video): duration, resolution and codecs, plus a thumbnail (FFmpeg, or Quick Look for MP4 and MOV on macOS)
+  - **audio** (MP3, FLAC, WAV, Ogg Vorbis, Opus, M4A/M4B, AAC, AIFF, Monkey's Audio, WavPack, Musepack, Speex): its tags, duration, bitrate, sample rate, channels and bit depth, with the cover picture
   - **SVG**
   - **Markdown** (rendered or source)
   - **highlighted code** in ~60 languages
@@ -285,10 +293,19 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
   - **data tables** for Parquet, Avro, Excel/ODS, CSV/TSV, **SQLite**, **JSON Lines**, **NumPy** (`.npy`, `.npz`), **Arrow/Feather** and **HDF5**
   - **model weights**: **safetensors** and **ONNX** list every tensor with its shape, type and size, and the parameter count; only the header is read, so multi-gigabyte models open at once. ONNX also shows inputs and outputs, operators and metadata
   - **R data** (`.RData`, `.rda`, `.rds`, packed or not): each object with its class and size, and data frames, matrices and vectors as tables; functions and environments are never run
+  - **GGUF** models: every tensor with its shape, GGML type (Q4_K, F16…) and size, the parameter count and the metadata (architecture, context length, the tokenizer's first tokens)
+  - **PyTorch** checkpoints (`.pt`, `.pth`, `.ckpt`, `pytorch_model*.bin`, the ZIP format and the older one): each tensor by its path in the checkpoint, with shape, type and size, and plain values beside them (epoch, learning rate). The pickle that describes them is read as data only: no class is imported and no code runs
+  - **MATLAB** (`.mat` v5, v7 and v7.3), **NetCDF** (classic, 64-bit, CDF-5 and NetCDF-4), **ORC**, **Stata** (`.dta` 113–119), **SPSS** (`.sav`, `.zsav`) and **SAS** (`.sas7bdat`): their variables or columns with shape or type, format and label, and the row count; only the header is read. A file in one of these formats that is really text (G-code in a `.nc`, Octave text in a `.mat`) is shown as text
+  - **DuckDB** databases: their tables and views with columns, types and estimated row counts, through the `duckdb` tool when it is installed (opened read-only, with extensions and other files kept out); without it, the header's facts
   - **RTF, EPUB and ODF text** as readable text, with EPUB chapters
+  - **Word** (`.docx`): headings, lists, tables and emphasis; **PowerPoint** (`.pptx`) and **ODF presentations** (`.odp`) slide by slide, each slide's title naming it
+  - **Pages, Keynote and Numbers**: the picture the document was saved with (a `.key` that is not a Keynote file is shown as a key, never its contents)
+  - **e-mail**: `.eml` messages (headers, the text or the HTML as text, attachments by name and size) and `.mbox` mailboxes message by message (the first 1,000, from the first 32 MB). Attachments are never opened and nothing is fetched
+  - **calendars** (`.ics`: events, tasks), **contacts** (`.vcf`) and **subtitles** (`.srt`, `.vtt`) as tables, with *Source* for the text
+  - **comic books** (`.cbz`, `.cbr`, `.cb7`): the cover and the number of pages; <kbd>Enter</kbd> browses inside
   - **fonts** (TTF, OTF, WOFF, WOFF2): a sample sheet with names and properties
   - **3D models** (STL, OBJ, glTF, GLB): drag to turn, scroll to zoom
-  - **geometry** (GeoJSON, GeoJSON sequences `.geojsonl`, WKT and EWKT, WKB and EWKB, binary or as hex text): points, lines and polygons with their holes, drawn on a plain grid with x and y at the same scale. There is no map, and nothing is fetched. Drag to move, scroll or pinch to zoom around the pointer, double-click to see it all again; the pointer's coordinates show in the corner. The header counts features, geometry types and vertices (and the SRID, if the file has one); *Source* shows the text of GeoJSON and WKT
+  - **geometry** (GeoJSON, GeoJSON sequences `.geojsonl`, WKT and EWKT, WKB and EWKB, binary or as hex text, GPX tracks, routes and waypoints, KML and KMZ, ESRI shapefiles `.shp`, GeoPackage `.gpkg` read in place): points, lines and polygons with their holes, drawn on a plain grid with x and y at the same scale. There is no map, and nothing is fetched. Drag to move, scroll or pinch to zoom around the pointer, double-click to see it all again; the pointer's coordinates show in the corner. The header counts features, geometry types and vertices (and the SRID, if the file has one); *Source* shows the text of GeoJSON and WKT
   - **certificates** (PEM, CRT, CER, DER): validity, names, key and fingerprints; private keys are never displayed
   - a hex dump for binary files
   - folder and archive summaries
@@ -297,7 +314,7 @@ Previews for PDF, Jupyter notebooks, images, SVG, Markdown, code in ~60 language
 
   **Password-protected files:** ZIP (ZipCrypto and AES), 7z and RAR ask for the password when you open, preview or extract something protected. It is checked first, kept in memory until the app closes, and never saved. Protected Office, PDF, ODF and EPUB files show a small *Password protected* message: press <kbd>Enter</kbd> to open them in their own app.
 
-  Files past a size limit are not opened at all, and show a small *Too large to preview* message: 80 MB for images, PDF, notebooks, fonts, certificates, geometry and RTF (JSON trees up to 32 MB, then text), 256 MB for `.xls`, `.xlsb` and `.ods`, 768 MB for 3D models, and 1 GB for everything else. Local safetensors, ONNX and `.npz` files have no limit, since only their headers are read. On a server or inside an archive, only text is previewed past what can be fetched (16 MB and 80 MB).
+  Files past a size limit are not opened at all, and show a small *Too large to preview* message: 80 MB for images, PDF, notebooks, fonts, certificates, geometry, e-mail and RTF (JSON trees up to 32 MB, then text), 256 MB for `.xls`, `.xlsb` and `.ods`, 768 MB for 3D models, and 1 GB for everything else (Photoshop files, GeoPackages and mailboxes included, which are read in place). Local safetensors, ONNX, `.npz`, GGUF, PyTorch, MATLAB, NetCDF, ORC, Stata, SPSS, SAS and DuckDB files have no limit, since only their headers are read. A header that claims more than any real file has (millions of tensors, a struct inside itself) gets a *too complex to preview* message instead. On a server or inside an archive, only text is previewed past what can be fetched (16 MB and 80 MB).
 - **Search & filter**: one box for files and commands. Start typing in a file window to open it with what you typed, or press <kbd>Ctrl</kbd>+<kbd>F</kbd>. As you type, the active panel is filtered live; <kbd>Enter</kbd> keeps the filter and <kbd>Esc</kbd> closes the box and shows the whole folder again. <kbd>↓</kbd> <kbd>Enter</kbd> searches all subfolders instead. Queries can be plain text, globs, extension lists or an **SQL-like WHERE clause**, with **regular expressions** (`name REGEXP '^img_\d+'`) and a **search inside files** like grep (`source LIKE '%TODO%'`), see [Quick filter syntax](#filter).
 - **Quick filters by file type**: the **funnel** button of a file window opens a menu of categories with tick boxes: tick one or several (say *Images* and *Videos*) to show only those kinds of file. The menu stays open while you tick, and the chip in the address bar names what is shown. The built-in categories are Images, Music, Videos, Documents, Spreadsheets, Presentations, Development, Data and Archives, each with its common formats.
   - **While filtering**: folders stay visible, and the filter stays on while you browse into other folders. It works together with the text filter. Click the chip in the address bar or press <kbd>Esc</kbd> to turn it off.
@@ -686,15 +703,21 @@ src/
 ├── fonts.rs       bundled and installed fonts, interface and terminal font settings
 ├── settings_ui.rs the Settings tab
 ├── shortcuts.rs   keyboard shortcuts: actions, defaults per system, terminal safety
-├── media.rs       HEIC/AVIF decoding, video details and thumbnails
+├── media.rs       HEIC/AVIF decoding, video details (MP4, Matroska, AVI) and thumbnails
 ├── rawphoto.rs    camera RAW metadata and embedded previews
 ├── scidata.rs     SQLite, JSON Lines, NumPy, Arrow and HDF5 tables
-├── tensors.rs     safetensors, NumPy archives and ONNX models: their tensors
+├── tensors.rs     safetensors, NumPy archives, ONNX, GGUF and PyTorch models: their tensors
+├── pickle.rs      Python pickles read as data only (PyTorch checkpoints), never run
+├── datameta.rs    MATLAB, NetCDF, ORC, Stata, SPSS, SAS and DuckDB: variables from the header
 ├── rdata.rs       R data files (RData, RDS)
-├── textdocs.rs    RTF, EPUB and ODF text
+├── textdocs.rs    RTF, EPUB, ODF, Word and PowerPoint text
+├── mail.rs        e-mail messages and mailboxes
+├── records.rs     calendars, contacts and subtitles as tables
+├── audio.rs       audio tags, stream facts and cover pictures (lofty)
+├── psd.rs         Photoshop documents: the merged picture
 ├── fontview.rs    font sample sheets
 ├── model3d.rs     STL, OBJ and glTF models and their renderer
-├── geoview.rs     GeoJSON, WKT and WKB geometry and its drawing
+├── geoview.rs     GeoJSON, WKT, WKB, GPX, KML, shapefile and GeoPackage geometry and its drawing
 ├── jsonview.rs    JSON as a tree, with paths to copy
 ├── update.rs      checking GitHub for a newer release (only when asked)
 ├── certview.rs    X.509 certificates
