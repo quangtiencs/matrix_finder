@@ -4,7 +4,9 @@
 
 # Matrix Finder
 
-### A dual-panel file manager that can look inside data files.
+### Files, data and a terminal, side by side.
+
+**Look inside. Stay in flow.**
 
 Browse folders, archives and servers, and see what a Parquet table, an HDF5 file or a<br>
 model checkpoint holds without opening Python. A terminal sits next to your files.
