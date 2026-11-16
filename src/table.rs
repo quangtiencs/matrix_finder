@@ -69,13 +69,33 @@ pub fn is_table(name: &str) -> bool {
     matches!(
         ext_of(name).as_str(),
         "parquet" | "pq" | "avro" | "xlsx" | "xlsm" | "xlsb" | "xls" | "ods" | "csv" | "tsv" | "sqlite" | "sqlite3" | "db3" | "jsonl" | "ndjson" | "npy" | "feather" | "arrow" | "arrows" | "h5" | "hdf5"
-            | "npz" | "safetensors" | "onnx" | "rdata" | "rda" | "rds"
-    )
+            | "npz" | "safetensors" | "onnx" | "rdata" | "rda" | "rds" | "gguf" | "pt" | "pth" | "ckpt" | "mat" | "nc" | "nc4" | "cdf" | "orc" | "dta"
+            | "sav" | "zsav" | "sas7bdat" | "duckdb" | "ddb"
+    ) || is_torch_bin(name)
+        || crate::records::is_record_text(name)
+}
+
+/// The language of a table's source text, for formats whose text can be shown too.
+pub fn source_language(name: &str) -> Option<&'static str> {
+    if is_csv(name) {
+        Some("csv")
+    } else if crate::records::is_record_text(name) {
+        Some("txt")
+    } else {
+        None
+    }
+}
+
+/// `pytorch_model.bin` and its shards: PyTorch checkpoints under a generic extension.
+fn is_torch_bin(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.starts_with("pytorch_model") && lower.ends_with(".bin")
 }
 
 /// Formats of which only a header or an index is read, so a file of any size opens.
 pub fn reads_header_only(name: &str) -> bool {
-    matches!(ext_of(name).as_str(), "npz" | "safetensors" | "onnx")
+    matches!(ext_of(name).as_str(), "npz" | "safetensors" | "onnx" | "gguf" | "pt" | "pth" | "ckpt" | "mat" | "nc" | "nc4" | "cdf" | "orc" | "dta" | "sav" | "zsav" | "sas7bdat" | "duckdb" | "ddb")
+        || is_torch_bin(name)
 }
 
 pub fn is_csv(name: &str) -> bool {
@@ -102,6 +122,20 @@ pub fn load_path(path: &Path) -> Res<TableData> {
         "npz" => crate::tensors::npz_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
         "safetensors" => crate::tensors::safetensors_from(std::fs::File::open(path).map_err(es)?),
         "onnx" => crate::tensors::onnx_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "gguf" => crate::tensors::gguf_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "pt" | "pth" | "ckpt" | "bin" => crate::tensors::torch_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "mat" => crate::datameta::mat_path(path),
+        "nc" | "nc4" | "cdf" => crate::datameta::netcdf_path(path),
+        "orc" => crate::datameta::orc_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "dta" => crate::datameta::stata_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "sav" | "zsav" => crate::datameta::spss_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "sas7bdat" => crate::datameta::sas_from(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?)),
+        "duckdb" | "ddb" => crate::datameta::duckdb_from(path, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))),
+        _ if crate::records::is_record_text(&name) => {
+            let mut head = Vec::new();
+            std::fs::File::open(path).map_err(es)?.take(crate::records::MAX_READ).read_to_end(&mut head).map_err(es)?;
+            crate::records::load(&name, &head)
+        }
         "rdata" | "rda" | "rds" => crate::rdata::rdata_from(std::fs::File::open(path).map_err(es)?),
         _ => {
             let mut head = Vec::new();
@@ -139,6 +173,22 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Res<TableData> {
         "npz" => crate::tensors::npz_from(std::io::Cursor::new(bytes)),
         "safetensors" => crate::tensors::safetensors_from(std::io::Cursor::new(bytes)),
         "onnx" => crate::tensors::onnx_from(std::io::Cursor::new(bytes)),
+        "gguf" => crate::tensors::gguf_from(std::io::Cursor::new(bytes)),
+        "pt" | "pth" | "ckpt" | "bin" => crate::tensors::torch_from(std::io::Cursor::new(bytes)),
+        "mat" => crate::datameta::mat_bytes(bytes),
+        "nc" | "nc4" | "cdf" => crate::datameta::netcdf_bytes(bytes),
+        "orc" => crate::datameta::orc_from(std::io::Cursor::new(bytes)),
+        "dta" => crate::datameta::stata_from(std::io::Cursor::new(bytes)),
+        "sav" | "zsav" => crate::datameta::spss_from(std::io::Cursor::new(bytes)),
+        "sas7bdat" => crate::datameta::sas_from(std::io::Cursor::new(bytes)),
+        // The tool only reads real files.
+        _ if crate::records::is_record_text(name) => crate::records::load(name, &bytes[..bytes.len().min(crate::records::MAX_READ as usize)]),
+        "duckdb" | "ddb" => {
+            let dir = crate::media::TempDir::new()?;
+            let path = dir.path().join("preview.duckdb");
+            std::fs::write(&path, bytes).map_err(es)?;
+            crate::datameta::duckdb_from(&path, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
+        }
         "rdata" | "rda" | "rds" => crate::rdata::rdata_from(std::io::Cursor::new(bytes)),
         _ => {
             let delim = sniff_delimiter(name, &bytes);

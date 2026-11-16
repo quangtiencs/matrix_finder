@@ -1,5 +1,6 @@
-//! Geometry previews (GeoJSON, WKT, WKB): the shapes a file holds, drawn on a plain
-//! grid with x and y at the same scale. There is no map under them and nothing is fetched.
+//! Geometry previews (GeoJSON, WKT, WKB, GPX, KML, shapefiles, GeoPackage): the shapes a
+//! file holds, drawn on a plain grid with x and y at the same scale. There is no map
+//! under them and nothing is fetched.
 use crate::i18n::t;
 use crate::preview::Styled;
 use crate::theme::Theme;
@@ -14,13 +15,19 @@ const MAX_DEPTH: usize = 64;
 const ZOOM: std::ops::RangeInclusive<f64> = 0.1..=10_000.0;
 
 pub fn is_geo(name: &str) -> bool {
-    matches!(ext_of(name).as_str(), "geojson" | "geojsonl" | "geojsons" | "wkt" | "wkb")
+    matches!(ext_of(name).as_str(), "geojson" | "geojsonl" | "geojsons" | "wkt" | "wkb" | "gpx" | "kml" | "kmz" | "shp" | "gpkg")
+}
+
+/// Formats read in place from a file on disk (a database of any size).
+pub fn reads_path(name: &str) -> bool {
+    ext_of(name) == "gpkg"
 }
 
 /// Whether the file is text (its source can be shown) and in which language.
 pub fn source_language(name: &str) -> &'static str {
     match ext_of(name).as_str() {
         "geojson" | "geojsonl" | "geojsons" => "json",
+        "gpx" | "kml" => "xml",
         _ => "txt",
     }
 }
@@ -141,6 +148,17 @@ pub fn load(name: &str, bytes: &[u8]) -> Res<GeoData> {
         "geojson" => geojson(bytes, false),
         "geojsonl" | "geojsons" => geojson(bytes, true),
         "wkt" => wkt(bytes),
+        "gpx" => gpx(bytes),
+        "kml" => kml(bytes, "KML"),
+        "kmz" => kmz(bytes),
+        "shp" => shapefile(bytes),
+        "gpkg" => {
+            // SQLite only reads real files.
+            let dir = crate::media::TempDir::new()?;
+            let path = dir.path().join("preview.gpkg");
+            std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+            geopackage(&path)
+        }
         _ => wkb_file(bytes),
     }
 }
@@ -654,6 +672,317 @@ fn wkb_file(bytes: &[u8]) -> Res<GeoData> {
     c.finish(format, false)
 }
 
+// ---------------------------------------------------------------- GPX and KML
+
+/// `lon,lat[,alt]` tuples separated by white space (KML), or `lon lat alt` (gx:coord).
+/// At most as many as the drawing can still take.
+fn kml_coords(text: &str, one_per_line: bool) -> Vec<Pt> {
+    let parse = |t: &str, sep: char| {
+        let mut it = t.split(sep).filter(|s| !s.is_empty()).map(|s| s.trim().parse::<f64>());
+        match (it.next(), it.next()) {
+            (Some(Ok(x)), Some(Ok(y))) => Some([x, y]),
+            _ => None,
+        }
+    };
+    if one_per_line {
+        return parse(text.trim(), ' ').into_iter().collect();
+    }
+    text.split_ascii_whitespace().filter_map(|t| parse(t, ',')).take(MAX_VERTICES + 1).collect()
+}
+
+fn xml_reader(bytes: &[u8]) -> quick_xml::Reader<&[u8]> {
+    let mut r = quick_xml::Reader::from_reader(bytes);
+    let c = r.config_mut();
+    c.check_end_names = false;
+    c.allow_unmatched_ends = true;
+    r
+}
+
+fn xml_local(name: &[u8]) -> &[u8] {
+    name.rsplit(|b| *b == b':').next().unwrap_or(name)
+}
+
+fn xml_attr_f64(e: &quick_xml::events::BytesStart, key: &[u8]) -> Option<f64> {
+    e.attributes().flatten().find(|a| a.key.as_ref() == key).and_then(|a| std::str::from_utf8(&a.value).ok()?.trim().parse().ok())
+}
+
+/// GPX: waypoints as points, and each route and track segment as a line.
+fn gpx(bytes: &[u8]) -> Res<GeoData> {
+    use quick_xml::events::Event;
+    let mut r = xml_reader(bytes);
+    let mut c = Collect::default();
+    let mut line: Option<Vec<Pt>> = None;
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) => {
+                let point = || Some([xml_attr_f64(&e, b"lon")?, xml_attr_f64(&e, b"lat")?]);
+                match xml_local(e.name().as_ref()) {
+                    b"wpt" => {
+                        if let Some(p) = point() {
+                            c.point(p);
+                            c.count("Waypoint");
+                            c.features += 1;
+                        }
+                    }
+                    b"rte" | b"trk" => {
+                        c.count(if xml_local(e.name().as_ref()) == b"rte" { "Route" } else { "Track" });
+                        c.features += 1;
+                        line = Some(vec![]);
+                    }
+                    b"trkseg" => line = Some(vec![]),
+                    b"rtept" | b"trkpt" => {
+                        if let (Some(l), Some(p)) = (line.as_mut(), point()) {
+                            if c.vertices + l.len() < MAX_VERTICES {
+                                l.push(p);
+                            } else {
+                                c.truncated = true;
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                if matches!(xml_local(e.name().as_ref()), b"rte" | b"trkseg") {
+                    if let Some(l) = line.take() {
+                        c.line(l);
+                    }
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(format!("GPX: {e}")),
+            _ => {}
+        }
+    }
+    c.finish("GPX", true)
+}
+
+/// KML: the points, lines and polygons of its placemarks (and tracks), however nested.
+fn kml(bytes: &[u8], format: &'static str) -> Res<GeoData> {
+    use quick_xml::events::Event;
+    let mut r = xml_reader(bytes);
+    let mut c = Collect::default();
+    // What the coordinates being read belong to.
+    let (mut in_coords, mut in_gx_coord, mut kind): (bool, bool, Option<&'static str>) = (false, false, None);
+    let mut rings: Option<Vec<Vec<Pt>>> = None;
+    let mut track: Option<Vec<Pt>> = None;
+    let mut text = String::new();
+    let mut depth = 0usize;
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                if depth > 256 {
+                    return Err(format!("{format}: nested too deeply"));
+                }
+                match xml_local(e.name().as_ref()) {
+                    b"Placemark" => c.features += 1,
+                    b"Point" => kind = Some("Point"),
+                    b"LineString" if rings.is_none() => kind = Some("LineString"),
+                    b"Polygon" => {
+                        kind = Some("Polygon");
+                        rings = Some(vec![]);
+                    }
+                    b"Track" => track = Some(vec![]),
+                    b"coordinates" => {
+                        in_coords = true;
+                        text.clear();
+                    }
+                    b"coord" if track.is_some() => {
+                        in_gx_coord = true;
+                        text.clear();
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(e)) if in_coords || in_gx_coord => {
+                if text.len() < 256 * 1024 * 1024 {
+                    text.push_str(&String::from_utf8_lossy(e.as_ref()));
+                }
+            }
+            Ok(Event::End(e)) => {
+                depth = depth.saturating_sub(1);
+                match xml_local(e.name().as_ref()) {
+                    b"coordinates" if in_coords => {
+                        in_coords = false;
+                        let pts = kml_coords(&text, false);
+                        match (&mut rings, kind) {
+                            (Some(r), _) => r.push(pts),
+                            (None, Some("Point")) => pts.into_iter().take(1).for_each(|p| c.point(p)),
+                            (None, _) => c.line(pts),
+                        }
+                    }
+                    b"coord" if in_gx_coord => {
+                        in_gx_coord = false;
+                        if let Some(t) = track.as_mut() {
+                            t.extend(kml_coords(&text, true));
+                        }
+                    }
+                    b"Polygon" => {
+                        if let Some(r) = rings.take() {
+                            c.polygon(r);
+                        }
+                        c.count("Polygon");
+                    }
+                    b"Point" | b"LineString" => {
+                        if let Some(k) = kind.filter(|_| rings.is_none()) {
+                            c.count(k);
+                        }
+                    }
+                    b"Track" => {
+                        if let Some(t) = track.take() {
+                            c.line(t);
+                            c.count("Track");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(format!("{format}: {e}")),
+            _ => {}
+        }
+    }
+    c.finish(format, true)
+}
+
+/// A KMZ file is a ZIP with the KML document in it (`doc.kml`, or the first `.kml`).
+fn kmz(bytes: &[u8]) -> Res<GeoData> {
+    use std::io::Read;
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("KMZ: {e}"))?;
+    let name = zip.file_names().filter(|n| n.to_lowercase().ends_with(".kml")).min_by_key(|n| (*n != "doc.kml", n.len())).map(str::to_string).ok_or("KMZ: no KML document inside")?;
+    let mut kml_bytes = Vec::new();
+    zip.by_name(&name).map_err(|e| e.to_string())?.take(crate::preview::MAX_IMAGE as u64).read_to_end(&mut kml_bytes).map_err(|e| e.to_string())?;
+    kml(&kml_bytes, "KMZ")
+}
+
+// ---------------------------------------------------------------- Shapefile
+
+/// An ESRI shapefile's `.shp`: its records' shapes (the attributes are in the `.dbf`).
+fn shapefile(b: &[u8]) -> Res<GeoData> {
+    let bad = || t("Not a valid shapefile.");
+    if b.len() < 100 || b[..4] != [0, 0, 0x27, 0x0A] {
+        return Err(bad());
+    }
+    let le_i32 = |at: usize| b.get(at..at + 4).map(|s| i32::from_le_bytes(s.try_into().unwrap()));
+    let be_i32 = |at: usize| b.get(at..at + 4).map(|s| i32::from_be_bytes(s.try_into().unwrap()));
+    let f64_at = |at: usize| b.get(at..at + 8).map(|s| f64::from_le_bytes(s.try_into().unwrap()));
+    let pt = |at: usize| Some([f64_at(at)?, f64_at(at + 8)?]);
+    let mut c = Collect::default();
+    let mut at = 100usize;
+    while at + 12 <= b.len() && !c.truncated {
+        let len = be_i32(at + 4).ok_or_else(bad)?.max(0) as usize * 2;
+        let body = at + 8;
+        let end = body.checked_add(len).filter(|e| *e <= b.len()).ok_or_else(bad)?;
+        at = end;
+        c.features += 1;
+        let kind = le_i32(body).ok_or_else(bad)?;
+        match kind {
+            0 => {}
+            1 | 11 | 21 => {
+                c.point(pt(body + 4).ok_or_else(bad)?);
+                c.count("Point");
+            }
+            8 | 18 | 28 => {
+                let n = le_i32(body + 36).ok_or_else(bad)?.max(0) as usize;
+                if body + 40 + n * 16 > end {
+                    return Err(bad());
+                }
+                (0..n).filter_map(|i| pt(body + 40 + i * 16)).for_each(|p| c.point(p));
+                c.count("MultiPoint");
+            }
+            3 | 13 | 23 | 5 | 15 | 25 => {
+                let parts = le_i32(body + 36).ok_or_else(bad)?.max(0) as usize;
+                let n = le_i32(body + 40).ok_or_else(bad)?.max(0) as usize;
+                // Both counts must fit in the record before anything is made of them.
+                let points_at = body + 44 + parts * 4;
+                if points_at > end || points_at.checked_add(n * 16).is_none_or(|e| e > end) {
+                    return Err(bad());
+                }
+                let starts: Vec<usize> = (0..parts).map(|i| le_i32(body + 44 + i * 4).unwrap_or(0).clamp(0, n as i32) as usize).collect();
+                let pieces: Vec<Vec<Pt>> = starts
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &s)| {
+                        let e = starts.get(i + 1).copied().unwrap_or(n).max(s);
+                        (s..e).filter_map(|k| pt(points_at + k * 16)).collect()
+                    })
+                    .collect();
+                if matches!(kind, 5 | 15 | 25) {
+                    c.polygon(pieces);
+                    c.count("Polygon");
+                } else {
+                    pieces.into_iter().for_each(|p| c.line(p));
+                    c.count("LineString");
+                }
+            }
+            other => return Err(format!("{} ({other})", t("This shape type is not supported."))),
+        }
+    }
+    c.finish("Shapefile", true)
+}
+
+// ---------------------------------------------------------------- GeoPackage
+
+/// Rows read at most from one GeoPackage (the vertex limit usually stops sooner).
+const GPKG_MAX_ROWS: usize = 2_000_000;
+
+/// A GeoPackage is a SQLite database: each feature table's geometry column holds
+/// WKB behind a small header. Read in place, from the first table on, until the
+/// vertex limit; a query that takes too long is cut short.
+pub fn geopackage(path: &std::path::Path) -> Res<GeoData> {
+    use rusqlite::{Connection, OpenFlags};
+    let conn = Connection::open_with_flags(crate::scidata::sqlite_uri(path), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(|e| e.to_string())?;
+    conn.pragma_update(None, "trusted_schema", "OFF").map_err(|e| e.to_string())?;
+    let started = std::time::Instant::now();
+    conn.progress_handler(10_000, Some(move || started.elapsed() > std::time::Duration::from_secs(5))).map_err(|e| e.to_string())?;
+    let columns: Vec<(String, String)> = {
+        let mut q = conn.prepare("SELECT table_name, column_name FROM gpkg_geometry_columns ORDER BY table_name").map_err(|_| t("Not a GeoPackage this preview can read."))?;
+        let rows = q.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(|e| e.to_string())?;
+        rows.flatten().collect()
+    };
+    let mut srid: Option<u32> = None;
+    let mut c = Collect::default();
+    let mut read = 0usize;
+    'tables: for (table, column) in columns {
+        let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
+        let Ok(mut q) = conn.prepare(&format!("SELECT {} FROM {}", quote(&column), quote(&table))) else { continue };
+        let Ok(mut rows) = q.query([]) else { continue };
+        while let Ok(Some(row)) = rows.next() {
+            read += 1;
+            if read > GPKG_MAX_ROWS || c.truncated {
+                c.truncated = true;
+                break 'tables;
+            }
+            let Ok(blob) = row.get_ref(0).and_then(|v| v.as_blob().map_err(Into::into)) else { continue };
+            c.features += 1;
+            // "GP", version, flags (byte order, envelope size, empty), SRS id, envelope, WKB.
+            if blob.len() < 8 || &blob[..2] != b"GP" {
+                continue;
+            }
+            let flags = blob[3];
+            let id = if flags & 1 == 1 { i32::from_le_bytes(blob[4..8].try_into().unwrap()) } else { i32::from_be_bytes(blob[4..8].try_into().unwrap()) };
+            srid = srid.or(u32::try_from(id).ok().filter(|i| *i > 0));
+            let envelope = match (flags >> 1) & 7 {
+                0 => 0,
+                1 => 32,
+                2 | 3 => 48,
+                4 => 64,
+                _ => continue,
+            };
+            if flags & 0x10 != 0 || blob.len() < 8 + envelope {
+                continue;
+            }
+            let mut w = Wkb { b: &blob[8 + envelope..], i: 0 };
+            let _ = w.geometry(&mut c, true, 0);
+        }
+    }
+    if c.srid.is_none() {
+        c.srid = srid;
+    }
+    c.finish("GeoPackage", true)
+}
+
 // ---------------------------------------------------------------- drawing
 
 /// Where the view looks: the data point at the middle, and pixels per unit.
@@ -999,6 +1328,30 @@ mod tests {
             b.extend(y.to_le_bytes());
         }
         b
+    }
+
+    #[test]
+    fn shapefiles_that_claim_too_much_are_refused() {
+        let mut v = vec![0u8; 100];
+        v[..4].copy_from_slice(&[0, 0, 0x27, 0x0A]);
+        let mut content = 5i32.to_le_bytes().to_vec();
+        content.extend([0u8; 32]);
+        content.extend(i32::MAX.to_le_bytes());
+        content.extend(4i32.to_le_bytes());
+        v.extend(1i32.to_be_bytes());
+        v.extend(((content.len() / 2) as i32).to_be_bytes());
+        v.extend(content);
+        assert!(load("a.shp", &v).is_err());
+        // And a good one: a point.
+        let mut v = v[..100].to_vec();
+        let mut content = 1i32.to_le_bytes().to_vec();
+        content.extend(3.0f64.to_le_bytes());
+        content.extend(4.0f64.to_le_bytes());
+        v.extend(1i32.to_be_bytes());
+        v.extend(((content.len() / 2) as i32).to_be_bytes());
+        v.extend(content);
+        let d = load("a.shp", &v).unwrap();
+        assert_eq!((d.kinds.clone(), d.bbox), (vec![("Point", 1)], [3.0, 4.0, 3.0, 4.0]));
     }
 
     #[test]

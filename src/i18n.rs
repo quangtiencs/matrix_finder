@@ -125,6 +125,12 @@ mod tests {
             include_str!("pathfield.rs"),
             include_str!("archive.rs"),
             include_str!("shortcuts.rs"),
+            include_str!("audio.rs"),
+            include_str!("psd.rs"),
+            include_str!("pickle.rs"),
+            include_str!("datameta.rs"),
+            include_str!("mail.rs"),
+            include_str!("records.rs"),
         ];
         let keys: std::collections::HashSet<&str> = KEYS.iter().copied().collect();
         let mut missing = vec![];

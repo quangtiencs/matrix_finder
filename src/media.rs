@@ -58,6 +58,42 @@ fn run_tool(mut cmd: Command, timeout: Duration, cancel: &Cancel) -> bool {
     }
 }
 
+/// Run a tool and return what it printed, or `None` if it failed, took too long or is
+/// no longer wanted. Its output goes to a file, so a long one cannot block it.
+pub fn tool_output(mut cmd: Command, cancel: &Cancel) -> Option<Vec<u8>> {
+    let tmp = TempDir::new().ok()?;
+    let out = tmp.path().join("out");
+    let _one_at_a_time = TOOL_LOCK.lock();
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    cmd.stdin(Stdio::null()).stdout(std::fs::File::create(&out).ok()?).stderr(Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    }
+    let mut child = cmd.spawn().ok()?;
+    let started = Instant::now();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break,
+            Ok(None) if started.elapsed() < TOOL_TIMEOUT && !cancel.load(Ordering::Relaxed) => std::thread::sleep(Duration::from_millis(20)),
+            Ok(None) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            _ => return None,
+        }
+    }
+    // A tool's answer about a header is small; a huge one is not read.
+    let f = std::fs::File::open(&out).ok()?;
+    let mut bytes = Vec::new();
+    f.take(64 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
+    Some(bytes)
+}
+
 /// A private temporary folder, removed with everything in it when dropped.
 pub struct TempDir(PathBuf);
 
@@ -140,16 +176,102 @@ pub struct VideoInfo {
     pub audio_codec: Option<String>,
 }
 
-/// Read what a video file says about itself (MP4 and MOV, or Matroska and WebM).
+/// Read what a video file says about itself (MP4 and MOV, Matroska and WebM, or AVI).
 pub fn video_info<R: Read + Seek>(r: &mut R) -> VideoInfo {
-    let mut magic = [0u8; 4];
+    let mut magic = [0u8; 12];
     if r.seek(SeekFrom::Start(0)).is_err() || r.read_exact(&mut magic).is_err() || r.seek(SeekFrom::Start(0)).is_err() {
         return VideoInfo::default();
     }
-    if magic == [0x1A, 0x45, 0xDF, 0xA3] {
+    if magic[..4] == [0x1A, 0x45, 0xDF, 0xA3] {
         matroska_info(r)
+    } else if &magic[..4] == b"RIFF" && &magic[8..12] == b"AVI " {
+        avi_info(r)
     } else {
         mp4_info(r)
+    }
+}
+
+/// The header list of an AVI file is small; past this it is not read.
+const MAX_AVI_HEADER: u32 = 1024 * 1024;
+
+fn le_u32(b: &[u8], at: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))
+}
+
+/// RIFF chunks of a body, as (id, body).
+fn riff_chunks(mut b: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
+    std::iter::from_fn(move || {
+        let id = b.get(..4)?;
+        let size = le_u32(b, 4)? as usize;
+        let body = b.get(8..8 + size)?;
+        // Chunks are padded to an even length.
+        b = b.get(8 + size + size % 2..).unwrap_or_default();
+        Some((id, body))
+    })
+}
+
+/// An AVI file's `hdrl` list: the main header and one header per stream.
+fn avi_info<R: Read + Seek>(r: &mut R) -> VideoInfo {
+    let mut info = VideoInfo::default();
+    let mut head = [0u8; 24];
+    if r.seek(SeekFrom::Start(0)).is_err() || r.read_exact(&mut head).is_err() || &head[12..16] != b"LIST" || &head[20..24] != b"hdrl" {
+        return info;
+    }
+    let len = u32::from_le_bytes([head[16], head[17], head[18], head[19]]).min(MAX_AVI_HEADER) as usize;
+    let mut hdrl = vec![0u8; len.saturating_sub(4)];
+    let got = read_up_to(r, &mut hdrl);
+    hdrl.truncate(got);
+    for (id, body) in riff_chunks(&hdrl) {
+        match id {
+            b"avih" => {
+                let (us, frames) = (le_u32(body, 0).unwrap_or(0), le_u32(body, 16).unwrap_or(0));
+                if us > 0 {
+                    info.fps = Some(1e6 / f64::from(us));
+                    info.duration = (frames > 0).then(|| f64::from(frames) * f64::from(us) / 1e6);
+                }
+                info.size = le_u32(body, 32).zip(le_u32(body, 36)).filter(|(w, h)| *w > 0 && *h > 0);
+            }
+            b"LIST" if body.starts_with(b"strl") => {
+                let mut kind = [0u8; 4];
+                for (id, b) in riff_chunks(&body[4..]) {
+                    match id {
+                        b"strh" => kind.copy_from_slice(b.get(..4).unwrap_or(b"????")),
+                        // A video's format names its codec; a sound's has a format code.
+                        b"strf" if &kind == b"vids" && info.video_codec.is_none() => {
+                            info.video_codec = b.get(16..20).map(|c| avi_video_codec(c.try_into().unwrap_or_default()));
+                        }
+                        b"strf" if &kind == b"auds" && info.audio_codec.is_none() => {
+                            info.audio_codec = b.get(..2).map(|c| avi_audio_codec(u16::from_le_bytes([c[0], c[1]])));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    info
+}
+
+fn avi_video_codec(fourcc: [u8; 4]) -> String {
+    match fourcc.to_ascii_uppercase().as_slice() {
+        b"H264" | b"X264" | b"AVC1" => "H.264".into(),
+        b"HEVC" | b"H265" | b"HVC1" => "HEVC (H.265)".into(),
+        b"XVID" | b"DIVX" | b"DX50" | b"FMP4" | b"MP4V" => "MPEG-4".into(),
+        b"MJPG" => "Motion JPEG".into(),
+        _ => String::from_utf8_lossy(&fourcc).trim_matches(['\0', ' ']).to_string(),
+    }
+}
+
+fn avi_audio_codec(tag: u16) -> String {
+    match tag {
+        0x0001 => "PCM".into(),
+        0x0055 => "MP3".into(),
+        0x00FF | 0x1610 => "AAC".into(),
+        0x2000 => "AC-3".into(),
+        0x2001 => "DTS".into(),
+        0x0050 => "MPEG audio".into(),
+        other => format!("0x{other:04X}"),
     }
 }
 
@@ -554,8 +676,8 @@ pub fn video_thumbnail(path: &Path, duration: Option<f64>, cancel: &Cancel) -> O
             }
         }
     }
-    // macOS has no reader for Matroska and WebM, and Quick Look hangs on them instead of failing.
-    let quick_look_reads_it = !matches!(crate::util::ext_of(&path.to_string_lossy()).as_str(), "mkv" | "webm");
+    // macOS has no reader for Matroska, WebM and the older formats, and Quick Look hangs on them instead of failing.
+    let quick_look_reads_it = !matches!(crate::util::ext_of(&path.to_string_lossy()).as_str(), "mkv" | "webm" | "avi" | "wmv" | "flv" | "ogv");
     if cfg!(target_os = "macos") && quick_look_reads_it && !cancel.load(Ordering::Relaxed) {
         let mut cmd = Command::new("/usr/bin/qlmanage");
         cmd.args(["-t", "-s", &WIDTH.to_string(), "-o"]).arg(tmp.path()).arg(path);

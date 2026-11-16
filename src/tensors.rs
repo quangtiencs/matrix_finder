@@ -1,6 +1,7 @@
-//! Model and tensor files: safetensors, NumPy archives (`.npz`) and ONNX. Each lists its
-//! tensors (name, shape, type, size) through the table view. Only the headers are read,
-//! so a model of many gigabytes opens at once; the small arrays of an `.npz` are shown too.
+//! Model and tensor files: safetensors, NumPy archives (`.npz`), ONNX, GGUF and PyTorch
+//! checkpoints. Each lists its tensors (name, shape, type, size) through the table view.
+//! Only the headers are read, so a model of many gigabytes opens at once; the small
+//! arrays of an `.npz` are shown too.
 use crate::i18n::t;
 use crate::table::{clip_cell, finish_sheet, fmt_count, Cell, Sheet, TableData, MAX_ROWS};
 use crate::util::{es, human_size, Res};
@@ -664,6 +665,394 @@ pub fn onnx_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
     about.extend(m.metadata);
     sheets.push(key_value_sheet(t("Metadata"), about));
     Ok(TableData { format: "ONNX", info, sheets })
+}
+
+// ---------------------------------------------------------------- GGUF
+
+/// More than this many keys or tensors is not a model file but a damaged one.
+const GGUF_MAX_ITEMS: u64 = 1_000_000;
+/// Keys kept for the metadata tab, and the text kept of one value.
+const GGUF_MAX_KEPT: usize = 5000;
+const GGUF_MAX_VALUE: usize = 2048;
+/// The header (metadata and tensor list) is read this far at most: a vocabulary of
+/// a few hundred thousand tokens takes a few megabytes.
+const GGUF_MAX_HEADER: u64 = 512 * 1024 * 1024;
+/// Longest name kept (tensor names and keys are short).
+const GGUF_MAX_NAME: u64 = 64 * 1024;
+/// Text kept of a metadata string, and items shown of an array.
+const GGUF_KEEP_TEXT: u64 = 1024;
+const GGUF_ARRAY_SHOWN: usize = 8;
+/// Arrays inside arrays: deeper than this a file is refused.
+const GGUF_MAX_DEPTH: usize = 3;
+
+fn gguf_bad() -> String {
+    t("Not a valid GGUF file.")
+}
+
+/// The name of a GGML tensor type.
+fn ggml_type(code: u32) -> String {
+    let name = match code {
+        0 => "F32",
+        1 => "F16",
+        2 => "Q4_0",
+        3 => "Q4_1",
+        6 => "Q5_0",
+        7 => "Q5_1",
+        8 => "Q8_0",
+        9 => "Q8_1",
+        10 => "Q2_K",
+        11 => "Q3_K",
+        12 => "Q4_K",
+        13 => "Q5_K",
+        14 => "Q6_K",
+        15 => "Q8_K",
+        16 => "IQ2_XXS",
+        17 => "IQ2_XS",
+        18 => "IQ3_XXS",
+        19 => "IQ1_S",
+        20 => "IQ4_NL",
+        21 => "IQ3_S",
+        22 => "IQ2_S",
+        23 => "IQ4_XS",
+        24 => "I8",
+        25 => "I16",
+        26 => "I32",
+        27 => "I64",
+        28 => "F64",
+        29 => "IQ1_M",
+        30 => "BF16",
+        34 => "TQ1_0",
+        35 => "TQ2_0",
+        39 => "MXFP4",
+        other => return format!("type {other}"),
+    };
+    name.to_string()
+}
+
+struct Gguf<R> {
+    r: R,
+    len: u64,
+}
+
+impl<R: Read + Seek> Gguf<R> {
+    fn bytes<const N: usize>(&mut self) -> Res<[u8; N]> {
+        let mut b = [0u8; N];
+        self.r.read_exact(&mut b).map_err(|_| t("This file is cut short."))?;
+        Ok(b)
+    }
+
+    fn u32(&mut self) -> Res<u32> {
+        Ok(u32::from_le_bytes(self.bytes()?))
+    }
+
+    fn u64(&mut self) -> Res<u64> {
+        Ok(u64::from_le_bytes(self.bytes()?))
+    }
+
+    fn skip(&mut self, n: u64) -> Res<()> {
+        if n <= 64 * 1024 {
+            let got = std::io::copy(&mut (&mut self.r).take(n), &mut std::io::sink()).map_err(es)?;
+            if got < n {
+                return Err(t("This file is cut short."));
+            }
+            return Ok(());
+        }
+        let n = i64::try_from(n).map_err(|_| gguf_bad())?;
+        let at = self.r.seek(SeekFrom::Current(n)).map_err(es)?;
+        if at > self.len {
+            return Err(t("This file is cut short."));
+        }
+        Ok(())
+    }
+
+    /// A string, of which at most `keep` bytes are kept.
+    fn string(&mut self, keep: u64) -> Res<String> {
+        let n = self.u64()?;
+        if n > self.len {
+            return Err(gguf_bad());
+        }
+        let mut b = Vec::new();
+        (&mut self.r).take(n.min(keep)).read_to_end(&mut b).map_err(es)?;
+        if (b.len() as u64) < n.min(keep) {
+            return Err(t("This file is cut short."));
+        }
+        self.skip(n - n.min(keep))?;
+        let mut s = String::from_utf8_lossy(&b).into_owned();
+        if n > keep {
+            s.push('…');
+        }
+        Ok(s)
+    }
+
+    /// A metadata value as text; arrays show their first items and their length.
+    fn value(&mut self, kind: u32, depth: usize) -> Res<String> {
+        Ok(match kind {
+            0 => self.bytes::<1>()?[0].to_string(),
+            1 => (self.bytes::<1>()?[0] as i8).to_string(),
+            2 => u16::from_le_bytes(self.bytes()?).to_string(),
+            3 => i16::from_le_bytes(self.bytes()?).to_string(),
+            4 => self.u32()?.to_string(),
+            5 => i32::from_le_bytes(self.bytes()?).to_string(),
+            6 => f32::from_le_bytes(self.bytes()?).to_string(),
+            7 => (self.bytes::<1>()?[0] != 0).to_string(),
+            8 => self.string(GGUF_KEEP_TEXT)?,
+            10 => self.u64()?.to_string(),
+            11 => i64::from_le_bytes(self.bytes()?).to_string(),
+            12 => f64::from_le_bytes(self.bytes()?).to_string(),
+            9 if depth < GGUF_MAX_DEPTH => {
+                let item = self.u32()?;
+                let n = self.u64()?;
+                let size: Option<u64> = match item {
+                    0 | 1 | 7 => Some(1),
+                    2 | 3 => Some(2),
+                    4..=6 => Some(4),
+                    10..=12 => Some(8),
+                    _ => None,
+                };
+                if n > self.len {
+                    return Err(gguf_bad());
+                }
+                let mut shown = vec![];
+                for i in 0..n {
+                    if i as usize >= GGUF_ARRAY_SHOWN {
+                        // The rest is stepped over: at once if its items have one size.
+                        match size {
+                            Some(s) => self.skip((n - i).checked_mul(s).ok_or_else(gguf_bad)?)?,
+                            None => {
+                                for k in i..n {
+                                    if k % 4096 == 0 && self.r.stream_position().map_err(es)? > GGUF_MAX_HEADER {
+                                        return Err(t("This file is too complex to preview."));
+                                    }
+                                    self.value(item, depth + 1)?;
+                                }
+                            }
+                        }
+                        break;
+                    }
+                    let mut v = self.value(item, depth + 1)?;
+                    if item == 8 {
+                        v = format!("{v:?}");
+                    }
+                    shown.push(v);
+                }
+                let more = if n as usize > GGUF_ARRAY_SHOWN { ", …" } else { "" };
+                let mut text = shown.join(", ");
+                if text.len() > GGUF_MAX_VALUE {
+                    let mut end = GGUF_MAX_VALUE;
+                    while !text.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    text = format!("{}…", &text[..end]);
+                }
+                format!("[{text}{more}] ({} {})", fmt_count(n), t("items"))
+            }
+            _ => return Err(gguf_bad()),
+        })
+    }
+}
+
+/// A GGUF file (llama.cpp's models): metadata, then each tensor's name, shape, type
+/// and place, then the data, which is not read.
+pub fn gguf_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
+    let len = r.seek(SeekFrom::End(0)).map_err(es)?;
+    r.seek(SeekFrom::Start(0)).map_err(es)?;
+    let mut g = Gguf { r, len };
+    if &g.bytes::<4>().map_err(|_| gguf_bad())? != b"GGUF" {
+        return Err(gguf_bad());
+    }
+    let version = g.u32()?;
+    // Version 1 had 32-bit counts; a big-endian file reads as a huge version.
+    if !(2..=3).contains(&version) {
+        return Err(format!("{} (GGUF {version})", t("This version of the format is not supported.")));
+    }
+    let tensors = g.u64()?;
+    let keys = g.u64()?;
+    if tensors > GGUF_MAX_ITEMS || keys > GGUF_MAX_ITEMS {
+        return Err(gguf_bad());
+    }
+    let mut metadata = vec![];
+    let mut alignment = 32u64;
+    for _ in 0..keys {
+        let key = g.string(GGUF_MAX_NAME)?;
+        let kind = g.u32()?;
+        let value = g.value(kind, 0)?;
+        if key == "general.alignment" {
+            alignment = value.parse::<u64>().ok().filter(|a| a.is_power_of_two() && *a <= 1 << 20).unwrap_or(32);
+        }
+        if metadata.len() < GGUF_MAX_KEPT {
+            metadata.push((key, value));
+        }
+    }
+    let mut rows = vec![];
+    let mut offsets = vec![];
+    for _ in 0..tensors {
+        let name = g.string(GGUF_MAX_NAME)?;
+        let dims = g.u32()?;
+        if dims > 8 {
+            return Err(gguf_bad());
+        }
+        let shape = (0..dims).map(|_| g.u64()).collect::<Res<Vec<u64>>>()?;
+        let kind = g.u32()?;
+        offsets.push(g.u64()?);
+        rows.push(TensorRow { elements: element_count(&shape), shape: Some(shape.iter().map(u64::to_string).collect()), dtype: ggml_type(kind), bytes: None, name, note: String::new() });
+    }
+    // Each tensor runs to the next one; the last one to the end of the file.
+    let data_start = g.r.stream_position().map_err(es)?.div_ceil(alignment) * alignment;
+    let mut order: Vec<usize> = (0..rows.len()).collect();
+    order.sort_by_key(|&i| offsets[i]);
+    for (k, &i) in order.iter().enumerate() {
+        let end = match order.get(k + 1) {
+            Some(&next) => Some(offsets[next]),
+            None => len.checked_sub(data_start),
+        };
+        rows[i].bytes = end.and_then(|e| e.checked_sub(offsets[i]));
+    }
+    let total: u64 = rows.iter().filter_map(|r| r.elements).fold(0, u64::saturating_add);
+    let bytes: u64 = rows.iter().filter_map(|r| r.bytes).fold(0, u64::saturating_add);
+    let mut info = vec![format!("{} {}", fmt_count(rows.len() as u64), t("tensors")), parameters_info(total), human_size(bytes)];
+    if !rows.is_empty() {
+        info.push(dtype_summary(&rows));
+    }
+    let meta = |key: &str| metadata.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+    info.extend(meta("general.architecture"));
+    info.extend(meta("general.name"));
+    let mut sheets = vec![tensor_sheet(t("Tensors"), &rows, t("Parameters"), false)];
+    metadata.insert(0, ("GGUF".to_string(), format!("{} {version}", t("version"))));
+    sheets.push(key_value_sheet(t("Metadata"), metadata));
+    Ok(TableData { format: "GGUF", info, sheets })
+}
+
+// ---------------------------------------------------------------- PyTorch
+
+/// The pickle that describes a checkpoint is small; the tensors' data is not in it.
+const TORCH_MAX_PICKLE: u64 = 64 * 1024 * 1024;
+const TORCH_MAX_VALUES: usize = 1000;
+const TORCH_MAX_VISITS: usize = 5_000_000;
+const TORCH_MAX_DEPTH: usize = 100;
+/// Tensors listed at most (the largest models have tens of thousands).
+const TORCH_MAX_TENSORS: usize = 200_000;
+
+fn torch_bad() -> String {
+    t("Not a PyTorch file this preview can read.")
+}
+
+/// Collect the tensors (and the plain values beside them) under `v`, named by their path.
+fn torch_walk(v: &crate::pickle::V, path: &str, rows: &mut Vec<TensorRow>, values: &mut Vec<(String, String)>, depth: usize, visits: &mut usize) {
+    use crate::pickle::V;
+    *visits += 1;
+    if depth > TORCH_MAX_DEPTH || *visits > TORCH_MAX_VISITS || rows.len() >= TORCH_MAX_TENSORS {
+        return;
+    }
+    // A module keeps its weights under these; they add nothing to a name.
+    let child = |key: &str| match key {
+        "_parameters" | "_buffers" | "_modules" => path.to_string(),
+        _ if path.is_empty() => key.to_string(),
+        _ => format!("{path}.{key}"),
+    };
+    match v {
+        V::Tensor(tensor) => {
+            let elements = tensor.shape.as_deref().and_then(element_count);
+            rows.push(TensorRow {
+                name: if path.is_empty() { t("(tensor)") } else { path.to_string() },
+                shape: tensor.shape.as_ref().map(|s| s.iter().map(u64::to_string).collect()),
+                dtype: tensor.dtype.clone(),
+                bytes: elements.zip(tensor.item_size).and_then(|(n, s)| n.checked_mul(s)),
+                elements,
+                note: if tensor.note.is_empty() { String::new() } else { t(tensor.note) },
+            });
+        }
+        V::Dict(d) => {
+            for (k, item) in d.borrow().iter() {
+                let key = k.short_text().unwrap_or_else(|| "?".into());
+                torch_walk(item, &child(&key), rows, values, depth + 1, visits);
+            }
+        }
+        V::List(l) => {
+            for (i, item) in l.borrow().iter().enumerate() {
+                torch_walk(item, &child(&i.to_string()), rows, values, depth + 1, visits);
+            }
+        }
+        V::Tuple(items) => {
+            for (i, item) in items.iter().enumerate() {
+                torch_walk(item, &child(&i.to_string()), rows, values, depth + 1, visits);
+            }
+        }
+        V::Obj(o) => {
+            // What it is, for objects saved whole (a model, an optimizer).
+            if !path.is_empty() && values.len() < TORCH_MAX_VALUES {
+                values.push((path.to_string(), format!("<{}>", o.class)));
+            }
+            torch_walk(&o.state.borrow(), path, rows, values, depth + 1, visits);
+            torch_walk(&o.args, path, rows, values, depth + 1, visits);
+        }
+        other => {
+            // Private attributes of saved objects (`_version`, `training`…) are left out.
+            let private = path.rsplit('.').next().is_some_and(|last| last.starts_with('_') || last == "training");
+            if let Some(text) = other.short_text().filter(|_| !path.is_empty() && !private && values.len() < TORCH_MAX_VALUES) {
+                values.push((path.to_string(), text));
+            }
+        }
+    }
+}
+
+/// A PyTorch checkpoint (`torch.save`): the ZIP format with its `data.pkl`, or the
+/// older one of pickles in a row. Only the pickle naming the tensors is read, never
+/// run: classes are only named, and the tensors' data stays where it is.
+pub fn torch_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
+    use crate::pickle::{load, V};
+    let mut magic = [0u8; 4];
+    r.read_exact(&mut magic).map_err(|_| torch_bad())?;
+    r.seek(SeekFrom::Start(0)).map_err(es)?;
+    let too_large = || t("This file is too complex to preview.");
+    let (root, format) = if &magic == b"PK\x03\x04" {
+        let mut zip = zip::ZipArchive::new(r).map_err(|_| torch_bad())?;
+        let name = zip.file_names().filter(|n| *n == "data.pkl" || n.ends_with("/data.pkl")).min_by_key(|n| n.len()).map(str::to_string).ok_or_else(torch_bad)?;
+        let entry = zip.by_name(&name).map_err(es)?;
+        if entry.size() > TORCH_MAX_PICKLE {
+            return Err(too_large());
+        }
+        let mut bytes = Vec::new();
+        entry.take(TORCH_MAX_PICKLE).read_to_end(&mut bytes).map_err(es)?;
+        let script = zip.file_names().any(|n| n.ends_with("/constants.pkl"));
+        (load(&bytes)?.0, if script { "TorchScript" } else { "PyTorch" })
+    } else if magic[0] == 0x80 {
+        let mut head = Vec::new();
+        r.take(TORCH_MAX_PICKLE).read_to_end(&mut head).map_err(es)?;
+        let (first, mut at) = load(&head)?;
+        // A magic number, the protocol version and the system's facts come first.
+        let root = if matches!(first, V::BigInt | V::Int(_)) {
+            for _ in 0..2 {
+                at += load(head.get(at..).unwrap_or_default())?.1;
+            }
+            load(head.get(at..).unwrap_or_default())?.0
+        } else {
+            first
+        };
+        (root, "PyTorch (legacy)")
+    } else {
+        return Err(torch_bad());
+    };
+    let (mut rows, mut values, mut visits) = (vec![], vec![], 0);
+    torch_walk(&root, "", &mut rows, &mut values, 0, &mut visits);
+    drop(root);
+    if rows.is_empty() && values.is_empty() {
+        return Err(t("This file holds no tensors the preview can list."));
+    }
+    let total: u64 = rows.iter().filter_map(|r| r.elements).fold(0, u64::saturating_add);
+    let bytes: u64 = rows.iter().filter_map(|r| r.bytes).fold(0, u64::saturating_add);
+    let mut info = vec![format!("{} {}", fmt_count(rows.len() as u64), t("tensors")), parameters_info(total), human_size(bytes)];
+    if !rows.is_empty() {
+        info.push(dtype_summary(&rows));
+    }
+    if visits > TORCH_MAX_VISITS || rows.len() >= TORCH_MAX_TENSORS {
+        info.push(t("(truncated)"));
+    }
+    let with_note = rows.iter().any(|r| !r.note.is_empty());
+    let mut sheets = vec![tensor_sheet(t("Tensors"), &rows, t("Parameters"), with_note)];
+    if !values.is_empty() {
+        sheets.push(key_value_sheet(t("Values"), values));
+    }
+    Ok(TableData { format, info, sheets })
 }
 
 #[cfg(test)]
