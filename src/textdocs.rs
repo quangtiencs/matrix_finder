@@ -1,5 +1,6 @@
-//! Readable previews of RTF, EPUB and ODF text documents: text and its structure
-//! (headings, lists, tables, emphasis), not page layout, shown by the Markdown view.
+//! Readable previews of RTF, EPUB, ODF, Word and PowerPoint documents: text and its
+//! structure (headings, lists, tables, emphasis, slides), not page layout, shown by the
+//! Markdown view.
 use crate::preview::{clip_block_text, plain_code_block, MdBlock, Span, MAX_BLOCK_TEXT};
 use crate::util::{ext_of, Res};
 use quick_xml::events::Event;
@@ -28,29 +29,54 @@ pub struct Document {
 }
 
 pub fn is_document(name: &str) -> bool {
-    matches!(ext_of(name).as_str(), "rtf" | "epub" | "odt")
+    matches!(ext_of(name).as_str(), "rtf" | "epub" | "odt" | "odp" | "docx" | "docm" | "pptx" | "pptm" | "eml" | "mbox")
+}
+
+/// Documents read from a file in place: ZIP packages, and mailboxes (only their start).
+pub fn reads_in_place(name: &str) -> bool {
+    reads_zip(name) || ext_of(name) == "mbox"
 }
 
 /// EPUB and ODF files are ZIP packages, which are read in place: their text is what
 /// matters, however large the pictures next to it make the file.
 pub fn reads_zip(name: &str) -> bool {
-    matches!(ext_of(name).as_str(), "epub" | "odt")
+    matches!(ext_of(name).as_str(), "epub" | "odt" | "odp" | "docx" | "docm" | "pptx" | "pptm")
 }
 
 pub fn load(name: &str, bytes: Vec<u8>, syntax_theme: &str) -> Res<Document> {
     let doc = match ext_of(name).as_str() {
         "rtf" => Document { format: "RTF", title: None, author: None, sections: whole_document(parse_rtf(&bytes)) },
-        "epub" => parse_epub(std::io::Cursor::new(bytes), syntax_theme)?,
-        _ => parse_odt(std::io::Cursor::new(bytes))?,
+        "eml" => crate::mail::load_eml(&bytes, syntax_theme)?,
+        "mbox" => {
+            let cut_short = bytes.len() as u64 >= crate::mail::MAX_MBOX_READ;
+            crate::mail::load_mbox(&bytes[..bytes.len().min(crate::mail::MAX_MBOX_READ as usize)], cut_short, syntax_theme)?
+        }
+        _ => parse_package(name, std::io::Cursor::new(bytes), syntax_theme)?,
     };
     Ok(finish(doc))
+}
+
+/// A document that is a ZIP package (see `reads_zip`).
+fn parse_package<R: Read + Seek>(name: &str, reader: R, syntax_theme: &str) -> Res<Document> {
+    match ext_of(name).as_str() {
+        "epub" => parse_epub(reader, syntax_theme),
+        "docx" | "docm" => parse_docx(reader),
+        "pptx" | "pptm" => parse_pptx(reader),
+        "odp" => parse_odp(reader),
+        _ => parse_odt(reader),
+    }
 }
 
 /// A document from a file on disk (see `reads_zip`).
 pub fn load_path(name: &str, path: &std::path::Path, syntax_theme: &str) -> Res<Document> {
     let file = std::io::BufReader::new(std::fs::File::open(path).map_err(|e| e.to_string())?);
-    let doc = if ext_of(name) == "epub" { parse_epub(file, syntax_theme)? } else { parse_odt(file)? };
-    Ok(finish(doc))
+    if ext_of(name) == "mbox" {
+        // Only the first messages of a mailbox of any size.
+        let mut head = Vec::new();
+        file.take(crate::mail::MAX_MBOX_READ + 1).read_to_end(&mut head).map_err(|e| e.to_string())?;
+        return load(name, head, syntax_theme);
+    }
+    Ok(finish(parse_package(name, file, syntax_theme)?))
 }
 
 fn finish(doc: Document) -> Document {
@@ -294,6 +320,11 @@ fn zip_text<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, name: &str, budget: &m
 struct ListLevel {
     ordered: bool,
     next: usize,
+}
+
+/// The text of an HTML document (an e-mail's), read as leniently as an EPUB's pages.
+pub fn html_blocks(html: &str, syntax_theme: &str) -> Vec<MdBlock> {
+    xhtml_blocks(html, syntax_theme)
 }
 
 fn xhtml_blocks(xml: &str, syntax_theme: &str) -> Vec<MdBlock> {
@@ -912,6 +943,492 @@ fn parse_rtf(bytes: &[u8]) -> Vec<MdBlock> {
     flush(&mut b, &mut pending_bytes, encoding, &g);
     b.para();
     b.out
+}
+
+// ---------------------------------------------------------------- Word and PowerPoint (Office Open XML)
+
+/// How an encrypted Office document begins: it is then an OLE file, not a ZIP package.
+const OLE_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+/// Slides past this many are left out.
+const MAX_SLIDES: usize = 2000;
+
+fn office_zip<R: Read + Seek>(mut reader: R, format: &str) -> Res<zip::ZipArchive<R>> {
+    let mut magic = [0u8; 8];
+    if reader.read_exact(&mut magic).is_ok() && magic == OLE_MAGIC {
+        return Err(crate::preview::LOCKED.to_string());
+    }
+    reader.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    zip::ZipArchive::new(reader).map_err(|e| format!("{format}: {e}"))
+}
+
+/// Title and author from `docProps/core.xml`.
+fn office_meta<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, budget: &mut u64) -> (Option<String>, Option<String>) {
+    let core = zip_text(zip, "docProps/core.xml", budget).unwrap_or_default();
+    (first_text(&core, "title"), first_text(&core, "creator"))
+}
+
+/// An on/off property such as `<w:b/>` or `<w:b w:val="0"/>`.
+fn switched_on(e: &quick_xml::events::BytesStart) -> bool {
+    !matches!(attr(e, "w:val").as_deref(), Some("0" | "false" | "off" | "none"))
+}
+
+/// What a paragraph style of a Word document makes of its paragraphs.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum DocxStyle {
+    Heading(u8),
+    /// A list item, and how deep.
+    List(usize),
+}
+
+/// The paragraph styles of a Word document that are headings or list items.
+fn docx_styles(xml: &str) -> HashMap<String, DocxStyle> {
+    let mut r = new_reader(xml);
+    let mut out = HashMap::new();
+    let mut current: Option<String> = None;
+    // A list style's depth: from its name (`List Bullet 2`) or its own `w:ilvl`.
+    let mut depth = 0usize;
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e)) if e.name().as_ref() == b"w:style" => {
+                current = attr(&e, "w:styleId");
+                depth = 0;
+            }
+            Ok(Event::End(e)) if e.name().as_ref() == b"w:style" => current = None,
+            Ok(Event::Start(e) | Event::Empty(e)) if current.is_some() => {
+                let kind = match e.name().as_ref() {
+                    b"w:name" => {
+                        let name = attr(&e, "w:val").map(|v| v.to_lowercase()).unwrap_or_default();
+                        if let Some(n) = ["list bullet ", "list number ", "list "].iter().find_map(|p| name.strip_prefix(p).and_then(|n| n.trim().parse::<usize>().ok())) {
+                            depth = n.saturating_sub(1).min(8);
+                        }
+                        if name == "title" { Some(DocxStyle::Heading(1)) } else { name.strip_prefix("heading ").and_then(|n| n.trim().parse::<u8>().ok()).map(DocxStyle::Heading) }
+                    }
+                    b"w:outlineLvl" => attr(&e, "w:val").and_then(|v| v.parse::<u8>().ok()).map(|n| DocxStyle::Heading(n + 1)),
+                    b"w:ilvl" => {
+                        depth = attr(&e, "w:val").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(8);
+                        None
+                    }
+                    b"w:numId" => Some(DocxStyle::List(depth)),
+                    _ => None,
+                };
+                if let (Some(id), Some(kind)) = (&current, kind) {
+                    let kind = match kind {
+                        DocxStyle::Heading(l) => DocxStyle::Heading(l.clamp(1, 6)),
+                        other => other,
+                    };
+                    out.entry(id.clone()).or_insert(kind);
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Rows of a table being read, and the cell being filled.
+#[derive(Default)]
+struct TableState {
+    depth: usize,
+    rows: Vec<Vec<Vec<Span>>>,
+    row: Vec<Vec<Span>>,
+    in_cell: bool,
+}
+
+impl TableState {
+    /// A table starts; one inside a cell becomes part of that cell's text.
+    fn open(&mut self) {
+        self.depth += 1;
+        if self.depth == 1 {
+            self.rows.clear();
+        }
+    }
+
+    fn close(&mut self, b: &mut Builder) {
+        self.depth = self.depth.saturating_sub(1);
+        if self.depth == 0 {
+            let rows = std::mem::take(&mut self.rows);
+            if !rows.is_empty() {
+                b.out.push(MdBlock::Table { rows, has_header: false });
+            }
+        }
+    }
+
+    fn open_row(&mut self) {
+        if self.depth == 1 {
+            self.row.clear();
+        }
+    }
+
+    fn close_row(&mut self) {
+        if self.depth == 1 {
+            self.rows.push(std::mem::take(&mut self.row));
+        }
+    }
+
+    fn open_cell(&mut self, b: &mut Builder) {
+        if self.depth == 1 {
+            self.in_cell = true;
+            b.spans.clear();
+        } else if !b.spans.is_empty() {
+            b.line_break();
+        }
+    }
+
+    fn close_cell(&mut self, b: &mut Builder) {
+        if self.depth == 1 {
+            self.in_cell = false;
+            self.row.push(b.take().unwrap_or_default());
+        }
+    }
+
+    /// A paragraph starts: in a cell, it goes on the cell's next line.
+    fn paragraph(&self, b: &mut Builder) {
+        if self.in_cell {
+            if !b.spans.is_empty() {
+                b.line_break();
+            }
+        } else {
+            b.spans.clear();
+        }
+    }
+}
+
+fn parse_docx<R: Read + Seek>(reader: R) -> Res<Document> {
+    let mut zip = office_zip(reader, "DOCX")?;
+    let mut budget = MAX_TOTAL;
+    let body = zip_text(&mut zip, "word/document.xml", &mut budget)?;
+    let styles = zip_text(&mut zip, "word/styles.xml", &mut budget).map(|x| docx_styles(&x)).unwrap_or_default();
+    let (title, author) = office_meta(&mut zip, &mut budget);
+    let mut r = new_reader(&body);
+    let mut b = Builder::default();
+    let mut table = TableState::default();
+    let (mut heading, mut list): (Option<u8>, Option<usize>) = (None, None);
+    let (mut in_ppr, mut in_rpr, mut in_text, mut links, mut skip) = (false, false, false, 0usize, 0usize);
+    let mut run = Style::default();
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = e.name();
+                let name = name.as_ref();
+                // A picture's or a shape's text is written twice: skip the old-style copy.
+                if skip > 0 || name == b"mc:Fallback" {
+                    skip += 1;
+                    continue;
+                }
+                match name {
+                    b"w:p" => {
+                        table.paragraph(&mut b);
+                        (heading, list) = (None, None);
+                    }
+                    b"w:pPr" => in_ppr = true,
+                    b"w:rPr" => in_rpr = true,
+                    b"w:r" => run = Style { link: links > 0, ..Style::default() },
+                    b"w:t" => in_text = true,
+                    b"w:hyperlink" => links += 1,
+                    b"w:tbl" => table.open(),
+                    b"w:tr" => table.open_row(),
+                    b"w:tc" => table.open_cell(&mut b),
+                    b"w:numPr" if in_ppr => list = Some(list.unwrap_or(0)),
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) if skip == 0 => match e.name().as_ref() {
+                b"w:pStyle" if in_ppr => match attr(&e, "w:val").and_then(|s| styles.get(&s).copied()) {
+                    Some(DocxStyle::Heading(level)) => heading = Some(level),
+                    Some(DocxStyle::List(depth)) => list = Some(list.unwrap_or(depth)),
+                    None => {}
+                },
+                b"w:ilvl" if in_ppr => list = Some(attr(&e, "w:val").and_then(|v| v.parse::<usize>().ok()).unwrap_or(0).min(8)),
+                b"w:numId" if in_ppr && attr(&e, "w:val").as_deref() == Some("0") => list = None,
+                b"w:b" if in_rpr && !in_ppr => run.bold = switched_on(&e),
+                b"w:i" if in_rpr && !in_ppr => run.italic = switched_on(&e),
+                b"w:strike" | b"w:dstrike" if in_rpr && !in_ppr => run.strike = switched_on(&e),
+                b"w:tab" if !in_ppr => {
+                    b.style = run;
+                    b.text("\t");
+                }
+                b"w:br" | b"w:cr" => b.line_break(),
+                _ => {}
+            },
+            Ok(Event::End(e)) => {
+                if skip > 0 {
+                    skip -= 1;
+                    continue;
+                }
+                match e.name().as_ref() {
+                    b"w:pPr" => in_ppr = false,
+                    b"w:rPr" => in_rpr = false,
+                    b"w:t" => in_text = false,
+                    b"w:hyperlink" => links = links.saturating_sub(1),
+                    b"w:p" if !table.in_cell => {
+                        if let Some(spans) = b.take() {
+                            b.out.push(match (heading, list) {
+                                (Some(level), _) => MdBlock::Heading(level, spans),
+                                (None, Some(depth)) => MdBlock::Item { depth, marker: "•".into(), spans },
+                                _ => MdBlock::Para(spans),
+                            });
+                        }
+                    }
+                    b"w:tc" => table.close_cell(&mut b),
+                    b"w:tr" => table.close_row(),
+                    b"w:tbl" => table.close(&mut b),
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(e)) if in_text && skip == 0 => {
+                b.style = run;
+                b.text(&String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::GeneralRef(e)) if in_text && skip == 0 => {
+                b.style = run;
+                b.text(&reference(&String::from_utf8_lossy(e.as_ref())));
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    Ok(Document { format: "Word", title, author, sections: whole_document(b.out) })
+}
+
+/// The slides of a presentation in their order: from its list of slides, or else by number.
+fn pptx_slide_paths<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, budget: &mut u64) -> Vec<String> {
+    let presentation = zip_text(zip, "ppt/presentation.xml", budget).unwrap_or_default();
+    let rels = zip_text(zip, "ppt/_rels/presentation.xml.rels", budget).unwrap_or_default();
+    let mut targets: HashMap<String, String> = HashMap::new();
+    let mut r = new_reader(&rels);
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) if local(e.name().as_ref()) == "relationship" => {
+                if let (Some(id), Some(target)) = (attr(&e, "Id"), attr(&e, "Target")) {
+                    targets.insert(id, join_zip_path("ppt/presentation.xml", &target));
+                }
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    let mut order = vec![];
+    let mut r = new_reader(&presentation);
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e) | Event::Empty(e)) if local(e.name().as_ref()) == "sldid" => order.extend(attr(&e, "r:id").and_then(|id| targets.get(&id).cloned())),
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    if order.is_empty() {
+        let number = |n: &str| n.strip_prefix("ppt/slides/slide").and_then(|n| n.strip_suffix(".xml")).and_then(|n| n.parse::<u32>().ok());
+        let mut found: Vec<(u32, String)> = zip.file_names().filter_map(|n| number(n).map(|k| (k, n.to_string()))).collect();
+        found.sort();
+        order = found.into_iter().map(|(_, n)| n).collect();
+    }
+    order.truncate(MAX_SLIDES);
+    order
+}
+
+/// The text of one slide: its title placeholder as a heading, then its paragraphs and tables.
+fn pptx_slide(xml: &str) -> Vec<MdBlock> {
+    let mut r = new_reader(xml);
+    let mut b = Builder::default();
+    let mut table = TableState::default();
+    let (mut is_title, mut in_text, mut in_para) = (false, false, false);
+    let mut run = Style::default();
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e)) => match e.name().as_ref() {
+                b"p:sp" => is_title = false,
+                b"a:p" => {
+                    table.paragraph(&mut b);
+                    in_para = true;
+                }
+                b"a:r" | b"a:fld" => run = Style::default(),
+                b"a:rPr" => run = run_props(&e),
+                b"a:t" => in_text = in_para,
+                b"a:tbl" => table.open(),
+                b"a:tr" => table.open_row(),
+                b"a:tc" => table.open_cell(&mut b),
+                b"p:ph" => is_title |= matches!(attr(&e, "type").as_deref(), Some("title" | "ctrTitle")),
+                _ => {}
+            },
+            Ok(Event::Empty(e)) => match e.name().as_ref() {
+                b"p:ph" => is_title |= matches!(attr(&e, "type").as_deref(), Some("title" | "ctrTitle")),
+                b"a:rPr" => run = run_props(&e),
+                b"a:br" if in_para => b.line_break(),
+                _ => {}
+            },
+            Ok(Event::End(e)) => match e.name().as_ref() {
+                b"a:t" => in_text = false,
+                b"a:p" => {
+                    in_para = false;
+                    if !table.in_cell {
+                        if let Some(spans) = b.take() {
+                            b.out.push(if is_title { MdBlock::Heading(2, spans) } else { MdBlock::Para(spans) });
+                        }
+                    }
+                }
+                b"a:tc" => table.close_cell(&mut b),
+                b"a:tr" => table.close_row(),
+                b"a:tbl" => table.close(&mut b),
+                _ => {}
+            },
+            Ok(Event::Text(e)) if in_text => {
+                b.style = run;
+                b.text(&String::from_utf8_lossy(e.as_ref()));
+            }
+            Ok(Event::GeneralRef(e)) if in_text => {
+                b.style = run;
+                b.text(&reference(&String::from_utf8_lossy(e.as_ref())));
+            }
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    b.out
+}
+
+/// Bold, italic and struck-out text in DrawingML.
+fn run_props(e: &quick_xml::events::BytesStart) -> Style {
+    let on = |key: &str| matches!(attr(e, key).as_deref(), Some("1" | "true"));
+    Style { bold: on("b"), italic: on("i"), strike: attr(e, "strike").is_some_and(|s| s != "noStrike"), ..Style::default() }
+}
+
+/// The section title of a slide: its number and, if it has one, its title.
+fn slide_title(n: usize, blocks: &[MdBlock]) -> String {
+    let heading = blocks.iter().find_map(|b| match b {
+        MdBlock::Heading(_, spans) => Some(spans_text(spans).replace('\n', " ")),
+        _ => None,
+    });
+    let label = format!("{} {n}", crate::i18n::t("Slide"));
+    match heading {
+        Some(h) if !h.trim().is_empty() => format!("{label}: {}", h.trim()),
+        _ => label,
+    }
+}
+
+fn parse_pptx<R: Read + Seek>(reader: R) -> Res<Document> {
+    let mut zip = office_zip(reader, "PPTX")?;
+    let mut budget = MAX_TOTAL;
+    let (title, author) = office_meta(&mut zip, &mut budget);
+    let mut sections = vec![];
+    for (i, path) in pptx_slide_paths(&mut zip, &mut budget).iter().enumerate() {
+        if budget == 0 {
+            break;
+        }
+        let Ok(xml) = zip_text(&mut zip, path, &mut budget) else { continue };
+        let blocks = pptx_slide(&xml);
+        sections.push(Section { title: slide_title(i + 1, &blocks), blocks });
+    }
+    if sections.is_empty() {
+        return Err("PPTX: no slides found".into());
+    }
+    Ok(Document { format: "PowerPoint", title, author, sections })
+}
+
+// ---------------------------------------------------------------- ODF presentations
+
+fn parse_odp<R: Read + Seek>(reader: R) -> Res<Document> {
+    let mut zip = zip::ZipArchive::new(reader).map_err(|e| format!("ODP: {e}"))?;
+    let mut budget = MAX_TOTAL;
+    if zip_text(&mut zip, "META-INF/manifest.xml", &mut budget).is_ok_and(|m| m.contains("encryption-data")) {
+        return Err(crate::preview::LOCKED.to_string());
+    }
+    let content = zip_text(&mut zip, "content.xml", &mut budget)?;
+    let meta = zip_text(&mut zip, "meta.xml", &mut budget).unwrap_or_default();
+    let mut r = new_reader(&content);
+    let mut b = Builder::default();
+    let mut table = TableState::default();
+    let mut sections: Vec<Section> = vec![];
+    let (mut in_page, mut is_title, mut paragraphs, mut notes, mut list_depth) = (false, false, 0usize, 0usize, 0usize);
+    let mut style_stack: Vec<Style> = vec![];
+    loop {
+        match r.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = e.name();
+                let name = name.as_ref();
+                if name == b"presentation:notes" || notes > 0 {
+                    notes += 1;
+                    continue;
+                }
+                match name {
+                    b"draw:page" => {
+                        in_page = true;
+                        b.out.clear();
+                    }
+                    b"draw:frame" => is_title = matches!(attr(&e, "presentation:class").as_deref(), Some("title")),
+                    b"text:list" => list_depth += 1,
+                    b"text:p" | b"text:h" if in_page => {
+                        table.paragraph(&mut b);
+                        b.style = Style::default();
+                        paragraphs += 1;
+                    }
+                    b"text:span" | b"text:a" => {
+                        style_stack.push(b.style);
+                        b.style.link |= name == b"text:a";
+                    }
+                    b"table:table" => table.open(),
+                    b"table:table-row" => table.open_row(),
+                    b"table:table-cell" => table.open_cell(&mut b),
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) => {
+                if notes > 0 {
+                    notes -= 1;
+                    continue;
+                }
+                match e.name().as_ref() {
+                    b"draw:page" => {
+                        in_page = false;
+                        let blocks = std::mem::take(&mut b.out);
+                        sections.push(Section { title: slide_title(sections.len() + 1, &blocks), blocks });
+                        if sections.len() >= MAX_SLIDES {
+                            break;
+                        }
+                    }
+                    b"draw:frame" => is_title = false,
+                    b"text:list" => list_depth = list_depth.saturating_sub(1),
+                    b"text:p" | b"text:h" if in_page => {
+                        paragraphs = paragraphs.saturating_sub(1);
+                        if !table.in_cell {
+                            if let Some(spans) = b.take() {
+                                b.out.push(if is_title {
+                                    MdBlock::Heading(2, spans)
+                                } else if list_depth > 0 {
+                                    MdBlock::Item { depth: list_depth - 1, marker: "•".into(), spans }
+                                } else {
+                                    MdBlock::Para(spans)
+                                });
+                            }
+                        }
+                    }
+                    b"text:span" | b"text:a" => b.style = style_stack.pop().unwrap_or_default(),
+                    b"table:table-cell" => table.close_cell(&mut b),
+                    b"table:table-row" => table.close_row(),
+                    b"table:table" => table.close(&mut b),
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(e)) if paragraphs > 0 && notes == 0 => match e.name().as_ref() {
+                b"text:s" => {
+                    let n = attr(&e, "text:c").and_then(|c| c.parse::<usize>().ok()).unwrap_or(1).min(256);
+                    b.text(&" ".repeat(n));
+                }
+                b"text:tab" => b.text("\t"),
+                b"text:line-break" => b.line_break(),
+                _ => {}
+            },
+            Ok(Event::Text(e)) if paragraphs > 0 && notes == 0 => b.text(&String::from_utf8_lossy(e.as_ref())),
+            Ok(Event::GeneralRef(e)) if paragraphs > 0 && notes == 0 => b.text(&reference(&String::from_utf8_lossy(e.as_ref()))),
+            Ok(Event::Eof) | Err(_) => break,
+            _ => {}
+        }
+    }
+    if sections.is_empty() {
+        return Err("ODP: no slides found".into());
+    }
+    let author = first_text(&meta, "creator").or_else(|| first_text(&meta, "initial-creator"));
+    Ok(Document { format: "ODF presentation", title: first_text(&meta, "title"), author, sections })
 }
 
 #[cfg(test)]

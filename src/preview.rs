@@ -42,6 +42,10 @@ pub enum Kind {
     /// HEIC, HEIF and AVIF, decoded by a tool on the system.
     Heif,
     Video,
+    /// Tags, stream facts and the cover picture.
+    Audio,
+    /// Shown by the picture they carry: iWork documents, comic books.
+    Package,
     Raw,
     Document,
     Font,
@@ -59,6 +63,9 @@ pub enum Kind {
 pub fn classify(name: &str) -> Kind {
     let ext = ext_of(name);
     let lower = name.to_lowercase();
+    if is_comic(name) || matches!(ext.as_str(), "pages" | "key" | "numbers") {
+        return Kind::Package;
+    }
     if crate::table::is_table(name) {
         return Kind::Table;
     }
@@ -80,16 +87,20 @@ pub fn classify(name: &str) -> Kind {
     if crate::jsonview::is_json(name) {
         return Kind::Json;
     }
+    if crate::audio::is_audio(name) {
+        return Kind::Audio;
+    }
     match ext.as_str() {
         "pdf" => return Kind::Pdf,
         "ipynb" => return Kind::Notebook,
         "heic" | "heif" | "hif" | "avif" => return Kind::Heif,
-        "mp4" | "m4v" | "mov" | "mkv" | "webm" => return Kind::Video,
+        "mp4" | "m4v" | "mov" | "mkv" | "webm" | "avi" | "wmv" | "flv" | "mpg" | "mpeg" | "m2ts" | "mts" | "3gp" | "ogv" => return Kind::Video,
         "cr2" | "nef" | "arw" | "dng" => return Kind::Raw,
         _ => {}
     }
     match ext.as_str() {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" => Kind::Image,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico" | "tif" | "tiff" | "tga" | "qoi" | "pbm" | "pgm" | "ppm" | "pnm" | "pam" | "dds" | "exr"
+        | "hdr" | "psd" | "psb" => Kind::Image,
         "svg" => Kind::Svg,
         "md" | "markdown" | "mdown" | "mkd" => Kind::Markdown,
         "rs" | "py" | "pyw" | "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "java" | "kt" | "kts" | "c" | "h" | "cpp"
@@ -127,8 +138,11 @@ const LARGE_WORKBOOK: u64 = 256 * 1024 * 1024;
 /// be in memory as a whole, as more of it would not be read anyway, and else `LARGE_FILE`.
 pub fn size_limit(name: &str) -> u64 {
     match classify(name) {
+        // Read in place: the layers before the merged picture are stepped over.
+        Kind::Image if is_psd(name) => LARGE_FILE,
+        Kind::Geo if crate::geoview::reads_path(name) => LARGE_FILE,
         Kind::Image | Kind::Svg | Kind::Pdf | Kind::Notebook | Kind::Heif | Kind::Font | Kind::Certificate | Kind::Geo => MAX_IMAGE as u64,
-        Kind::Document if !crate::textdocs::reads_zip(name) => MAX_IMAGE as u64,
+        Kind::Document if !crate::textdocs::reads_in_place(name) => MAX_IMAGE as u64,
         Kind::Model => crate::model3d::MAX_FILE,
         Kind::Table if matches!(ext_of(name).as_str(), "xls" | "xlsb" | "ods") => LARGE_WORKBOOK,
         // Model weights of many gigabytes: only their header is read.
@@ -168,7 +182,8 @@ pub enum MdBlock {
 }
 
 enum Loaded {
-    Image { rgba: Vec<u8>, w: usize, h: usize, orig: (u32, u32), premultiplied: bool, fmt: String, more_frames: Vec<AnimFrame>, first_delay: f32 },
+    /// `details` are the photo's EXIF facts, if it has any.
+    Image { rgba: Vec<u8>, w: usize, h: usize, orig: (u32, u32), premultiplied: bool, fmt: String, more_frames: Vec<AnimFrame>, first_delay: f32, details: Vec<crate::certview::Row> },
     Code { lines: Vec<Styled>, bg: Color32, truncated: bool, lang: String },
     Markdown { blocks: Vec<MdBlock>, source: Vec<Styled>, bg: Color32 },
     Hex { bytes: Vec<u8>, total: usize },
@@ -397,7 +412,10 @@ impl Preview {
     /// Whether a local file of this name is better read in place than loaded into memory
     /// first: it may be huge, tools need its path, or files next to it matter.
     pub fn reads_files_directly(name: &str) -> bool {
-        matches!(classify(name), Kind::Heif | Kind::Video | Kind::Raw | Kind::Model) || crate::textdocs::reads_zip(name)
+        matches!(classify(name), Kind::Heif | Kind::Video | Kind::Audio | Kind::Package | Kind::Raw | Kind::Model)
+            || crate::textdocs::reads_in_place(name)
+            || is_psd(name)
+            || crate::geoview::reads_path(name)
     }
 
     /// A preview read directly from a local file (see `reads_files_directly`).
@@ -417,18 +435,25 @@ impl Preview {
         let mut p = Self::blank(key, name, true);
         p.rx = Some(in_background(Some(p.cancel.clone()), move |_| match crate::table::load_path(&path) {
             Ok(data) => {
-                let source = crate::table::is_csv(&n).then(|| {
+                let source = crate::table::source_language(&n).map(|lang| {
                     use std::io::Read;
                     let mut head = Vec::new();
                     if let Ok(f) = std::fs::File::open(&path) {
                         let _ = f.take(512 * 1024).read_to_end(&mut head);
                     }
-                    let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(&head), "csv", &theme);
+                    let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(&head), lang, &theme);
                     (lines, bg)
                 });
                 Loaded::Table { data, source }
             }
-            Err(e) => Loaded::Error(e),
+            Err(e) => {
+                use std::io::Read;
+                let mut head = Vec::new();
+                if let Ok(f) = std::fs::File::open(&path) {
+                    let _ = f.take(MAX_TEXT as u64).read_to_end(&mut head);
+                }
+                text_instead(e, &head, &n, &theme)
+            }
         }));
         p
     }
@@ -603,6 +628,9 @@ impl Preview {
                 if !self.frames.is_empty() && ui.button(if self.paused { t("Play") } else { t("Pause") }).clicked() {
                     self.paused = !self.paused;
                 }
+                if matches!(&self.loaded, Some(Loaded::Image { details, .. }) if !details.is_empty()) && ui.selectable_label(self.show_source, t("Details")).clicked() {
+                    self.show_source = !self.show_source;
+                }
             }
             Some(Loaded::Code { .. }) => {
                 ui.checkbox(&mut self.wrap, t("Wrap"));
@@ -658,6 +686,9 @@ impl Preview {
             }
             Loaded::Error(e) => {
                 ui.colored_label(theme.danger, e);
+            }
+            Loaded::Image { details, .. } if self.show_source && !details.is_empty() => {
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| rows_ui(ui, details, theme));
             }
             Loaded::Image { orig, .. } => {
                 // The frame this moment falls on; the first frame if it is not moving.
@@ -804,7 +835,6 @@ pub fn header_row(ui: &mut egui::Ui, theme: &Theme, name: &str, facts: &[(String
 }
 
 fn summary_ui(ui: &mut egui::Ui, s: &Summary, texture: Option<&TextureHandle>, theme: &Theme) {
-    use crate::certview::Row;
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         if let (Some(p), Some(tex)) = (&s.picture, texture) {
             // Whole width for a sample sheet; a photo or video frame stays within the view.
@@ -825,37 +855,43 @@ fn summary_ui(ui: &mut egui::Ui, s: &Summary, texture: Option<&TextureHandle>, t
             });
             ui.add_space(6.0);
         }
-        let label_w = 150.0;
-        let value_w = (ui.available_width() - label_w - 12.0).max(120.0);
-        for row in &s.rows {
-            match row {
-                Row::Head(text) => {
-                    ui.add_space(6.0);
-                    ui.label(egui::RichText::new(text).font(FontId::new(14.5, egui::FontFamily::Name("bold".into()))).color(theme.strong()));
-                }
-                Row::Note(text) => {
-                    ui.add(egui::Label::new(egui::RichText::new(text).color(theme.marked)).wrap());
-                }
-                Row::Field(l, v) | Row::Good(l, v) | Row::Bad(l, v) => {
-                    let color = match row {
-                        Row::Good(..) => Color32::from_rgb(46, 160, 67),
-                        Row::Bad(..) => theme.danger,
-                        _ => theme.text,
-                    };
-                    ui.horizontal_top(|ui| {
-                        ui.allocate_ui_with_layout(egui::vec2(label_w, 18.0), egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                            ui.set_min_width(label_w);
-                            ui.add(egui::Label::new(egui::RichText::new(l).color(theme.weak)).truncate());
-                        });
-                        ui.vertical(|ui| {
-                            ui.set_width(value_w);
-                            ui.add(egui::Label::new(egui::RichText::new(v).color(color)).wrap().selectable(true));
-                        });
+        rows_ui(ui, &s.rows, theme);
+    });
+}
+
+/// Facts as label and value rows, with headings and notes between them.
+fn rows_ui(ui: &mut egui::Ui, rows: &[crate::certview::Row], theme: &Theme) {
+    use crate::certview::Row;
+    let label_w = 150.0;
+    let value_w = (ui.available_width() - label_w - 12.0).max(120.0);
+    for row in rows {
+        match row {
+            Row::Head(text) => {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(text).font(FontId::new(14.5, egui::FontFamily::Name("bold".into()))).color(theme.strong()));
+            }
+            Row::Note(text) => {
+                ui.add(egui::Label::new(egui::RichText::new(text).color(theme.marked)).wrap());
+            }
+            Row::Field(l, v) | Row::Good(l, v) | Row::Bad(l, v) => {
+                let color = match row {
+                    Row::Good(..) => Color32::from_rgb(46, 160, 67),
+                    Row::Bad(..) => theme.danger,
+                    _ => theme.text,
+                };
+                ui.horizontal_top(|ui| {
+                    ui.allocate_ui_with_layout(egui::vec2(label_w, 18.0), egui::Layout::left_to_right(egui::Align::Min), |ui| {
+                        ui.set_min_width(label_w);
+                        ui.add(egui::Label::new(egui::RichText::new(l).color(theme.weak)).truncate());
                     });
-                }
+                    ui.vertical(|ui| {
+                        ui.set_width(value_w);
+                        ui.add(egui::Label::new(egui::RichText::new(v).color(color)).wrap().selectable(true));
+                    });
+                });
             }
         }
-    });
+    }
 }
 
 fn table_ui(
@@ -1211,6 +1247,41 @@ mod animation_tests {
             ("a.rda", Kind::Table),
             ("a.rds", Kind::Table),
             ("a.gif", Kind::Image),
+            ("a.tga", Kind::Image),
+            ("a.psd", Kind::Image),
+            ("a.exr", Kind::Image),
+            ("a.mp3", Kind::Audio),
+            ("a.FLAC", Kind::Audio),
+            ("a.m4a", Kind::Audio),
+            ("a.avi", Kind::Video),
+            ("a.docx", Kind::Document),
+            ("a.pptx", Kind::Document),
+            ("a.odp", Kind::Document),
+            ("a.eml", Kind::Document),
+            ("a.mbox", Kind::Document),
+            ("a.pages", Kind::Package),
+            ("a.key", Kind::Package),
+            ("a.cbz", Kind::Package),
+            ("a.cbr", Kind::Package),
+            ("model.gguf", Kind::Table),
+            ("a.pt", Kind::Table),
+            ("pytorch_model-00001-of-00002.bin", Kind::Table),
+            ("a.bin", Kind::Other),
+            ("a.mat", Kind::Table),
+            ("a.nc", Kind::Table),
+            ("a.orc", Kind::Table),
+            ("a.dta", Kind::Table),
+            ("a.sav", Kind::Table),
+            ("a.sas7bdat", Kind::Table),
+            ("a.duckdb", Kind::Table),
+            ("a.ics", Kind::Table),
+            ("a.vcf", Kind::Table),
+            ("a.srt", Kind::Table),
+            ("a.gpx", Kind::Geo),
+            ("a.kmz", Kind::Geo),
+            ("a.shp", Kind::Geo),
+            ("a.gpkg", Kind::Geo),
+            ("a.ts", Kind::Code),
         ] {
             assert_eq!(classify(name), kind, "{name}");
         }
@@ -1234,8 +1305,14 @@ mod animation_tests {
         assert!(too_large("a.xls", 256 * mb + 1, None));
         assert!(!too_large("a.xls", 256 * mb, None));
         assert!(too_large("a.stl", crate::model3d::MAX_FILE + 1, None));
+        // Read in place: a Photoshop file's layers are stepped over, a GeoPackage is queried.
+        for name in ["a.psd", "a.gpkg", "a.mbox", "a.docx", "a.mp3", "a.cbz"] {
+            assert!(!too_large(name, gb, None), "{name}");
+            assert!(too_large(name, gb + 1, None), "{name}");
+        }
+        assert!(too_large("a.eml", 80 * mb + 1, None));
         // Only the header is read of these.
-        for name in ["a.safetensors", "a.onnx", "a.npz"] {
+        for name in ["a.safetensors", "a.onnx", "a.npz", "a.gguf", "a.pt", "a.mat", "a.nc", "a.orc", "a.dta", "a.sav", "a.sas7bdat", "a.duckdb"] {
             assert!(!too_large(name, 100 * gb, None), "{name}");
             assert!(too_large(name, 20 * mb, Some(16 * mb)), "{name}");
         }
@@ -1355,9 +1432,21 @@ fn looks_textual(bytes: &[u8]) -> bool {
 
 /// Decode an image, turned the way its metadata says it should be shown.
 fn decode_oriented(bytes: &[u8]) -> Result<image::DynamicImage, String> {
+    decode_image(bytes, "")
+}
+
+/// Decode an image of a format known from its first bytes or, for formats without a
+/// signature (TGA), from the extension `ext`.
+fn decode_image(bytes: &[u8], ext: &str) -> Result<image::DynamicImage, String> {
     use image::ImageDecoder;
     let failed = |e: image::ImageError| format!("Cannot decode image: {e}");
-    let mut decoder = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?.into_decoder().map_err(failed)?;
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
+    if reader.format().is_none() {
+        if let Some(f) = image::ImageFormat::from_extension(ext) {
+            reader.set_format(f);
+        }
+    }
+    let mut decoder = reader.into_decoder().map_err(failed)?;
     // A few bytes of file can claim a picture of many gigabytes.
     if decoder.total_bytes() > MAX_DECODED_IMAGE {
         return Err(crate::i18n::t("This image is too large to preview."));
@@ -1374,7 +1463,7 @@ fn image_loaded(img: image::DynamicImage, fmt: String, max_texture: usize) -> Lo
     let img = if img.width() > max || img.height() > max { img.thumbnail(max, max) } else { img };
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width() as usize, rgba.height() as usize);
-    Loaded::Image { rgba: rgba.into_raw(), w, h, orig, premultiplied: false, fmt, more_frames: vec![], first_delay: 0.0 }
+    Loaded::Image { rgba: rgba.into_raw(), w, h, orig, premultiplied: false, fmt, more_frames: vec![], first_delay: 0.0, details: vec![] }
 }
 
 /// How much memory an animation's frames may take (they all become textures).
@@ -1438,7 +1527,7 @@ fn decode_animation(ext: &str, bytes: &[u8], cancel: &crate::media::Cancel) -> O
         return None;
     }
     let first = out.remove(0);
-    Some(Loaded::Image { rgba: first.rgba, w: first.w, h: first.h, orig, premultiplied: false, fmt: ext.to_uppercase(), more_frames: out, first_delay: first.delay })
+    Some(Loaded::Image { rgba: first.rgba, w: first.w, h: first.h, orig, premultiplied: false, fmt: ext.to_uppercase(), more_frames: out, first_delay: first.delay, details: vec![] })
 }
 
 /// A picture for a summary, sized for the view.
@@ -1483,11 +1572,9 @@ fn video_summary(path: &Path, max_texture: usize, cancel: &crate::media::Cancel,
     Loaded::Summary(Summary { format, picture, rows, picture_pending: false })
 }
 
-fn raw_summary<R: std::io::Read + std::io::Seek>(r: &mut R, fmt: String, max_texture: usize) -> Loaded {
+/// The facts of a photo's EXIF data, as rows.
+fn exif_fields(info: &crate::rawphoto::RawInfo) -> Vec<crate::certview::Row> {
     use crate::i18n::t;
-    let Some(info) = crate::rawphoto::parse(r) else {
-        return Loaded::Error(t("Not a camera RAW file this preview can read."));
-    };
     let mut rows = vec![];
     let camera = [info.make.clone(), info.model.clone()].into_iter().flatten().collect::<Vec<_>>();
     // Models often repeat the maker's name.
@@ -1503,12 +1590,139 @@ fn raw_summary<R: std::io::Read + std::io::Seek>(r: &mut R, fmt: String, max_tex
     field_row(t("Aperture"), info.aperture.clone(), &mut rows);
     field_row("ISO".to_string(), info.iso.map(|i| i.to_string()), &mut rows);
     field_row(t("Focal length"), info.focal.clone(), &mut rows);
+    field_row(t("Location"), info.gps.map(crate::rawphoto::format_gps), &mut rows);
+    rows
+}
+
+/// The EXIF facts of a JPEG, TIFF, PNG or WebP image, if it has any.
+fn image_details(bytes: &[u8], ext: &str) -> Vec<crate::certview::Row> {
+    use image::ImageDecoder;
+    let info = if matches!(ext, "tif" | "tiff") {
+        crate::rawphoto::parse(&mut std::io::Cursor::new(bytes))
+    } else if matches!(ext, "jpg" | "jpeg" | "png" | "webp") {
+        let exif = image::ImageReader::new(std::io::Cursor::new(bytes))
+            .with_guessed_format()
+            .ok()
+            .and_then(|r| r.into_decoder().ok())
+            .and_then(|mut d| d.exif_metadata().ok().flatten());
+        // The EXIF block is a small TIFF file of its own.
+        exif.filter(|e| e.len() <= 4 * 1024 * 1024).and_then(|e| {
+            let tiff = e.strip_prefix(b"Exif\0\0".as_slice()).unwrap_or(&e);
+            crate::rawphoto::parse(&mut std::io::Cursor::new(tiff))
+        })
+    } else {
+        None
+    };
+    info.map(|i| exif_fields(&i)).unwrap_or_default()
+}
+
+fn is_psd(name: &str) -> bool {
+    matches!(ext_of(name).as_str(), "psd" | "psb")
+}
+
+/// A Photoshop document's merged picture.
+fn psd_loaded<R: std::io::Read + std::io::Seek>(r: R, name: &str, max_texture: usize) -> Loaded {
+    match crate::psd::decode(r, MAX_DECODED_IMAGE) {
+        Ok(img) => image_loaded(img, ext_of(name).to_uppercase(), max_texture),
+        Err(e) => Loaded::Error(e),
+    }
+}
+
+fn raw_summary<R: std::io::Read + std::io::Seek>(r: &mut R, fmt: String, max_texture: usize) -> Loaded {
+    use crate::i18n::t;
+    let Some(info) = crate::rawphoto::parse(r) else {
+        return Loaded::Error(t("Not a camera RAW file this preview can read."));
+    };
+    let mut rows = exif_fields(&info);
     field_row(t("Sensor"), info.sensor.map(|(w, h)| format!("{w} × {h}")), &mut rows);
     let picture = crate::rawphoto::preview_image(r, &info).map(|img| summary_picture(img, max_texture));
     if picture.is_none() {
         rows.push(crate::certview::Row::Note(t("This file has no preview image the app can show.")));
     }
     Loaded::Summary(Summary { format: format!("RAW · {fmt}"), picture, rows, picture_pending: false })
+}
+
+fn is_comic(name: &str) -> bool {
+    matches!(ext_of(name).as_str(), "cbz" | "cbr" | "cb7")
+}
+
+/// An iWork document or a comic book, from a file on disk.
+fn package_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
+    if is_comic(name) { comic_summary(name, path, max_texture) } else { iwork_summary(name, path, max_texture) }
+}
+
+/// Pages, Keynote and Numbers files keep a picture of their first page or slide.
+fn iwork_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
+    use crate::i18n::t;
+    use std::io::Read;
+    let format = match ext_of(name).as_str() {
+        "pages" => "Pages",
+        "key" => "Keynote",
+        _ => "Numbers",
+    };
+    let no_picture = || Loaded::Error(t("This document has no preview picture."));
+    let Ok(file) = std::fs::File::open(path) else { return no_picture() };
+    let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) else {
+        // A `.key` that is not a Keynote file is a key: named, never shown.
+        if format == "Keynote" {
+            let mut head = Vec::new();
+            if std::fs::File::open(path).and_then(|f| f.take(1024 * 1024).read_to_end(&mut head)).is_ok() {
+                return certificate_summary(&head);
+            }
+        }
+        return no_picture();
+    };
+    // Newer files keep a full-size picture; older ones a Quick Look thumbnail.
+    for candidate in ["preview.jpg", "QuickLook/Thumbnail.jpg", "preview-web.jpg", "preview-micro.jpg"] {
+        let Ok(f) = zip.by_name(candidate) else { continue };
+        let mut bytes = Vec::new();
+        if f.size() > MAX_IMAGE as u64 || f.take(MAX_IMAGE as u64).read_to_end(&mut bytes).is_err() {
+            continue;
+        }
+        if let Ok(img) = decode_oriented(&bytes) {
+            let rows = vec![crate::certview::Row::Note(t("This is the picture saved with the document; its text is not read."))];
+            return Loaded::Summary(Summary { format: format.into(), picture: Some(summary_picture(img, max_texture)), rows, picture_pending: false });
+        }
+    }
+    no_picture()
+}
+
+/// A comic book: how many pages, and the first one as its cover.
+fn comic_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
+    use crate::certview::Row;
+    use crate::i18n::t;
+    let entries = match crate::archive::list(path) {
+        Ok(e) => e,
+        Err(e) => return Loaded::Error(e),
+    };
+    let is_page = |p: &str| {
+        let file = p.rsplit('/').next().unwrap_or(p);
+        !file.starts_with('.') && !p.starts_with("__MACOSX/") && matches!(ext_of(file).as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp")
+    };
+    let mut pages: Vec<&crate::archive::ArchEntry> = entries.iter().filter(|e| !e.is_dir && is_page(&e.path)).collect();
+    pages.sort_by(|a, b| crate::pane::natural_cmp(&a.path, &b.path));
+    let picture = pages
+        .first()
+        .filter(|e| e.size <= MAX_IMAGE as u64)
+        .and_then(|e| crate::archive::read_entry(path, &e.path, MAX_IMAGE).ok())
+        .and_then(|b| decode_oriented(&b).ok())
+        .map(|img| summary_picture(img, max_texture));
+    let mut rows = vec![Row::Field(t("Pages"), crate::table::fmt_count(pages.len() as u64)), Row::Field(t("Size"), human_size(pages.iter().map(|e| e.size).sum()))];
+    if picture.is_none() && !pages.is_empty() {
+        rows.push(Row::Note(if crate::archive::lock_state(path) == crate::archive::Lock::Open { t("The cover could not be read.") } else { t("Password protected") }));
+    }
+    rows.push(Row::Note(t("Press Enter to browse inside the archive.")));
+    Loaded::Summary(Summary { format: format!("{} · {}", t("Comic book"), ext_of(name).to_uppercase()), picture, rows, picture_pending: false })
+}
+
+fn audio_summary<R: std::io::Read + std::io::Seek>(r: R, name: &str, max_texture: usize) -> Loaded {
+    match crate::audio::read(r, &ext_of(name)) {
+        Ok(a) => {
+            let picture = a.cover.and_then(|c| decode_oriented(&c).ok()).map(|img| summary_picture(img, max_texture));
+            Loaded::Summary(Summary { format: a.format, picture, rows: a.rows, picture_pending: false })
+        }
+        Err(e) => Loaded::Error(e),
+    }
 }
 
 fn font_summary(name: &str, bytes: &[u8]) -> Loaded {
@@ -1542,12 +1756,25 @@ fn heif_loaded(path: &Path, fmt: String, max_texture: usize, cancel: &crate::med
 fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, cancel: &crate::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
     let fmt = ext_of(name).to_uppercase();
     match classify(name) {
+        Kind::Image => match std::fs::File::open(path) {
+            Ok(f) => psd_loaded(std::io::BufReader::new(f), name, max_texture),
+            Err(e) => Loaded::Error(e.to_string()),
+        },
         Kind::Document => match crate::textdocs::load_path(name, path, syntax_theme) {
             Ok(d) => Loaded::Document(d),
             Err(e) => Loaded::Error(e),
         },
         Kind::Heif => heif_loaded(path, fmt, max_texture, cancel),
         Kind::Video => video_summary(path, max_texture, cancel, early),
+        Kind::Audio => match std::fs::File::open(path) {
+            Ok(f) => audio_summary(f, name, max_texture),
+            Err(e) => Loaded::Error(e.to_string()),
+        },
+        Kind::Package => package_summary(name, path, max_texture),
+        Kind::Geo => match crate::geoview::geopackage(path) {
+            Ok(data) => Loaded::Geo(Box::new(crate::geoview::GeoView::new(data, None))),
+            Err(e) => Loaded::Error(e),
+        },
         Kind::Raw => match std::fs::File::open(path) {
             Ok(f) => raw_summary(&mut std::io::BufReader::new(f), fmt, max_texture),
             Err(e) => Loaded::Error(e.to_string()),
@@ -1590,18 +1817,26 @@ fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, ca
         return Loaded::Error(String::new());
     }
     match kind {
+        Kind::Image if is_psd(name) => psd_loaded(std::io::Cursor::new(bytes), name, max_texture),
         Kind::Image => {
             if let Some(animation) = decode_animation(&ext, &bytes, cancel) {
                 return animation;
             }
-            match decode_oriented(&bytes) {
-                Ok(img) => image_loaded(img, ext.to_uppercase(), max_texture),
-                Err(e) => Loaded::Error(e),
+            match decode_image(&bytes, &ext) {
+                Ok(img) => match image_loaded(img, ext.to_uppercase(), max_texture) {
+                    Loaded::Image { rgba, w, h, orig, premultiplied, fmt, more_frames, first_delay, .. } => {
+                        Loaded::Image { rgba, w, h, orig, premultiplied, fmt, more_frames, first_delay, details: image_details(&bytes, &ext) }
+                    }
+                    other => other,
+                },
+                Err(e) => text_instead(e, &bytes, name, syntax_theme),
             }
         }
         Kind::Heif => with_temp_file(name, &bytes, |p| heif_loaded(p, ext.to_uppercase(), max_texture, cancel)),
         Kind::Video => with_temp_file(name, &bytes, |p| video_summary(p, max_texture, cancel, early)),
         Kind::Raw => raw_summary(&mut std::io::Cursor::new(bytes), ext.to_uppercase(), max_texture),
+        Kind::Audio => audio_summary(std::io::Cursor::new(bytes), name, max_texture),
+        Kind::Package => with_temp_file(name, &bytes, |p| package_summary(name, p, max_texture)),
         Kind::Document => match crate::textdocs::load(name, bytes, syntax_theme) {
             Ok(d) => Loaded::Document(d),
             Err(e) => Loaded::Error(e),
@@ -1655,14 +1890,14 @@ fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, ca
         },
         Kind::Table => match crate::table::load_bytes(name, bytes.clone()) {
             Ok(data) => {
-                let source = crate::table::is_csv(name).then(|| {
+                let source = crate::table::source_language(name).map(|lang| {
                     let head = &bytes[..bytes.len().min(512 * 1024)];
-                    let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(head), "csv", syntax_theme);
+                    let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(head), lang, syntax_theme);
                     (lines, bg)
                 });
                 Loaded::Table { data, source }
             }
-            Err(e) => Loaded::Error(e),
+            Err(e) => text_instead(e, &bytes, name, syntax_theme),
         },
         Kind::Code | Kind::Text => text_preview(&bytes, if kind == Kind::Code { &ext } else { "txt" }, name, syntax_theme),
         Kind::Other => {
@@ -1675,6 +1910,16 @@ fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, ca
                 Loaded::Hex { bytes: b, total }
             }
         }
+    }
+}
+
+/// A file that its format's reader refused, shown as text if it is text: extensions
+/// are shared (`.nc` is also G-code, `.hdr` also an ENVI header).
+fn text_instead(error: String, bytes: &[u8], name: &str, theme: &str) -> Loaded {
+    if !bytes.is_empty() && looks_textual(bytes) {
+        text_preview(&bytes[..bytes.len().min(MAX_TEXT)], "", name, theme)
+    } else {
+        Loaded::Error(error)
     }
 }
 
@@ -1744,6 +1989,7 @@ fn render_svg(bytes: &[u8], max_texture: usize) -> Loaded {
         fmt: "SVG".into(),
         more_frames: vec![],
         first_delay: 0.0,
+        details: vec![],
     }
 }
 

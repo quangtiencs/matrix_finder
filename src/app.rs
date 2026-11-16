@@ -1512,7 +1512,8 @@ impl App {
                 if preview::too_large(&e.name, size, None) {
                     return Some(Preview::too_large(key, e.name.clone(), size));
                 }
-                if archive::is_archive(&path) {
+                // Comic books are archives shown by their cover.
+                if archive::is_archive(&path) && preview::classify(&e.name) != preview::Kind::Package {
                     return Some(Preview::text_async(key, e.name.clone(), move || archive_summary(&path)));
                 }
                 if preview::classify(&e.name) == preview::Kind::Table {

@@ -16,7 +16,7 @@ const SQL_TIME_LIMIT: Duration = Duration::from_secs(2);
 const SQL_MAX_TEXT: usize = 256 * 1024 * 1024;
 
 /// `file:` URI for a path, opened so nothing can be written or created next to it.
-fn sqlite_uri(path: &Path) -> String {
+pub fn sqlite_uri(path: &Path) -> String {
     let mut uri = String::from("file:");
     for b in path.to_string_lossy().bytes() {
         match b {
@@ -687,6 +687,32 @@ pub fn hdf5_table(file: &hdf5_pure::File) -> Res<TableData> {
     let overview = finish_sheet(t("Contents"), names, Some(vec!["text".into(); 4]), contents, Some(paths.len() as u64));
     sheets.insert(0, overview);
     Ok(TableData { format: "HDF5", info: vec![format!("{} {}", paths.len(), t("datasets"))], sheets })
+}
+
+/// Every dataset's path, shape and type, without reading its values; and how many there are.
+pub fn hdf5_datasets(file: &hdf5_pure::File) -> (usize, Vec<Vec<String>>) {
+    let mut paths = vec![];
+    h5_collect(&file.root(), "", 0, &mut 0, &mut paths);
+    let rows = paths
+        .iter()
+        .map(|path| match file.dataset(path) {
+            Ok(d) => {
+                let shape = d.shape().unwrap_or_default();
+                let shape_text = if shape.is_empty() { t("scalar") } else { shape.iter().map(u64::to_string).collect::<Vec<_>>().join(" × ") };
+                vec![path.clone(), shape_text, d.dtype().map(|t| h5_type_name(&t)).unwrap_or_default()]
+            }
+            Err(_) => vec![path.clone(), String::new(), t("Cannot be read")],
+        })
+        .collect();
+    (paths.len(), rows)
+}
+
+/// Open an HDF5 file: read whole up to `H5_MAX_BUFFERED`, or in place if it is in the newest format.
+pub fn hdf5_open(path: &Path) -> Res<hdf5_pure::File> {
+    if std::fs::metadata(path).map_err(es)?.len() <= H5_MAX_BUFFERED {
+        return hdf5_pure::File::open(path).map_err(|e| format!("HDF5: {e}"));
+    }
+    hdf5_pure::File::open_streaming(path).map_err(|_| t("This HDF5 file is too large to preview: only files in the newest format can be read in place."))
 }
 
 pub fn hdf5_from_path(path: &Path) -> Res<TableData> {

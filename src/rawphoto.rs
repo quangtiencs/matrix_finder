@@ -17,6 +17,8 @@ pub struct RawInfo {
     pub aperture: Option<String>,
     pub iso: Option<u32>,
     pub focal: Option<String>,
+    /// Where it was taken: latitude and longitude in degrees.
+    pub gps: Option<(f64, f64)>,
     /// The largest uncompressed-or-raw image the file describes.
     pub sensor: Option<(u32, u32)>,
     /// EXIF orientation of the main image (1 to 8).
@@ -132,6 +134,15 @@ impl<R: Read + Seek> Tiff<'_, R> {
         let b = self.bytes(u64::from(self.u32_of(e.value)), 8)?;
         Some((self.u32_of([b[0], b[1], b[2], b[3]]), self.u32_of([b[4], b[5], b[6], b[7]])))
     }
+
+    fn rationals(&mut self, e: Entry, limit: u32) -> Vec<(u32, u32)> {
+        if !matches!(e.kind, 5 | 10) || e.count == 0 {
+            return vec![];
+        }
+        let n = e.count.min(limit) as usize;
+        let Some(b) = self.bytes(u64::from(self.u32_of(e.value)), n * 8) else { return vec![] };
+        b.chunks_exact(8).map(|c| (self.u32_of([c[0], c[1], c[2], c[3]]), self.u32_of([c[4], c[5], c[6], c[7]]))).collect()
+    }
 }
 
 /// Read a RAW file's facts. `None` if it is not TIFF-based.
@@ -179,6 +190,11 @@ pub fn parse<R: Read + Seek>(r: &mut R) -> Option<RawInfo> {
                         read_exif(&mut t, u64::from(exif), &mut info);
                     }
                 }
+                0x8825 if info.gps.is_none() => {
+                    if let Some(gps) = t.uint(e) {
+                        info.gps = read_gps(&mut t, u64::from(gps));
+                    }
+                }
                 // DNG stores the camera's name here.
                 0xC614 if info.model.is_none() => info.model = t.text(e),
                 _ => {}
@@ -218,6 +234,38 @@ fn read_exif<R: Read + Seek>(t: &mut Tiff<'_, R>, at: u64, info: &mut RawInfo) {
             _ => {}
         }
     }
+}
+
+/// Latitude and longitude from a GPS directory.
+fn read_gps<R: Read + Seek>(t: &mut Tiff<'_, R>, at: u64) -> Option<(f64, f64)> {
+    let (entries, _) = t.entries(at)?;
+    let (mut lat, mut lon, mut south, mut west) = (None, None, false, false);
+    for e in entries {
+        match e.tag {
+            1 => south = t.text(e).is_some_and(|r| r.eq_ignore_ascii_case("S")),
+            2 => lat = degrees(&t.rationals(e, 3)),
+            3 => west = t.text(e).is_some_and(|r| r.eq_ignore_ascii_case("W")),
+            4 => lon = degrees(&t.rationals(e, 3)),
+            _ => {}
+        }
+    }
+    let (lat, lon) = (lat?, lon?);
+    let (lat, lon) = (if south { -lat } else { lat }, if west { -lon } else { lon });
+    ((-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon) && (lat, lon) != (0.0, 0.0)).then_some((lat, lon))
+}
+
+/// Degrees, minutes and seconds as degrees.
+fn degrees(v: &[(u32, u32)]) -> Option<f64> {
+    if v.len() != 3 || v.iter().any(|(_, d)| *d == 0) {
+        return None;
+    }
+    let part = |i: usize| f64::from(v[i].0) / f64::from(v[i].1);
+    Some(part(0) + part(1) / 60.0 + part(2) / 3600.0)
+}
+
+/// `48.85837° N, 2.29448° E`.
+pub fn format_gps((lat, lon): (f64, f64)) -> String {
+    format!("{:.5}° {}, {:.5}° {}", lat.abs(), if lat < 0.0 { 'S' } else { 'N' }, lon.abs(), if lon < 0.0 { 'W' } else { 'E' })
 }
 
 fn format_exposure((n, d): (u32, u32)) -> Option<String> {

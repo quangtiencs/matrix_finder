@@ -339,7 +339,7 @@ impl ArchiveFormat {
             ArchiveFormat::Tar
         } else if ends(".zip") || ends(".jar") || ends(".apk") || ends(".xpi") || ends(".cbz") || ends(".whl") {
             ArchiveFormat::Zip
-        } else if ends(".7z") {
+        } else if ends(".7z") || ends(".cb7") {
             ArchiveFormat::SevenZ
         } else if ends(".rar") || ends(".cbr") {
             ArchiveFormat::Rar
