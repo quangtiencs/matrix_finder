@@ -8,6 +8,7 @@
 //! Set `MATRIX_FINDER_SHOTS=name,name` to render only some scenes (`showcase` is
 //! one of the names; it reads the scenes it combines from `docs/`).
 use super::*;
+use alacritty_terminal::term::TermMode;
 use egui::{pos2, Event, PointerButton, Pos2};
 use egui_kittest::kittest::Queryable;
 use egui_kittest::Harness;
@@ -1230,6 +1231,104 @@ fn terminal_startup_script_after_shell_start() {
     h.state_mut().shot_terminal(&home, None, None);
     wait_until(&mut h, 10.0, |_| std::fs::read_to_string(&out).is_ok_and(|s| s.lines().count() >= 2));
     assert_eq!(std::fs::read_to_string(&out).unwrap_or_default(), "from-zshrc\nfrom-zprofile\n");
+}
+
+/// A full-screen program like Claude Code: it turns on the kitty keyboard protocol, mouse
+/// reports (SGR, with motion) and focus reports, and gets the clicks, keys and focus
+/// changes in the forms it asked for.
+#[test]
+#[ignore]
+fn terminal_tui_input_like_claude_code() {
+    let d = demo_env();
+    let log = d.home.join("tui-input.bin");
+    let _ = std::fs::remove_file(&log);
+    // Raw input, logged byte for byte; it ends on Ctrl+Q.
+    let script = r#"
+import os, sys, termios, tty
+fd = sys.stdin.fileno()
+tty.setraw(fd)
+out = open(os.path.expanduser("~/tui-input.bin"), "wb", buffering=0)
+sys.stdout.write("[?1049h[?1000h[?1002h[?1003h[?1006h[?1004h[>5u[?u")
+sys.stdout.flush()
+while True:
+    b = os.read(fd, 1024)
+    out.write(b)
+    if b"" in b or b"113;5u" in b:
+        break
+sys.stdout.write("[<u[?1049l")
+"#;
+    touch(&d.home.join("tui.py"), script.as_bytes());
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let home = d.home.clone();
+    let uid = h.state_mut().shot_terminal(&home, None, None);
+    term_type(&mut h, 0, uid, "python3 ~/tui.py\r");
+    let mode = |app: &App| app.panes[0].tab().term.as_ref().map(|t| t.mode()).unwrap_or(TermMode::empty());
+    wait_until(&mut h, 10.0, |app| mode(app).contains(TermMode::ALT_SCREEN | TermMode::MOUSE_MOTION | TermMode::DISAMBIGUATE_ESC_CODES));
+    let m = mode(h.state());
+    assert!(m.contains(TermMode::SGR_MOUSE | TermMode::MOUSE_MOTION | TermMode::FOCUS_IN_OUT), "{m:?}");
+    assert!(m.contains(TermMode::DISAMBIGUATE_ESC_CODES | TermMode::REPORT_ALTERNATE_KEYS), "kitty flags 1 and 4: {m:?}");
+    let read = || std::fs::read(&log).unwrap_or_default();
+    let has = |needle: &[u8]| read().windows(needle.len()).any(|w| w == needle);
+
+    // A click in the middle of the terminal: press and release, in SGR form.
+    let at = pos2(W * 0.5, H * 0.5);
+    move_to(&mut h, at);
+    button(&mut h, at, PointerButton::Primary, true, Modifiers::NONE);
+    button(&mut h, at, PointerButton::Primary, false, Modifiers::NONE);
+    wait_until(&mut h, 2.0, |_| has(b"m"));
+    let text = String::from_utf8_lossy(&read()).into_owned();
+    assert!(regex::Regex::new(r"\x1b\[<0;\d+;\d+M").unwrap().is_match(&text), "press: {text:?}");
+    assert!(regex::Regex::new(r"\x1b\[<0;\d+;\d+m").unwrap().is_match(&text), "release: {text:?}");
+    assert!(regex::Regex::new(r"\x1b\[<35;\d+;\d+M").unwrap().is_match(&text), "motion: {text:?}");
+
+    // A click whose pointer wobbles a few pixels (across a cell's edge, at some of these
+    // places) stays a click: no drag, and released where it was pressed.
+    let sgr = regex::Regex::new(r"\x1b\[<(\d+);(\d+);(\d+)([Mm])").unwrap();
+    for dx in 0..8 {
+        let p = pos2(W * 0.5 + dx as f32, H * 0.5 + 40.0);
+        move_to(&mut h, p);
+        let start = read().len();
+        button(&mut h, p, PointerButton::Primary, true, Modifiers::NONE);
+        move_to(&mut h, p + egui::vec2(3.0, 1.0));
+        button(&mut h, p + egui::vec2(3.0, 1.0), PointerButton::Primary, false, Modifiers::NONE);
+        wait_until(&mut h, 2.0, |_| read()[start..].ends_with(b"m"));
+        let text = String::from_utf8_lossy(&read()[start..]).into_owned();
+        let reports: Vec<_> = sgr.captures_iter(&text).map(|c| (c[1].to_string(), c[2].to_string(), c[3].to_string(), c[4].to_string())).collect();
+        assert!(reports.iter().all(|r| r.0 == "0"), "a drag was reported: {text:?}");
+        let (press, release) = (reports.iter().find(|r| r.3 == "M").unwrap(), reports.iter().find(|r| r.3 == "m").unwrap());
+        assert_eq!((&press.1, &press.2), (&release.1, &release.2), "{text:?}");
+    }
+    // A real drag is still reported as one.
+    let start = read().len();
+    let p = pos2(W * 0.5, H * 0.5 + 40.0);
+    button(&mut h, p, PointerButton::Primary, true, Modifiers::NONE);
+    move_to(&mut h, p + egui::vec2(60.0, 0.0));
+    button(&mut h, p + egui::vec2(60.0, 0.0), PointerButton::Primary, false, Modifiers::NONE);
+    wait_until(&mut h, 2.0, |_| read()[start..].ends_with(b"m"));
+    assert!(String::from_utf8_lossy(&read()[start..]).contains("\x1b[<32;"), "drag");
+
+    // Shift+Enter is not Enter.
+    let start = read().len();
+    push(&mut h, Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+    settle(&mut h, 3);
+    wait_until(&mut h, 2.0, |_| read().len() > start);
+    assert_eq!(&read()[start..], b"\x1b[13;2u");
+
+    // Focus going and coming back.
+    let start = read().len();
+    for focused in [false, true] {
+        h.input_mut().focused = focused;
+        push(&mut h, Event::WindowFocused(focused));
+        settle(&mut h, 2);
+    }
+    wait_until(&mut h, 2.0, |_| read().len() >= start + 6);
+    assert_eq!(&read()[start..], b"\x1b[O\x1b[I");
+
+    // Ctrl+Q, as a kitty key, ends it; then the shell gets plain keys again.
+    push(&mut h, Event::Key { key: egui::Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::CTRL });
+    wait_until(&mut h, 3.0, |app| !mode(app).contains(TermMode::ALT_SCREEN));
+    assert!(has(b"\x1b[113;5u"), "{:?}", String::from_utf8_lossy(&read()));
+    assert!(!mode(h.state()).intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
 }
 
 #[test]
