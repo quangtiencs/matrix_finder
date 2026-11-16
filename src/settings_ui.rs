@@ -668,6 +668,30 @@ impl App {
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.show_disk_usage, &t("Show disk space"), &t("Usage bars in the sidebar, free space in the panels and the Disk usage button"));
                 });
+                settings_section(ui, th, &t("Git"), "");
+                card(ui, th, |ui| {
+                    changed |= toggle_row(ui, th, &mut self.cfg.git_branches, &t("Show the branch of git folders"), &t("After the folder's name: folder (git) [branch]. Read from the folder, git does not run."));
+                    row_line(ui, th);
+                    ui.add_enabled_ui(self.cfg.git_branches, |ui| {
+                        changed |= toggle_row(ui, th, &mut self.cfg.git_label, &t("Show the (git) label before the branch"), &t("On: folder (git) [branch] · Off: folder [branch]"));
+                        row_line(ui, th);
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(t("Style")).color(th.text));
+                        ui.add_space(2.0);
+                        for (style, label) in [(crate::config::GitStyle::Text, t("Grey text: (git) [branch]")), (crate::config::GitStyle::Filled, t("Filled label with white text: git · branch"))] {
+                            changed |= ui.radio_value(&mut self.cfg.git_style, style, label).changed();
+                        }
+                        ui.add_space(4.0);
+                        row_line(ui, th);
+                        changed |= toggle_row(
+                            ui,
+                            th,
+                            &mut self.cfg.git_status,
+                            &t("Colour by commit state"),
+                            &t("Green when everything is committed, orange with changes; off, it is grey. Runs git status in the background, with the repository's own programs (fsmonitor, filters) turned off."),
+                        );
+                    });
+                });
                 settings_section(ui, th, &t("Window"), "");
                 card(ui, th, |ui| {
                     changed |= toggle_row(ui, th, &mut self.cfg.integrated_titlebar, &t("Integrated title bar with native window buttons"), &t("Takes effect after restarting Matrix Finder"));

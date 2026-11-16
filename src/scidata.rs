@@ -416,32 +416,49 @@ pub fn npy_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
         }
     }
     let shown_rows = n_rows.min(MAX_ROWS as u64) as usize;
-    let mut rows = Vec::with_capacity(shown_rows);
-    let cell_at = |r: &mut R, index: u64| -> Res<Vec<u8>> {
+    // Only what is shown is read, a run of items at a time: the rest of a file of
+    // any size is never touched.
+    let run_at = |r: &mut R, index: u64, count: usize| -> Res<Vec<u8>> {
         r.seek(SeekFrom::Start(data_at + index * item)).map_err(es)?;
-        let mut b = vec![0u8; item as usize];
+        let mut b = vec![0u8; count * item as usize];
         r.read_exact(&mut b).map_err(|_| t("This file is cut short."))?;
         Ok(b)
     };
-    for row in 0..shown_rows as u64 {
-        let mut cells: Vec<Cell> = vec![];
-        if structured {
-            let raw = cell_at(&mut r, row)?;
-            let mut at = 0;
-            for f in fields.iter().take(MAX_COLS) {
-                cells.push(Some(clip_cell(np_value(f, &raw[at..at + f.size]))));
-                at += f.size;
-            }
-        } else {
-            for col in 0..shown_cols as u64 {
-                // C order: the row's items are together. Fortran order: columns are.
-                let index = if fortran { row + col * n_rows } else { row * per_row + col };
-                let raw = cell_at(&mut r, index)?;
-                cells.push(Some(clip_cell(np_value(&fields[0], &raw))));
+    let value = |raw: &[u8], i: usize| Some(clip_cell(np_value(&fields[0], &raw[i * item as usize..(i + 1) * item as usize])));
+    let rows: Vec<Vec<Cell>> = if structured {
+        let raw = run_at(&mut r, 0, shown_rows)?;
+        raw.chunks_exact(item as usize)
+            .map(|rec| {
+                let mut at = 0;
+                fields
+                    .iter()
+                    .take(MAX_COLS)
+                    .map(|f| {
+                        let v = Some(clip_cell(np_value(f, &rec[at..at + f.size])));
+                        at += f.size;
+                        v
+                    })
+                    .collect()
+            })
+            .collect()
+    } else if fortran {
+        // Columns are stored together: read the shown start of each one.
+        let mut grid: Vec<Vec<Cell>> = vec![Vec::with_capacity(shown_cols); shown_rows];
+        for col in 0..shown_cols {
+            let raw = run_at(&mut r, col as u64 * n_rows, shown_rows)?;
+            for (row, cells) in grid.iter_mut().enumerate() {
+                cells.push(value(&raw, row));
             }
         }
-        rows.push(cells);
-    }
+        grid
+    } else {
+        (0..shown_rows as u64)
+            .map(|row| {
+                let raw = run_at(&mut r, row * per_row, shown_cols)?;
+                Ok((0..shown_cols).map(|c| value(&raw, c)).collect())
+            })
+            .collect::<Res<_>>()?
+    };
     let mut info = vec![shape_text];
     if fortran {
         info.push("Fortran order".to_string());
@@ -575,9 +592,6 @@ const H5_MAX_DATASET: u64 = 64 * 1024 * 1024;
 const H5_MAX_TOTAL: u64 = 256 * 1024 * 1024;
 const H5_MAX_DATASETS: usize = 40;
 
-/// The library reads all of a file into memory, except in a mode that only knows the
-/// newest kind of file. So this is the largest file of any kind that can be previewed.
-const H5_MAX_BUFFERED: u64 = 768 * 1024 * 1024;
 
 fn h5_collect(group: &hdf5_pure::Group, prefix: &str, depth: usize, visits: &mut usize, out: &mut Vec<String>) {
     // Groups can link back to each other.
@@ -707,32 +721,45 @@ pub fn hdf5_datasets(file: &hdf5_pure::File) -> (usize, Vec<Vec<String>>) {
     (paths.len(), rows)
 }
 
-/// Open an HDF5 file: read whole up to `H5_MAX_BUFFERED`, or in place if it is in the newest format.
+fn hdf5_older_format() -> String {
+    t("This HDF5 file is in the older format, which is not previewed.")
+}
+
+/// Open an HDF5 file in place: memory stays near one chunk, whatever the file's size.
+/// Only files in the newest format (v2 groups) can be read so; the older format (v1
+/// groups, h5py's default) would have to be read whole, and is not previewed.
 pub fn hdf5_open(path: &Path) -> Res<hdf5_pure::File> {
-    if std::fs::metadata(path).map_err(es)?.len() <= H5_MAX_BUFFERED {
-        return hdf5_pure::File::open(path).map_err(|e| format!("HDF5: {e}"));
+    let file = hdf5_pure::File::open_streaming(path).map_err(|e| format!("HDF5: {e}"))?;
+    // An older file opens too, and then its groups cannot be listed.
+    let root = file.root();
+    if root.datasets().is_err() || root.groups().is_err() {
+        return Err(hdf5_older_format());
     }
-    hdf5_pure::File::open_streaming(path).map_err(|_| t("This HDF5 file is too large to preview: only files in the newest format can be read in place."))
+    Ok(file)
+}
+
+/// The version of the superblock of an HDF5 file in memory (at the start, or after a
+/// user block of 512, 1024, 2048… bytes). Versions 2 and 3 come with the newest format.
+fn hdf5_superblock_version(bytes: &[u8]) -> Option<u8> {
+    const SIGNATURE: &[u8] = b"\x89HDF\r\n\x1a\n";
+    std::iter::once(0).chain((9..40).map(|p| 1usize << p)).take_while(|at| *at < bytes.len()).find_map(|at| bytes[at..].starts_with(SIGNATURE).then(|| bytes.get(at + 8).copied()).flatten())
+}
+
+/// An HDF5 file already in memory (in an archive, on a server), if in the newest format.
+pub fn hdf5_from_memory(bytes: Vec<u8>) -> Res<hdf5_pure::File> {
+    match hdf5_superblock_version(&bytes) {
+        Some(v) if v >= 2 => hdf5_pure::File::from_bytes(bytes).map_err(|e| format!("HDF5: {e}")),
+        Some(_) => Err(hdf5_older_format()),
+        None => Err(t("Not a valid HDF5 file.")),
+    }
 }
 
 pub fn hdf5_from_path(path: &Path) -> Res<TableData> {
-    if std::fs::metadata(path).map_err(es)?.len() <= H5_MAX_BUFFERED {
-        let file = hdf5_pure::File::open(path).map_err(|e| format!("HDF5: {e}"))?;
-        return hdf5_table(&file);
-    }
-    let too_large = || t("This HDF5 file is too large to preview: only files in the newest format can be read in place.");
-    let file = hdf5_pure::File::open_streaming(path).map_err(|_| too_large())?;
-    let table = hdf5_table(&file)?;
-    // Older files open, and then turn out to have no readable groups.
-    if table.sheets.len() == 1 && table.sheets[0].rows.is_empty() {
-        return Err(too_large());
-    }
-    Ok(table)
+    hdf5_table(&hdf5_open(path)?)
 }
 
 pub fn hdf5_from_bytes(bytes: Vec<u8>) -> Res<TableData> {
-    let file = hdf5_pure::File::from_bytes(bytes).map_err(|e| format!("HDF5: {e}"))?;
-    hdf5_table(&file)
+    hdf5_table(&hdf5_from_memory(bytes)?)
 }
 
 #[cfg(test)]
@@ -935,6 +962,54 @@ mod tests {
         assert_eq!(grid.rows.len(), 2);
         assert_eq!(cell(grid, 1, 2), Some("6"));
         assert!(hdf5_from_bytes(b"not hdf5".to_vec()).is_err());
+    }
+
+    /// The newest format is read in place, from disk or memory; the older one is not read.
+    #[test]
+    fn hdf5_newest_format_only() {
+        let mut b = hdf5_pure::FileBuilder::new();
+        b.create_dataset("x").with_f64_data(&[1.0, 2.0]).with_shape(&[2]);
+        let bytes = b.finish().unwrap();
+        assert!(hdf5_superblock_version(&bytes).is_some_and(|v| v >= 2));
+        let path = std::env::temp_dir().join(format!("matrix_finder-h5-{}.h5", std::process::id()));
+        std::fs::write(&path, &bytes).unwrap();
+        let d = hdf5_from_path(&path).unwrap();
+        assert_eq!(d.sheets[0].rows.len(), 1);
+        let _ = std::fs::remove_file(&path);
+        // The same file with an old superblock (as h5py writes by default) is refused.
+        let mut old = bytes.clone();
+        let at = (0..old.len()).find(|&i| old[i..].starts_with(b"\x89HDF\r\n\x1a\n")).unwrap();
+        old[at + 8] = 0;
+        assert_eq!(hdf5_from_bytes(old).err(), Some(hdf5_older_format()));
+    }
+
+    /// A NumPy array far larger than memory needs opens at once: only the shown start of
+    /// it is read (the file is sparse, so it takes no room on disk).
+    #[test]
+    fn npy_of_any_size_reads_only_what_is_shown() {
+        let path = std::env::temp_dir().join(format!("matrix_finder-big-{}.npy", std::process::id()));
+        let (rows, cols) = (20_000u64, 10_000u64);
+        let mut header = format!("{{'descr': '<f8', 'fortran_order': False, 'shape': ({rows}, {cols}), }}");
+        while (10 + header.len() + 1) % 64 != 0 {
+            header.push(' ');
+        }
+        header.push('\n');
+        let mut head = b"\x93NUMPY\x01\x00".to_vec();
+        head.extend((header.len() as u16).to_le_bytes());
+        head.extend(header.as_bytes());
+        // The first row holds 0, 1, 2…; everything else is a hole of zeros.
+        head.extend((0..cols).flat_map(|c| (c as f64).to_le_bytes()));
+        let f = std::fs::File::create(&path).unwrap();
+        std::io::Write::write_all(&mut &f, &head).unwrap();
+        let data_at = head.len() as u64 - cols * 8;
+        f.set_len(data_at + rows * cols * 8).unwrap();
+        assert!(!crate::preview::too_large("big.npy", std::fs::metadata(&path).unwrap().len(), None), "no size limit: 1.6 GB");
+        let d = crate::table::load_path(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let sheet = &d.sheets[0];
+        assert_eq!((sheet.rows.len(), sheet.columns.len(), sheet.total_rows), (MAX_ROWS, MAX_COLS, Some(rows)));
+        assert_eq!(cell(sheet, 0, 7), Some("7"));
+        assert_eq!(cell(sheet, 999, 299), Some("0"));
     }
 
     #[test]

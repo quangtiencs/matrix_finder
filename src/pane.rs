@@ -8,7 +8,7 @@ use crate::remote::SharedRemote;
 use crate::theme::Theme;
 use crate::util::{format_time, human_size, Res};
 use crate::vfs::{list_local, Entry, Location};
-use egui::{pos2, vec2, Align2, FontId, Rect, Sense};
+use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -1072,9 +1072,100 @@ pub struct PaneUiCtx<'a> {
     /// every agent found (to switch from its menu).
     pub agent: Option<&'a crate::agents::Found>,
     pub agents: &'a [crate::agents::Found],
+    /// Git folders: their branch after the name, with `(git)` before it, and coloured
+    /// by whether everything is committed (which runs git).
+    pub git_branches: bool,
+    pub git_label: bool,
+    pub git_style: crate::config::GitStyle,
+    pub git_status: bool,
 }
 
 pub const SIDE_PAD: f32 = 10.0;
+
+/// Longest branch name shown after a folder's name; longer ones end in "…".
+const MAX_BRANCH_CHARS: usize = 24;
+
+/// The colour of a branch: by its state when `colored` (green when everything is
+/// committed, orange with changes), else grey. Text is drawn in it; a filled label has
+/// it as background, a little deeper, under white text.
+fn branch_color(state: crate::gitinfo::State, colored: bool, filled: bool, th: &Theme) -> Color32 {
+    use crate::gitinfo::State;
+    let state = if colored { state } else { State::Unknown };
+    match (state, filled, th.dark) {
+        (State::Clean, false, false) => Color32::from_rgb(0x1a, 0x7f, 0x37),
+        (State::Clean, false, true) => Color32::from_rgb(0x3f, 0xb9, 0x50),
+        (State::Clean, true, _) => Color32::from_rgb(0x1f, 0x88, 0x3d),
+        (State::Dirty, false, false) => Color32::from_rgb(0xbc, 0x4c, 0x00),
+        (State::Dirty, false, true) => Color32::from_rgb(0xf0, 0x88, 0x3e),
+        (State::Dirty, true, _) => Color32::from_rgb(0xc2, 0x5a, 0x0a),
+        (State::Unknown, false, _) => th.weak,
+        (State::Unknown, true, false) => Color32::from_rgb(0x8c, 0x95, 0x9f),
+        (State::Unknown, true, true) => Color32::from_rgb(0x5c, 0x64, 0x6e),
+    }
+}
+
+/// A git folder's branch after its name ending at `name_right`: `(git) [branch]` as text,
+/// or `git · branch` on a filled label. The branch is cut with "…" to fit the name
+/// column; nothing when there is no room for even a little of it. Its rect.
+fn branch_label(p: &egui::Painter, branch: &str, name_rect: Rect, name_right: f32, label: bool, filled: bool, color: Color32) -> Option<Rect> {
+    let font = FontId::proportional(if filled { 12.0 } else { 13.0 });
+    let pad = if filled { vec2(5.0, 1.5) } else { vec2(0.0, 0.0) };
+    let left = name_right + 6.0;
+    let room = name_rect.right() - left - 2.0 * pad.x;
+    let total = branch.chars().count();
+    let mut max = total.min(MAX_BRANCH_CHARS);
+    loop {
+        let short = crate::gitinfo::shorten(branch, max);
+        let text = match (filled, label) {
+            (false, true) => format!("(git) [{short}]"),
+            (false, false) => format!("[{short}]"),
+            (true, true) => format!("git · {short}"),
+            (true, false) => short,
+        };
+        let ink = if filled { Color32::WHITE } else { color };
+        let galley = p.layout_no_wrap(text, font.clone(), ink);
+        if galley.size().x <= room {
+            let pos = pos2(left + pad.x, name_rect.center().y - galley.size().y / 2.0);
+            let r = Rect::from_min_size(pos, galley.size()).expand2(pad);
+            if filled {
+                p.rect_filled(r, 4.0, color);
+            }
+            p.galley(pos, galley, ink);
+            return Some(r);
+        }
+        // At least a few characters and the "…", or nothing.
+        if max <= 3 {
+            return None;
+        }
+        max = (max - 2).max(3);
+    }
+}
+
+fn branch_tooltip(repo: &crate::gitinfo::Repo, checked: bool) -> String {
+    use crate::gitinfo::State;
+    let mut lines = vec![if repo.detached { format!("{} {}", t("Detached at"), repo.branch) } else { format!("{} {}", t("Branch:"), repo.branch) }];
+    if !checked {
+        return lines.join("\n");
+    }
+    lines.push(match repo.state {
+        State::Clean => t("Everything is committed"),
+        State::Dirty => {
+            let mut parts = vec![];
+            if repo.changed > 0 {
+                parts.push(format!("{} {}", repo.changed, t("changed")));
+            }
+            if repo.untracked > 0 {
+                parts.push(format!("{} {}", repo.untracked, t("not tracked")));
+            }
+            format!("{}: {}", t("Not committed"), parts.join(", "))
+        }
+        State::Unknown => t("Changes not checked"),
+    });
+    if repo.ahead + repo.behind > 0 {
+        lines.push(format!("↑ {} {} · ↓ {} {}", repo.ahead, t("to push"), repo.behind, t("to pull")));
+    }
+    lines.join("\n")
+}
 
 pub fn pane_ui(ui: &mut egui::Ui, pane: &mut Pane, side: usize, c: &PaneUiCtx) -> Vec<PaneEvent> {
     let mut ev = Vec::new();
@@ -2122,7 +2213,13 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     let bar = Rect::from_min_size(pos2(pill.left() + 2.0, pill.center().y - 6.0), vec2(3.0, 12.0));
                     p.rect_filled(bar, 1.5, th.marked);
                 }
-                icons::entry_icon(p, Rect::from_center_size(pos2(rect.left() + icon_x + 8.0, rect.center().y), vec2(17.0, 17.0)), e, th);
+                let icon_rect = Rect::from_center_size(pos2(rect.left() + icon_x + 8.0, rect.center().y), vec2(17.0, 17.0));
+                icons::entry_icon(p, icon_rect, e, th);
+                // A git folder: its branch after the name.
+                let git = match &tab.loc {
+                    Location::Local(dir) if c.git_branches && e.is_dir && !e.is_parent => crate::gitinfo::lookup(ui.ctx(), &dir.join(&e.name), c.git_status),
+                    _ => None,
+                };
                 let is_arch = !e.is_dir && archive::is_archive(std::path::Path::new(&e.name));
                 let is_sum = !e.is_dir && crate::checksum::is_checksum_file(&e.name);
                 let name_color = if is_marked {
@@ -2141,7 +2238,16 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     _ => e.name.as_str(),
                 };
                 let name_rect = Rect::from_min_size(pos2(rect.left() + name_x, rect.top()), vec2(w_name - 8.0, ROW_H));
-                p.with_clip_rect(name_rect).text(name_rect.left_center(), Align2::LEFT_CENTER, base_name, FontId::proportional(14.0), name_color);
+                let name_drawn = p.with_clip_rect(name_rect).text(name_rect.left_center(), Align2::LEFT_CENTER, base_name, FontId::proportional(14.0), name_color);
+                if let Some(repo) = &git {
+                    let filled = c.git_style == crate::config::GitStyle::Filled;
+                    let color = branch_color(repo.state, c.git_status, filled, th);
+                    if let Some(branch_rect) = branch_label(p, &repo.branch, name_rect, name_drawn.right(), c.git_label, filled, color) {
+                        if ui.rect_contains_pointer(branch_rect) {
+                            resp.clone().on_hover_text(branch_tooltip(repo, c.git_status));
+                        }
+                    }
+                }
                 let meta = FontId::proportional(13.0);
                 let meta_color = if is_marked { th.marked.gamma_multiply(0.85) } else { th.weak };
                 let mut x = rect.left() + name_x + w_name;

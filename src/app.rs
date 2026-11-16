@@ -218,6 +218,8 @@ pub struct App {
     agents_rx: Option<Receiver<Vec<crate::agents::Found>>>,
     /// Live filter while typing in the search box: (pane, tab uid, filter before).
     pal_filter: Option<(usize, u64, String)>,
+    /// Typing in a file window: a small search box that filters it as you type.
+    type_search: Option<TypeSearch>,
     settings_page: SettingsPage,
     /// File types added on the Default apps page that have no app yet.
     default_app_types: Vec<String>,
@@ -365,6 +367,7 @@ impl App {
             agents: None,
             agents_rx: None,
             pal_filter: None,
+            type_search: None,
             settings_page: SettingsPage::Appearance,
             shortcut_capture: None,
             shortcut_note: None,
@@ -918,7 +921,9 @@ impl App {
         // Settings → Bookmarks: in a terminal window, `cd` the shell to a local folder.
         if self.cfg.bookmark_action == crate::config::BookmarkAction::FilesAndTerminal {
             if let (Location::Local(dir), Some(term)) = (&loc, self.panes[self.active].tab_mut().term.as_mut()) {
-                if !term.cd(dir) {
+                if !crate::termview::is_typeable(&dir.to_string_lossy()) {
+                    self.toast(t("This folder's name has control characters: it is not typed into the terminal"), true);
+                } else if !term.cd(dir) {
                     self.toast(t("The terminal is busy: quit the running program first"), true);
                 }
                 return;
@@ -1709,6 +1714,9 @@ impl App {
             }
             Cmd::Refresh => {
                 let tab = self.panes[a].tab_mut();
+                if let Location::Local(dir) = &tab.loc {
+                    crate::gitinfo::invalidate_children(dir);
+                }
                 tab.invalidate_archive_cache();
                 tab.reload(&lc!(self));
                 self.drive_watch.refresh();
@@ -1996,6 +2004,9 @@ impl App {
             }
             ctx.memory_mut(|m| m.surrender_focus(id));
         }
+        if !term_mode {
+            self.type_search_keys(ctx);
+        }
         // Take the shortcuts out of the input, so that a terminal does not get them too.
         let mut actions = vec![];
         ctx.input_mut(|i| {
@@ -2147,12 +2158,11 @@ impl App {
         }
     }
 
-    /// The fixed keys of a file list: they are not shortcuts but how a list works.
-    /// Typing in a file window opens the search box with what was typed: it filters the
-    /// folder as you type, Enter keeps the filter, Esc closes it. Space marks files, so it
-    /// does not start a search.
+    /// Typing in a file window opens a small search box in it with what was typed: it
+    /// filters the folder as you type, Enter keeps the filter, Esc closes it and shows
+    /// the whole folder again. Space marks files, so it does not start a search.
     fn type_to_search(&mut self, ctx: &egui::Context) -> bool {
-        if !self.panes[self.active].tab().is_files() {
+        if !self.panes[self.active].tab().is_files() || self.type_search.is_some() {
             return false;
         }
         let typed: String = ctx.input(|i| {
@@ -2167,8 +2177,149 @@ impl App {
             return false;
         }
         ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
-        self.palette.open_with(&typed);
+        let tab = self.panes[self.active].tab();
+        self.type_search = Some(TypeSearch { side: self.active, uid: tab.uid, loc: tab.loc.clone(), before: tab.filter_text.clone(), text: typed });
+        self.apply_type_search();
         true
+    }
+
+    /// The search box's keys, taken before shortcuts: text and Backspace edit it, Enter
+    /// keeps the filter, Esc puts the folder back. Arrows still move in the list.
+    fn type_search_keys(&mut self, ctx: &egui::Context) {
+        let Some(ts) = &self.type_search else { return };
+        // Another window or tab came to the front: the search ends there.
+        if ts.side != self.active || self.panes.get(ts.side).is_none_or(|p| p.tab().uid != ts.uid) {
+            self.end_type_search(false);
+            return;
+        }
+        // It went into another folder (a double click): the search was for the one before.
+        if self.panes[ts.side].tab().loc != ts.loc {
+            self.type_search = None;
+            return;
+        }
+        let mut edits: Vec<TypeSearchKey> = vec![];
+        ctx.input_mut(|i| {
+            let m = i.modifiers;
+            let shortcut = m.mac_cmd || ((m.ctrl || m.command) && !m.alt);
+            i.events.retain(|e| match e {
+                egui::Event::Text(t) if !shortcut => {
+                    edits.push(TypeSearchKey::Text(t.chars().filter(|c| !c.is_control()).collect()));
+                    false
+                }
+                egui::Event::Key { key, pressed, modifiers, .. } if !(modifiers.mac_cmd || modifiers.ctrl || modifiers.command) => match key {
+                    Key::Backspace | Key::Enter | Key::Escape => {
+                        if *pressed {
+                            edits.push(match key {
+                                Key::Backspace => TypeSearchKey::Back,
+                                Key::Enter => TypeSearchKey::Keep,
+                                _ => TypeSearchKey::Cancel,
+                            });
+                        }
+                        false
+                    }
+                    _ => true,
+                },
+                _ => true,
+            });
+        });
+        for e in edits {
+            let Some(ts) = self.type_search.as_mut() else { break };
+            match e {
+                TypeSearchKey::Text(t) => ts.text.push_str(&t),
+                TypeSearchKey::Back => {
+                    ts.text.pop();
+                    if ts.text.is_empty() {
+                        self.end_type_search(false);
+                        continue;
+                    }
+                }
+                TypeSearchKey::Keep => {
+                    self.end_type_search(true);
+                    continue;
+                }
+                TypeSearchKey::Cancel => {
+                    self.end_type_search(false);
+                    continue;
+                }
+            }
+            self.apply_type_search();
+        }
+    }
+
+    /// Filter the window by what is typed.
+    fn apply_type_search(&mut self) {
+        let Some(ts) = &self.type_search else { return };
+        let (side, text) = (ts.side, ts.text.trim().to_string());
+        let lc = lc!(self);
+        let tab = self.panes[side].tab_mut();
+        if tab.filter_text != text {
+            tab.set_filter(&text, &lc);
+            // On the first match, so that Enter, Enter opens it.
+            if let Some(first) = tab.view.iter().position(|&i| !tab.entries[i].is_parent) {
+                tab.cursor = first;
+                tab.ensure_visible = true;
+            }
+        }
+    }
+
+    /// Close the search box, keeping its filter or putting back the one from before.
+    fn end_type_search(&mut self, keep: bool) {
+        let Some(ts) = self.type_search.take() else { return };
+        if keep {
+            return;
+        }
+        let lc = lc!(self);
+        if let Some(tab) = self.panes.get_mut(ts.side).map(|p| p.tab_mut()).filter(|t| t.uid == ts.uid) {
+            if tab.filter_text != ts.before {
+                tab.set_filter(&ts.before, &lc);
+            }
+        }
+    }
+
+    /// The search box, in the lower right corner of its window.
+    fn type_search_ui(&mut self, ctx: &egui::Context) {
+        let Some(ts) = &self.type_search else { return };
+        let Some(&(_, rect)) = self.pane_rects.iter().find(|(s, _)| *s == ts.side) else { return };
+        let th = self.theme;
+        let tab = self.panes[ts.side].tab();
+        let matches = tab.view.iter().filter(|&&i| !tab.entries[i].is_parent).count();
+        let text = ts.text.clone();
+        // As wide as the query needs (an SQL-like one can be long), within the window.
+        let text_w = ctx.fonts(|f| f.layout_no_wrap(format!("{text}▏"), egui::FontId::proportional(13.5), th.text).size().x);
+        let width = (text_w + 130.0).clamp(260.0, (rect.width() - 28.0).max(260.0)).min(rect.width() - 24.0).max(120.0);
+        let pos = egui::pos2(rect.right() - width - 14.0, rect.bottom() - 28.0 - 44.0);
+        egui::Area::new(egui::Id::new("type-search")).order(egui::Order::Foreground).fixed_pos(pos).interactable(false).show(ctx, |ui| {
+            egui::Frame::new()
+                .fill(th.panel)
+                .stroke(egui::Stroke::new(1.0_f32, th.accent))
+                .corner_radius(8.0)
+                .shadow(egui::epaint::Shadow { offset: [0, 2], blur: 10, spread: 0, color: egui::Color32::from_black_alpha(if th.dark { 90 } else { 40 }) })
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
+                    ui.set_width(width - 20.0);
+                    let count = if matches == 1 { t("1 match") } else { format!("{} {}", crate::table::fmt_count(matches as u64), t("matches")) };
+                    let count_w = ctx.fonts(|f| f.layout_no_wrap(count.clone(), egui::FontId::proportional(11.5), th.weak).size().x);
+                    // The count only when the query fits beside it; the query is what matters.
+                    let with_count = text_w + count_w + 40.0 <= width - 20.0;
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                        icons::search(ui.painter(), r, th.weak);
+                        // A caret that blinks after the text.
+                        let blink = (ui.input(|i| i.time) * 2.0) as i64 % 2 == 0;
+                        let shown = if blink { format!("{text}▏") } else { format!("{text} ") };
+                        let room = ui.available_width() - if with_count { count_w + 12.0 } else { 0.0 };
+                        ui.allocate_ui(egui::vec2(room.max(20.0), 18.0), |ui| {
+                            ui.add(egui::Label::new(RichText::new(shown).size(13.5).color(th.text)).truncate());
+                        });
+                        if with_count {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                ui.label(RichText::new(&count).size(11.5).color(if matches == 0 { th.danger } else { th.weak }));
+                            });
+                        }
+                    });
+                });
+        });
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
     }
 
     fn file_list_keys(&mut self, ctx: &egui::Context) {
@@ -4394,7 +4545,19 @@ impl App {
                 };
                 ui.add(egui::Label::new(RichText::new(info).size(11.5).color(th.weak)).truncate());
             }
-            if self.cfg.show_key_hints {
+            if self.type_search.is_some() {
+                // While the search box is open: how to leave it.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 4.0;
+                    if key_hint(ui, th, "Esc", &t("Exit search")).clicked() {
+                        self.end_type_search(false);
+                    }
+                    if key_hint(ui, th, "Enter", &t("Keep the filter")).clicked() {
+                        self.end_type_search(true);
+                    }
+                    key_hint(ui, th, "↑↓", &t("Move"));
+                });
+            } else if self.cfg.show_key_hints {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let hints: [(&str, String, Cmd); 7] = [
@@ -4798,6 +4961,10 @@ impl App {
                 quick_filters: &self.cfg.quick_filters,
                 agent: agent.as_ref(),
                 agents: &agents,
+                git_branches: self.cfg.git_branches,
+                git_label: self.cfg.git_label,
+                git_style: self.cfg.git_style,
+                git_status: self.cfg.git_status,
             };
             for e in pane_ui(&mut child, &mut self.panes[side], side, &ctx) {
                 match e {
@@ -6048,6 +6215,7 @@ impl eframe::App for App {
         }
         self.update_window(ctx);
         self.dialogs(ctx);
+        self.type_search_ui(ctx);
         if self.palette.open {
             self.palette_live_filter();
             let entries = self.palette_entries();
@@ -6083,6 +6251,23 @@ impl eframe::App for App {
         self.save_cfg();
         let _ = std::fs::remove_dir_all(std::env::temp_dir().join("matrix_finder").join(format!("{}", std::process::id())));
     }
+}
+
+/// The search box opened by typing in a file window.
+struct TypeSearch {
+    side: usize,
+    uid: u64,
+    loc: Location,
+    /// The window's filter before, put back by Esc.
+    before: String,
+    text: String,
+}
+
+enum TypeSearchKey {
+    Text(String),
+    Back,
+    Keep,
+    Cancel,
 }
 
 /// An edit made in Settings → Bookmarks, at (top-level index, index inside that folder).

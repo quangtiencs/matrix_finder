@@ -160,9 +160,34 @@ pub fn short_path_candidates(full: &str) -> Vec<String> {
     out
 }
 
+/// Write `text` to `path` (via a temporary file) so only the user can read it.
+pub fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")))?;
+    let tmp = path.with_extension(format!("tmp{}", std::process::id()));
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    std::io::Write::write_all(&mut o.open(&tmp)?, text.as_bytes())?;
+    std::fs::rename(&tmp, path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn private_files_are_for_the_user_alone() {
+        use std::os::unix::fs::PermissionsExt;
+        let p = std::env::temp_dir().join(format!("matrix_finder-private-{}", std::process::id()));
+        std::fs::write(&p, "old, readable by all").unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o644)).unwrap();
+        write_private(&p, "secret").unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(std::fs::read_to_string(&p).unwrap(), "secret");
+        let _ = std::fs::remove_file(&p);
+    }
 
     #[test]
     fn sizes() {
