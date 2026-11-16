@@ -51,5 +51,5 @@ UI strings are English text passed to `i18n::t("…")`; the text itself is the k
 ## Conventions
 
 - Commit messages follow `CONTRIBUTING.md`: `type(scope): summary` (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`), imperative, lower case, ≤ 72 chars; breaking changes use `!` and a `BREAKING CHANGE:` footer. Keep i18n entries in the same commit as the feature.
-- Releases: tag `v<version>` from `Cargo.toml`, attach the DMG from `make dmg-universal` (ad-hoc signed, not notarized).
-- User-visible features are documented in `README.md` (Features list; `README.html`/`README_files/` are rendered output and git-ignored).
+- Releases: tag `v<version>` from `Cargo.toml`, attach the Apple silicon DMG from `make dmg` (ad-hoc signed, not notarized).
+- `README.md` is kept short: the core features for data scientists and developers, not a full feature list. Building, tests, settings/translations and the project layout are in `CONTRIBUTING.md` (add new modules there). `README.html`/`README_files/` are rendered output and git-ignored.
