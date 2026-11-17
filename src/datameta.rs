@@ -302,11 +302,11 @@ fn is_mat_73(head: &[u8]) -> bool {
 
 pub fn mat_path(path: &Path) -> Res<TableData> {
     let mut head = [0u8; 20];
-    let n = std::fs::File::open(path).map_err(es)?.read(&mut head).map_err(es)?;
+    let n = crate::util::open_regular(path).map_err(es)?.read(&mut head).map_err(es)?;
     if is_mat_73(&head[..n]) {
         return hdf5_path(path, "MATLAB 7.3");
     }
-    mat_v5(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?))
+    mat_v5(std::io::BufReader::new(crate::util::open_regular(path).map_err(es)?))
 }
 
 pub fn mat_bytes(bytes: Vec<u8>) -> Res<TableData> {
@@ -487,11 +487,11 @@ fn netcdf_classic<R: Read + Seek>(r: R) -> Res<TableData> {
 
 pub fn netcdf_path(path: &Path) -> Res<TableData> {
     let mut head = [0u8; 8];
-    let n = std::fs::File::open(path).map_err(es)?.read(&mut head).map_err(es)?;
+    let n = crate::util::open_regular(path).map_err(es)?.read(&mut head).map_err(es)?;
     if head[..n].starts_with(HDF5_MAGIC) {
         return hdf5_path(path, "NetCDF-4");
     }
-    netcdf_classic(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?))
+    netcdf_classic(std::io::BufReader::new(crate::util::open_regular(path).map_err(es)?))
 }
 
 pub fn netcdf_bytes(bytes: Vec<u8>) -> Res<TableData> {
@@ -1184,14 +1184,27 @@ pub fn sas_from<R: Read + Seek>(r: R) -> Res<TableData> {
 fn duckdb_query(path: &Path, sql: &str, cancel: &crate::media::Cancel) -> Option<Vec<serde_json::Map<String, serde_json::Value>>> {
     let tool = crate::media::find_tool("duckdb")?;
     let mut cmd = std::process::Command::new(tool);
-    // No extension is fetched or loaded, and no other file is read.
-    let sql = format!("SET autoinstall_known_extensions = false; SET autoload_known_extensions = false; SET enable_external_access = false; {sql}");
-    cmd.args(["-readonly", "-json", "-init"]).arg(if cfg!(windows) { "NUL" } else { "/dev/null" }).arg(path).args(["-c", &sql]);
+    cmd.args(["-json", "-init"]).arg(if cfg!(windows) { "NUL" } else { "/dev/null" }).args(["-c", &duckdb_script(path, sql)?]);
     let out = crate::media::tool_output(cmd, cancel)?;
     if out.iter().all(u8::is_ascii_whitespace) {
         return Some(vec![]);
     }
     serde_json::from_slice::<Vec<serde_json::Map<String, serde_json::Value>>>(&out).ok()
+}
+
+/// The DuckDB statements that run `sql` on the database at `path` without changing it:
+/// DuckDB starts on an empty in-memory database, is told never to fetch or load an
+/// extension, and only then attaches the file read-only (so its log is not replayed into
+/// it), after which it may read no other file and its settings are locked. The database
+/// is `db`. `None` for a path that cannot be written in SQL.
+fn duckdb_script(path: &Path, sql: &str) -> Option<String> {
+    let path = path.to_str().filter(|p| !p.contains('\0'))?;
+    let quoted = path.replace('\'', "''");
+    Some(format!(
+        "SET autoinstall_known_extensions = false; SET autoload_known_extensions = false; \
+         ATTACH '{quoted}' AS db (READ_ONLY); USE db; \
+         SET enable_external_access = false; SET lock_configuration = true; {sql}"
+    ))
 }
 
 fn json_text(v: Option<&serde_json::Value>) -> String {
@@ -1205,7 +1218,7 @@ fn json_text(v: Option<&serde_json::Value>) -> String {
 /// The facts in the header of a DuckDB file.
 fn duckdb_header(path: &Path) -> Res<Vec<(String, String)>> {
     let not_duck = || t("Not a DuckDB file this preview can read.");
-    let mut f = Bin::new(std::io::BufReader::new(std::fs::File::open(path).map_err(es)?))?;
+    let mut f = Bin::new(std::io::BufReader::new(crate::util::open_regular(path).map_err(es)?))?;
     let head = f.bytes(64).map_err(|_| not_duck())?;
     if &head[8..12] != b"DUCK" {
         return Err(not_duck());
@@ -1233,8 +1246,8 @@ pub fn duckdb_from(path: &Path, cancel: &crate::media::Cancel) -> Res<TableData>
     let header = duckdb_header(path)?;
     let tables = duckdb_query(
         path,
-        "SELECT schema_name, table_name, 'table' AS kind, estimated_size, column_count FROM duckdb_tables() WHERE NOT internal \
-         UNION ALL SELECT schema_name, view_name, 'view', NULL, column_count FROM duckdb_views() WHERE NOT internal ORDER BY 1, 2 LIMIT 10000",
+        "SELECT schema_name, table_name, 'table' AS kind, estimated_size, column_count FROM duckdb_tables() WHERE database_name = 'db' AND NOT internal \
+         UNION ALL SELECT schema_name, view_name, 'view', NULL, column_count FROM duckdb_views() WHERE database_name = 'db' AND NOT internal ORDER BY 1, 2 LIMIT 10000",
         cancel,
     );
     let Some(tables) = tables else {
@@ -1244,7 +1257,7 @@ pub fn duckdb_from(path: &Path, cancel: &crate::media::Cancel) -> Res<TableData>
     };
     let columns = duckdb_query(
         path,
-        "SELECT schema_name, table_name, column_name, data_type, is_nullable FROM duckdb_columns() WHERE NOT internal ORDER BY schema_name, table_name, column_index LIMIT 100000",
+        "SELECT schema_name, table_name, column_name, data_type, is_nullable FROM duckdb_columns() WHERE database_name = 'db' AND NOT internal ORDER BY schema_name, table_name, column_index LIMIT 100000",
         cancel,
     )
     .unwrap_or_default();
@@ -1280,6 +1293,20 @@ mod tests {
 
     fn cell(s: &Sheet, r: usize, c: usize) -> Option<&str> {
         s.rows[r][c].as_deref()
+    }
+
+    /// The database is attached read-only after extensions are switched off, and a quote
+    /// in its name cannot end the SQL string.
+    #[test]
+    fn duckdb_opens_databases_read_only() {
+        let s = duckdb_script(Path::new("/data/it's.duckdb"), "SELECT 1").unwrap();
+        let attach = s.find("ATTACH '/data/it''s.duckdb' AS db (READ_ONLY)").unwrap();
+        assert!(s.find("SET autoload_known_extensions = false").unwrap() < attach);
+        assert!(s.find("SET autoinstall_known_extensions = false").unwrap() < attach);
+        let locked = s.find("SET lock_configuration = true").unwrap();
+        assert!(attach < s.find("SET enable_external_access = false").unwrap());
+        assert!(locked < s.find("SELECT 1").unwrap());
+        assert!(duckdb_script(Path::new("/a\0b"), "SELECT 1").is_none());
     }
 
     #[test]

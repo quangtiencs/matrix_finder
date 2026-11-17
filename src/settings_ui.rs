@@ -758,7 +758,7 @@ impl App {
                 });
                 settings_section(ui, th, &t("Safety"), "");
                 card(ui, th, |ui| {
-                    changed |= toggle_row(ui, th, &mut self.cfg.confirm_delete, &t("Confirm before deleting"), "");
+                    changed |= toggle_row(ui, th, &mut self.cfg.confirm_delete, &t("Confirm before deleting"), &t("Deleting permanently is always confirmed."));
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.use_trash, &t("Delete to trash (Shift+Del deletes permanently)"), "");
                     row_line(ui, th);
@@ -854,7 +854,7 @@ impl App {
                             self.export_settings();
                         }
                         if ui.button(t("Import settings…")).clicked() {
-                            self.import_settings(ui.ctx());
+                            self.import_settings();
                         }
                     });
                     ui.label(RichText::new(format!("{}: {}", t("Settings file"), crate::config::config_file().display())).size(11.5).color(th.weak));

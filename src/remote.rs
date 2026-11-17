@@ -22,12 +22,38 @@ pub trait RemoteFs: Send {
     fn mkdir(&mut self, path: &str) -> Res<()>;
     fn remove_file(&mut self, path: &str) -> Res<()>;
     fn remove_dir(&mut self, path: &str) -> Res<()>;
+    /// Rename; as far as the protocol allows, never over an existing `to` (SFTP refuses,
+    /// but many FTP servers replace it: callers check the name first).
     fn rename(&mut self, from: &str, to: &str) -> Res<()>;
     /// Whether `path` itself is a symbolic link. Servers that list links as plain
     /// files (FTP) never report a link as a folder, so they need no check.
     fn is_symlink(&mut self, _path: &str) -> Res<bool> {
         Ok(false)
     }
+    /// Whether anything is at `path` now.
+    fn exists(&mut self, path: &str) -> Res<bool> {
+        Ok(listed(self, path)?.is_some())
+    }
+    /// The size of the file at `path`, when the server tells it.
+    fn file_size(&mut self, path: &str) -> Res<Option<u64>> {
+        Ok(listed(self, path)?.filter(|e| !e.is_dir).map(|e| e.size))
+    }
+    /// Create an empty file, failing when the name is taken (an existing file is never emptied).
+    fn create_file(&mut self, _path: &str) -> Res<()> {
+        Err(t("Not supported by this connection"))
+    }
+    /// Give `to` the permissions of `from` (an overwritten file keeps them). Best effort.
+    fn copy_mode(&mut self, _from: &str, _to: &str) {}
+}
+
+/// The entry for `path` in its folder's listing.
+fn listed<F: RemoteFs + ?Sized>(fs: &mut F, path: &str) -> Res<Option<Entry>> {
+    let (dir, name) = match path.trim_end_matches('/').rsplit_once('/') {
+        Some(("", name)) => ("/", name),
+        Some((dir, name)) => (dir, name),
+        None => (".", path),
+    };
+    Ok(fs.list(dir)?.into_iter().find(|e| e.name == name))
 }
 
 pub type SharedRemote = Arc<Mutex<Box<dyn RemoteFs>>>;
@@ -185,13 +211,24 @@ impl FtpFs {
             .ok_or("Cannot resolve host")?;
         let mut ftp = suppaftp::FtpStream::connect_timeout(addr, Duration::from_secs(15)).map_err(es)?;
         let user = if p.user.is_empty() { "anonymous" } else { p.user.as_str() };
-        ftp.login(user, p.password.as_str()).map_err(es)?;
+        ftp.login(ftp_arg(user)?, ftp_arg(&p.password)?).map_err(es)?;
         ftp.transfer_type(suppaftp::types::FileType::Binary).map_err(es)?;
-        if !p.initial_path.is_empty() {
-            let _ = ftp.cwd(&p.initial_path);
+        if let Ok(path) = ftp_arg(&p.initial_path) {
+            if !path.is_empty() {
+                let _ = ftp.cwd(path);
+            }
         }
         Ok(Self { ftp })
     }
+}
+
+/// A name or path for the FTP control channel. A line break there would end the command
+/// and start another one, so such names are refused before anything is sent.
+fn ftp_arg(s: &str) -> Res<&str> {
+    if s.contains(['\r', '\n', '\0']) {
+        return Err(t("This name cannot be used over FTP: it contains a line break or a null character."));
+    }
+    Ok(s)
 }
 
 fn parse_ftp_line(line: &str) -> Option<Entry> {
@@ -212,49 +249,72 @@ impl RemoteFs for FtpFs {
     }
 
     fn list(&mut self, path: &str) -> Res<Vec<Entry>> {
-        let lines = self.ftp.list(Some(path)).map_err(es)?;
+        let lines = self.ftp.list(Some(ftp_arg(path)?)).map_err(es)?;
         Ok(lines.iter().filter_map(|l| parse_ftp_line(l)).collect())
     }
 
     fn download(&mut self, remote: &str, local: &Path, progress: ProgressFn, cancel: &AtomicBool) -> Res<()> {
+        let remote = ftp_arg(remote)?;
         let mut out = std::fs::File::create(local).map_err(es)?;
         let mut stream = self.ftp.retr_as_stream(remote).map_err(es)?;
         let res = copy_stream(&mut stream, &mut out, progress, cancel);
-        let fin = self.ftp.finalize_retr_stream(stream).map_err(es);
+        let fin = stream.finish().map_err(es);
         res.and(fin)
     }
 
+    /// STOR replaces a file of that name: callers upload to a fresh temporary name.
     fn upload(&mut self, local: &Path, remote: &str, progress: ProgressFn, cancel: &AtomicBool) -> Res<()> {
+        let remote = ftp_arg(remote)?;
         let mut inp = std::fs::File::open(local).map_err(es)?;
         let mut stream = self.ftp.put_with_stream(remote).map_err(es)?;
         let res = copy_stream(&mut inp, &mut stream, progress, cancel);
-        let fin = self.ftp.finalize_put_stream(stream).map_err(es);
+        let fin = stream.finish().map_err(es);
         res.and(fin)
     }
 
     fn read_head(&mut self, remote: &str, max: usize, cancel: &AtomicBool) -> Res<Vec<u8>> {
-        let mut stream = self.ftp.retr_as_stream(remote).map_err(es)?;
+        let mut stream = self.ftp.retr_as_stream(ftp_arg(remote)?).map_err(es)?;
         let r = read_limited(&mut stream, max, cancel);
         if r.as_ref().map_or(true, |buf| buf.len() >= max) {
             // Stop the transfer early; ignore errors from the aborted stream.
             let _ = self.ftp.abort(stream);
         } else {
-            let _ = self.ftp.finalize_retr_stream(stream);
+            let _ = stream.finish();
         }
         r
     }
 
     fn mkdir(&mut self, path: &str) -> Res<()> {
-        self.ftp.mkdir(path).map_err(es)
+        self.ftp.mkdir(ftp_arg(path)?).map_err(es)
     }
     fn remove_file(&mut self, path: &str) -> Res<()> {
-        self.ftp.rm(path).map_err(es)
+        self.ftp.rm(ftp_arg(path)?).map_err(es)
     }
     fn remove_dir(&mut self, path: &str) -> Res<()> {
-        self.ftp.rmdir(path).map_err(es)
+        self.ftp.rmdir(ftp_arg(path)?).map_err(es)
     }
     fn rename(&mut self, from: &str, to: &str) -> Res<()> {
-        self.ftp.rename(from, to).map_err(es)
+        self.ftp.rename(ftp_arg(from)?, ftp_arg(to)?).map_err(es)
+    }
+    fn exists(&mut self, path: &str) -> Res<bool> {
+        // SIZE also finds hidden files, which many servers leave out of listings.
+        if self.ftp.size(ftp_arg(path)?).is_ok() {
+            return Ok(true);
+        }
+        Ok(listed(self, path)?.is_some())
+    }
+    fn file_size(&mut self, path: &str) -> Res<Option<u64>> {
+        match self.ftp.size(ftp_arg(path)?) {
+            Ok(n) => Ok(Some(n as u64)),
+            Err(_) => Ok(listed(self, path)?.filter(|e| !e.is_dir).map(|e| e.size)),
+        }
+    }
+    fn create_file(&mut self, path: &str) -> Res<()> {
+        if self.exists(path)? {
+            return Err(format!("{}: {path}", t("Already exists")));
+        }
+        // APPE adds nothing to a file that appeared meanwhile, where STOR would empty it.
+        self.ftp.append_file(ftp_arg(path)?, &mut std::io::empty()).map(|_| ()).map_err(es)
     }
 }
 
@@ -404,13 +464,24 @@ impl RemoteFs for SftpFs {
     fn download(&mut self, remote: &str, local: &Path, progress: ProgressFn, cancel: &AtomicBool) -> Res<()> {
         let mut r = self.sftp.open(Path::new(remote)).map_err(es)?;
         let mut out = std::fs::File::create(local).map_err(es)?;
-        copy_stream(&mut r, &mut out, progress, cancel)
+        let res = copy_stream(&mut r, &mut out, progress, cancel);
+        let _ = r.close();
+        res
     }
 
+    /// Never replaces anything: the file is created new (callers use a temporary name).
     fn upload(&mut self, local: &Path, remote: &str, progress: ProgressFn, cancel: &AtomicBool) -> Res<()> {
+        use ssh2::{OpenFlags, OpenType};
         let mut inp = std::fs::File::open(local).map_err(es)?;
-        let mut w = self.sftp.create(Path::new(remote)).map_err(es)?;
-        copy_stream(&mut inp, &mut w, progress, cancel)
+        let mut w = self.sftp.open_mode(Path::new(remote), OpenFlags::WRITE | OpenFlags::EXCLUSIVE, 0o644, OpenType::File).map_err(es)?;
+        let res = copy_stream(&mut inp, &mut w, progress, cancel).and_then(|_| w.flush().map_err(es));
+        // Servers without fsync@openssh.com cannot sync; the size is checked afterwards anyway.
+        if res.is_ok() {
+            let _ = w.fsync();
+        }
+        // The close reports a failed write too, so it is checked.
+        let closed = w.close().map_err(es);
+        res.and(closed)
     }
 
     fn read_head(&mut self, remote: &str, max: usize, cancel: &AtomicBool) -> Res<Vec<u8>> {
@@ -428,13 +499,42 @@ impl RemoteFs for SftpFs {
         self.sftp.rmdir(Path::new(path)).map_err(es)
     }
     fn rename(&mut self, from: &str, to: &str) -> Res<()> {
+        use ssh2::RenameFlags;
+        // Without OVERWRITE: the server refuses a name that is taken.
         self.sftp
-            .rename(Path::new(from), Path::new(to), None)
+            .rename(Path::new(from), Path::new(to), Some(RenameFlags::ATOMIC | RenameFlags::NATIVE))
             .map_err(es)
     }
     fn is_symlink(&mut self, path: &str) -> Res<bool> {
         let st = self.sftp.lstat(Path::new(path)).map_err(es)?;
         Ok(st.file_type().is_symlink())
+    }
+    fn exists(&mut self, path: &str) -> Res<bool> {
+        match self.sftp.lstat(Path::new(path)) {
+            Ok(_) => Ok(true),
+            // SSH_FX_NO_SUCH_FILE; anything else (no permission) may hide a file.
+            Err(e) if e.code() == ssh2::ErrorCode::SFTP(2) => Ok(false),
+            Err(e) => Err(es(e)),
+        }
+    }
+    fn file_size(&mut self, path: &str) -> Res<Option<u64>> {
+        Ok(self.sftp.stat(Path::new(path)).map_err(es)?.size)
+    }
+    fn create_file(&mut self, path: &str) -> Res<()> {
+        use ssh2::{OpenFlags, OpenType};
+        if self.exists(path)? {
+            return Err(format!("{}: {path}", t("Already exists")));
+        }
+        let mut f = self.sftp.open_mode(Path::new(path), OpenFlags::WRITE | OpenFlags::EXCLUSIVE, 0o644, OpenType::File).map_err(es)?;
+        f.close().map_err(es)
+    }
+    fn copy_mode(&mut self, from: &str, to: &str) {
+        if let Ok(st) = self.sftp.stat(Path::new(from)) {
+            if let Some(perm) = st.perm {
+                let mode = ssh2::FileStat { size: None, uid: None, gid: None, perm: Some(perm & 0o777), atime: None, mtime: None };
+                let _ = self.sftp.setstat(Path::new(to), mode);
+            }
+        }
     }
 }
 
@@ -449,6 +549,125 @@ mod tests {
         let f = parse_ftp_line("-rw-r--r--    1 1000     1000       123456 Jan 01  2024 file.txt").unwrap();
         assert!(!f.is_dir);
         assert_eq!(f.size, 123456);
+    }
+
+    #[test]
+    fn ftp_names_with_line_breaks_are_never_sent() {
+        use std::io::{BufRead, BufReader};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            let mut out = sock.try_clone().unwrap();
+            out.write_all(b"220 ready\r\n").unwrap();
+            let mut seen = vec![];
+            for line in BufReader::new(sock).lines() {
+                let line = line.unwrap();
+                let reply: &[u8] = match line.split(' ').next().unwrap() {
+                    "USER" => b"331 password\r\n",
+                    "PASS" => b"230 in\r\n",
+                    "TYPE" => b"200 ok\r\n",
+                    "QUIT" => b"221 bye\r\n",
+                    _ => b"250 ok\r\n",
+                };
+                out.write_all(reply).unwrap();
+                seen.push(line);
+                if seen.last().is_some_and(|l| l == "QUIT") {
+                    break;
+                }
+            }
+            seen
+        });
+        let p = ConnectionProfile { protocol: Protocol::Ftp, host: "127.0.0.1".into(), port, user: "me".into(), password: "pw".into(), ..Default::default() };
+        let mut fs = FtpFs::connect(&p).unwrap();
+        for bad in ["x\r\nDELE victim", "x\nDELE victim", "x\0y"] {
+            assert!(fs.remove_file(bad).is_err());
+            assert!(fs.mkdir(bad).is_err());
+            assert!(fs.rename("a", bad).is_err());
+            assert!(fs.list(bad).is_err());
+        }
+        fs.remove_file("fine.txt").unwrap();
+        fs.ftp.quit().unwrap();
+        let seen = server.join().unwrap();
+        assert_eq!(seen, ["USER me", "PASS pw", "TYPE I", "DELE fine.txt", "QUIT"]);
+    }
+}
+
+#[cfg(test)]
+mod fake_ftp_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader};
+
+    /// A tiny FTP server holding files of the given sizes; returns its port and, once the
+    /// client quits, every command it received.
+    fn serve(files: &'static [(&'static str, u64)]) -> (u16, std::thread::JoinHandle<Vec<String>>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (sock, _) = listener.accept().unwrap();
+            let mut out = sock.try_clone().unwrap();
+            out.write_all(b"220 ready\r\n").unwrap();
+            let mut seen = vec![];
+            let mut data: Option<std::net::TcpListener> = None;
+            for line in BufReader::new(sock).lines() {
+                let line = line.unwrap();
+                let (cmd, arg) = line.split_once(' ').unwrap_or((line.as_str(), ""));
+                let reply = match cmd {
+                    "USER" => "331 password".to_string(),
+                    "PASS" => "230 in".into(),
+                    "TYPE" => "200 ok".into(),
+                    "QUIT" => "221 bye".into(),
+                    "SIZE" => match files.iter().find(|(n, _)| *n == arg) {
+                        Some((_, size)) => format!("213 {size}"),
+                        None => "550 no such file".into(),
+                    },
+                    "PASV" => {
+                        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+                        let p = l.local_addr().unwrap().port();
+                        data = Some(l);
+                        format!("227 Entering Passive Mode (127,0,0,1,{},{})", p >> 8, p & 255)
+                    }
+                    "LIST" | "APPE" | "STOR" => {
+                        out.write_all(b"150 go\r\n").unwrap();
+                        let (mut conn, _) = data.take().unwrap().accept().unwrap();
+                        if cmd == "LIST" {
+                            for (n, size) in files {
+                                conn.write_all(format!("-rw-r--r--    1 1000     1000 {size:>12} Jan 01 12:00 {n}\r\n").as_bytes()).unwrap();
+                            }
+                        } else {
+                            std::io::copy(&mut conn, &mut std::io::sink()).unwrap();
+                        }
+                        drop(conn);
+                        "226 done".into()
+                    }
+                    _ => "250 ok".into(),
+                };
+                out.write_all(format!("{reply}\r\n").as_bytes()).unwrap();
+                let quit = cmd == "QUIT";
+                seen.push(line.clone());
+                if quit {
+                    break;
+                }
+            }
+            seen
+        });
+        (port, server)
+    }
+
+    #[test]
+    fn a_new_file_on_ftp_never_empties_an_existing_one() {
+        let (port, server) = serve(&[("taken.txt", 5), (".hidden", 3)]);
+        let p = ConnectionProfile { protocol: Protocol::Ftp, host: "127.0.0.1".into(), port, user: "me".into(), password: "pw".into(), ..Default::default() };
+        let mut fs = FtpFs::connect(&p).unwrap();
+        assert!(fs.create_file("taken.txt").unwrap_err().contains("Already exists"));
+        assert!(fs.exists(".hidden").unwrap());
+        assert_eq!(fs.file_size("taken.txt").unwrap(), Some(5));
+        fs.create_file("new.txt").unwrap();
+        fs.ftp.quit().unwrap();
+        let seen = server.join().unwrap();
+        assert!(!seen.iter().any(|l| l.starts_with("STOR")), "{seen:?}");
+        assert!(!seen.iter().any(|l| l.contains("APPE taken.txt")), "{seen:?}");
+        assert!(seen.iter().any(|l| l == "APPE new.txt"), "{seen:?}");
     }
 }
 

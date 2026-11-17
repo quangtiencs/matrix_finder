@@ -344,7 +344,7 @@ fn read_sibling(dir: Option<&Path>, uri: &str) -> Res<Vec<u8>> {
     if std::fs::metadata(&path).is_ok_and(|m| m.len() > MAX_FILE) {
         return Err(t("This model is too large to preview."));
     }
-    std::fs::read(path).map_err(|e| format!("{uri}: {e}"))
+    crate::util::read_regular(&path).map_err(|e| format!("{uri}: {e}"))
 }
 
 fn parse_gltf_json(json: &[u8], bin: Option<&[u8]>, dir: Option<&Path>) -> Res<Vec<Tri>> {

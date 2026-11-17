@@ -65,7 +65,7 @@ GUI tests drive the real app headlessly (`egui_kittest` + wgpu) and are ignored 
 
 ## Settings and translations
 
-- **Settings** are stored in `<config dir>/matrix_finder/settings.json`: `~/.config` on Linux, `~/Library/Application Support` on macOS and `%APPDATA%` on Windows. *File → Export settings…* writes a copy **without passwords**.
+- **Settings** are stored in `<config dir>/matrix_finder/settings.json`: `~/.config` on Linux, `~/Library/Application Support` on macOS and `%APPDATA%` on Windows. *File → Export settings…* writes a copy **without passwords**. Saves are atomic (temporary file, flush, rename); the version replaced is kept as `settings.json.bak`, a file that cannot be read is renamed `settings.json.broken-<date>` (never overwritten), a value that cannot be read resets only that setting, and the saves of two running Matrix Finders are merged (`config::Store`).
 - **Languages** live in `<config dir>/matrix_finder/lang/<code>.json`. *Settings → Export translation template…* writes every key for you, and missing keys fall back to English.
   ```json
   { "code": "fr", "name": "Français", "strings": { "Copy": "Copier", "Delete": "Supprimer" } }
@@ -92,7 +92,9 @@ src/
 ├── remote.rs      FTP (suppaftp) and SFTP (ssh2) back-ends
 ├── archive.rs     list / extract / create for all archive formats
 ├── ops.rs         background copy/move/delete with progress, pause, queue and cancel
+├── tempcopy.rs    files from servers and archives opened through a local copy: edits uploaded or kept
 ├── rename.rs      batch rename rules, validation, safe apply/undo and its tab
+├── safefs.rs      safe writes: temporary file, sync, no-replace rename into place by the conflict policy
 ├── filter.rs      quick filter + SQL-like expression parser
 ├── preview.rs     image / SVG / Markdown / code / text / hex / table previews
 ├── docview.rs     PDF (hayro) and Jupyter notebook previews

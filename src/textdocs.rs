@@ -69,7 +69,7 @@ fn parse_package<R: Read + Seek>(name: &str, reader: R, syntax_theme: &str) -> R
 
 /// A document from a file on disk (see `reads_zip`).
 pub fn load_path(name: &str, path: &std::path::Path, syntax_theme: &str) -> Res<Document> {
-    let file = std::io::BufReader::new(std::fs::File::open(path).map_err(|e| e.to_string())?);
+    let file = std::io::BufReader::new(crate::util::open_regular(path).map_err(|e| e.to_string())?);
     if ext_of(name) == "mbox" {
         // Only the first messages of a mailbox of any size.
         let mut head = Vec::new();
@@ -1219,7 +1219,7 @@ fn pptx_slide_paths<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, budget: &mut u
     }
     if order.is_empty() {
         let number = |n: &str| n.strip_prefix("ppt/slides/slide").and_then(|n| n.strip_suffix(".xml")).and_then(|n| n.parse::<u32>().ok());
-        let mut found: Vec<(u32, String)> = zip.file_names().filter_map(|n| number(n).map(|k| (k, n.to_string()))).collect();
+        let mut found: Vec<(u32, String)> = zip.file_names().flatten().filter_map(|n| number(&n).map(|k| (k, n.to_string()))).collect();
         found.sort();
         order = found.into_iter().map(|(_, n)| n).collect();
     }

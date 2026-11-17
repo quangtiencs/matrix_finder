@@ -1,6 +1,6 @@
 //! Smart batch rename: name masks with tokens, find & replace (plain or
 //! regex), case conversion, Vietnamese diacritics removal, whitespace clean-up
-//! and counters. Renames are applied in two phases so swaps (a↔b) are safe.
+//! and counters. Renames go in dependency order; only swaps (a↔b) use temporary names.
 use crate::util::Res;
 use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
@@ -376,41 +376,67 @@ pub fn validate(old: &[String], new: &[String], existing: &HashSet<String>, case
         .collect()
 }
 
-/// Apply renames with `rename(from, to)`, going through temporary names so
-/// that swaps and chains work. A target that `exists` by then (made since the plan was
-/// checked) is never overwritten: that item keeps its name and an error says so.
+/// Apply renames with `rename(from, to)`, which must not replace an existing `to`. Items
+/// go in an order where each target is free by then (in a chain `a→b, b→c`, `b` goes
+/// first); only items in a cycle (a swap `a↔b`) pass through a hidden temporary name. A
+/// target that `exists` by then (made since the plan was checked) is never overwritten:
+/// that item keeps its name and an error says so. Should an item be left under its
+/// temporary name, the error names it, so nothing is lost out of sight.
 /// Returns the pairs actually applied (for undo) and the errors.
 pub fn apply(pairs: &[(String, String)], mut rename: impl FnMut(&str, &str) -> Res<()>, mut exists: impl FnMut(&str) -> bool) -> (Vec<(String, String)>, Vec<String>) {
-    let pairs: Vec<&(String, String)> = pairs.iter().filter(|(a, b)| a != b).collect();
-    let stamp = std::process::id();
-    let mut staged: Vec<(String, String, String)> = Vec::new(); // (orig, temp, target)
-    for (i, (from, to)) in pairs.iter().enumerate() {
-        // The temporary name sits next to the item (in its subfolder).
-        let tmp = format!("{}.matrix_finder-rename-{stamp}-{i}.tmp", split_dir(from).0);
-        if let Err(e) = rename(from, &tmp) {
-            // Roll back the ones already staged.
-            for (orig, t, _) in staged.iter().rev() {
-                let _ = rename(t, orig);
-            }
-            return (vec![], vec![format!("{from}: {e}")]);
-        }
-        staged.push((from.clone(), tmp, to.clone()));
+    // Names are compared ignoring case: on a disk that ignores it, `B` is where `b` is.
+    let key = |s: &str| s.to_lowercase();
+    // (original name, current name, target)
+    let mut todo: Vec<(String, String, String)> = pairs.iter().filter(|(a, b)| a != b).map(|(a, b)| (a.clone(), a.clone(), b.clone())).collect();
+    // How many items still sit under each name.
+    let mut held: HashMap<String, usize> = HashMap::new();
+    for (_, cur, _) in &todo {
+        *held.entry(key(cur)).or_default() += 1;
     }
     let mut done = Vec::new();
     let mut errors = Vec::new();
-    for (orig, tmp, target) in &staged {
-        // Every item of the batch has its temporary name now: what is still there is
-        // another file. (A change of letter case only is the same file: moved away too.)
-        if exists(target) {
-            let _ = rename(tmp, orig);
-            errors.push(format!("{orig} → {target}: {}", t("Already exists")));
+    while !todo.is_empty() {
+        // An item can go once no other item is still under its target name.
+        let free = |(_, cur, target): &(String, String, String), held: &HashMap<String, usize>| {
+            let own = usize::from(key(cur) == key(target));
+            held.get(&key(target)).copied().unwrap_or(0) <= own
+        };
+        let Some(i) = todo.iter().position(|it| free(it, &held)) else {
+            // Only cycles are left: one of them steps aside under a temporary name.
+            let j = todo.iter().position(|(orig, cur, _)| orig == cur).unwrap_or(0);
+            let (orig, cur, target) = todo[j].clone();
+            let tmp = format!("{}{}", split_dir(&cur).0, crate::safefs::temp_name(split_dir(&cur).1, "rename"));
+            match rename(&cur, &tmp) {
+                Ok(()) => {
+                    *held.entry(key(&cur)).or_default() -= 1;
+                    todo[j] = (orig, tmp, target);
+                }
+                Err(e) => {
+                    // It keeps its name; the others of its cycle then find it taken.
+                    *held.entry(key(&cur)).or_default() -= 1;
+                    todo.remove(j);
+                    errors.push(format!("{orig} → {target}: {e}"));
+                }
+            }
             continue;
+        };
+        let (orig, cur, target) = todo.remove(i);
+        // Only original names are counted (a temporary name blocks nothing).
+        if cur == orig {
+            *held.entry(key(&cur)).or_default() -= 1;
         }
-        match rename(tmp, target) {
-            Ok(()) => done.push((orig.clone(), target.clone())),
+        // Taken by a file outside the batch? (A change of letter case only is the same file.)
+        let result = if key(&cur) != key(&target) && exists(&target) { Err(t("Already exists")) } else { rename(&cur, &target) };
+        match result {
+            Ok(()) => done.push((orig, target)),
+            Err(e) if cur == orig => errors.push(format!("{orig} → {target}: {e}")),
             Err(e) => {
-                let _ = rename(tmp, orig);
-                errors.push(format!("{orig} → {target}: {e}"));
+                // Back from the temporary name, if its old name is still free.
+                let back = if exists(&orig) { Err(t("Already exists")) } else { rename(&cur, &orig) };
+                errors.push(match back {
+                    Ok(()) => format!("{orig} → {target}: {e}"),
+                    Err(_) => format!("{orig} → {target}: {e} ({}: {cur})", t("it is now named")),
+                });
             }
         }
     }
@@ -493,29 +519,88 @@ mod tests {
         let pairs = vec![("a".to_string(), "b".to_string()), ("b".to_string(), "a".to_string())];
         let d = dir.clone();
         let exists = |n: &str| d.join(n).symlink_metadata().is_ok();
-        let (done, errors) = apply(&pairs, |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string()), exists);
+        let (done, errors) = apply(&pairs, |f, t| crate::safefs::rename_item(&d.join(f), &d.join(t)).map_err(|e| e.to_string()), exists);
         assert!(errors.is_empty());
         assert_eq!(done.len(), 2);
         assert_eq!(std::fs::read_to_string(dir.join("a")).unwrap(), "B");
         assert_eq!(std::fs::read_to_string(dir.join("b")).unwrap(), "A");
         // Undo
         let undo: Vec<(String, String)> = done.iter().map(|(a, b)| (b.clone(), a.clone())).collect();
-        let (_, errors) = apply(&undo, |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string()), exists);
+        let (_, errors) = apply(&undo, |f, t| crate::safefs::rename_item(&d.join(f), &d.join(t)).map_err(|e| e.to_string()), exists);
         assert!(errors.is_empty());
         assert_eq!(std::fs::read_to_string(dir.join("a")).unwrap(), "A");
         // A file outside the batch is never overwritten; the others still go.
         std::fs::write(dir.join("c"), "C").unwrap();
         let pairs = vec![("a".to_string(), "c".to_string()), ("b".to_string(), "d".to_string())];
-        let (done, errors) = apply(&pairs, |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string()), exists);
+        let (done, errors) = apply(&pairs, |f, t| crate::safefs::rename_item(&d.join(f), &d.join(t)).map_err(|e| e.to_string()), exists);
         assert_eq!(done, vec![("b".to_string(), "d".to_string())]);
         assert_eq!(errors.len(), 1);
         assert_eq!(std::fs::read_to_string(dir.join("a")).unwrap(), "A");
         assert_eq!(std::fs::read_to_string(dir.join("c")).unwrap(), "C");
         // Only the letter case changes: the same file, allowed.
-        let (done, errors) = apply(&[("a".to_string(), "A".to_string())], |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string()), exists);
+        let (done, errors) = apply(&[("a".to_string(), "A".to_string())], |f, t| crate::safefs::rename_item(&d.join(f), &d.join(t)).map_err(|e| e.to_string()), exists);
         assert!(errors.is_empty() && done.len() == 1);
         assert_eq!(std::fs::read_to_string(dir.join("A")).unwrap(), "A");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder in memory whose renames never replace, as the app's are; `fail` is a rename
+    /// (from, to) that fails, `*` matching any name it is from.
+    fn fake_apply(names: &[&str], pairs: &[(&str, &str)], fail: Option<(&str, &str)>) -> (Vec<(String, String)>, Vec<String>, HashSet<String>, Vec<(String, String)>) {
+        let pairs: Vec<(String, String)> = pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        let dir = std::cell::RefCell::new(names.iter().map(|n| n.to_string()).collect::<HashSet<String>>());
+        let calls = std::cell::RefCell::new(vec![]);
+        let (done, errors) = apply(
+            &pairs,
+            |f, to| {
+                calls.borrow_mut().push((f.to_string(), to.to_string()));
+                let mut d = dir.borrow_mut();
+                if fail.is_some_and(|(a, b)| (a == "*" || a == f) && b == to) || d.contains(to) || !d.remove(f) {
+                    return Err("refused".into());
+                }
+                d.insert(to.to_string());
+                Ok(())
+            },
+            |n| dir.borrow().contains(n),
+        );
+        (done, errors, dir.into_inner(), calls.into_inner())
+    }
+
+    #[test]
+    fn chains_rename_directly_and_only_cycles_use_temporary_names() {
+        let (done, errors, dir, calls) = fake_apply(&["a", "b", "c"], &[("a", "b"), ("b", "c"), ("c", "d")], None);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(done.len(), 3);
+        assert_eq!(dir, HashSet::from(["b".to_string(), "c".to_string(), "d".to_string()]));
+        assert_eq!(calls.len(), 3, "no temporary names: {calls:?}");
+        // A three-way cycle, beside a plain rename: one temporary name.
+        let (done, errors, dir, calls) = fake_apply(&["a", "b", "c", "x"], &[("a", "b"), ("b", "c"), ("c", "a"), ("x", "y")], None);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(done.len(), 4);
+        assert_eq!(dir.len(), 4);
+        assert!(dir.contains("y"));
+        assert_eq!(calls.len(), 5, "{calls:?}");
+        let temps: Vec<&(String, String)> = calls.iter().filter(|(_, to)| to.contains(".mf-rename-")).collect();
+        assert_eq!(temps.len(), 1);
+        // Names ignoring case: `A` is where `a` is on such a disk, so `a` goes first.
+        let (_, errors, _, calls) = fake_apply(&["a", "x"], &[("x", "A"), ("a", "b")], None);
+        assert!(errors.is_empty(), "{errors:?}");
+        assert_eq!(calls[0], ("a".to_string(), "b".to_string()));
+    }
+
+    #[test]
+    fn an_item_stuck_under_its_temporary_name_is_reported() {
+        // A swap whose last step fails, after the other item took the old name.
+        let (done, errors, dir, _) = fake_apply(&["a", "b"], &[("a", "b"), ("b", "a")], Some(("*", "b")));
+        assert_eq!(done, vec![("b".to_string(), "a".to_string())]);
+        assert_eq!(errors.len(), 1);
+        let tmp = dir.iter().find(|n| n.contains(".mf-rename-")).expect("still there, under its temporary name");
+        assert!(errors[0].contains(tmp.as_str()) && errors[0].contains("it is now named"), "{errors:?}");
+        // When its old name is free again, it goes back there.
+        let (done, errors, dir, _) = fake_apply(&["a", "b"], &[("a", "b"), ("b", "a")], Some(("b", "a")));
+        assert!(done.is_empty(), "{done:?}");
+        assert_eq!(errors.len(), 2, "{errors:?}");
+        assert_eq!(dir, HashSet::from(["a".to_string(), "b".to_string()]));
     }
 
     #[test]

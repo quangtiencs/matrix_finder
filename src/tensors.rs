@@ -154,7 +154,7 @@ pub fn npz_from<R: Read + Seek>(r: R) -> Res<TableData> {
     let mut sheets = vec![];
     let mut budget = NPZ_MAX_TOTAL;
     for i in 0..zip.len() {
-        let entry_name = zip.name_for_index(i).unwrap_or("?").to_string();
+        let entry_name = zip.name_for_index(i).and_then(Result::ok).map_or_else(|| "?".to_string(), |n| n.into_owned());
         let mut f = match zip.by_index(i) {
             Ok(f) => f,
             Err(e) => {
@@ -166,7 +166,7 @@ pub fn npz_from<R: Read + Seek>(r: R) -> Res<TableData> {
         if f.is_dir() {
             continue;
         }
-        let name = f.name().strip_suffix(".npy").unwrap_or(f.name()).to_string();
+        let name = entry_name.strip_suffix(".npy").unwrap_or(&entry_name).to_string();
         let size = f.size();
         let small = sheets.len() < NPZ_MAX_SHOWN && size <= NPZ_MAX_ARRAY && size <= budget;
         let whole = if small {
@@ -1006,14 +1006,14 @@ pub fn torch_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
     let too_large = || t("This file is too complex to preview.");
     let (root, format) = if &magic == b"PK\x03\x04" {
         let mut zip = zip::ZipArchive::new(r).map_err(|_| torch_bad())?;
-        let name = zip.file_names().filter(|n| *n == "data.pkl" || n.ends_with("/data.pkl")).min_by_key(|n| n.len()).map(str::to_string).ok_or_else(torch_bad)?;
+        let name = zip.file_names().flatten().filter(|n| *n == "data.pkl" || n.ends_with("/data.pkl")).min_by_key(|n| n.len()).map(|n| n.into_owned()).ok_or_else(torch_bad)?;
         let entry = zip.by_name(&name).map_err(es)?;
         if entry.size() > TORCH_MAX_PICKLE {
             return Err(too_large());
         }
         let mut bytes = Vec::new();
         entry.take(TORCH_MAX_PICKLE).read_to_end(&mut bytes).map_err(es)?;
-        let script = zip.file_names().any(|n| n.ends_with("/constants.pkl"));
+        let script = zip.file_names().flatten().any(|n| n.ends_with("/constants.pkl"));
         (load(&bytes)?.0, if script { "TorchScript" } else { "PyTorch" })
     } else if magic[0] == 0x80 {
         let mut head = Vec::new();

@@ -1,0 +1,17 @@
+# `cargo audit` exceptions. Each one needs a reason and the way to remove it
+# (see "Principles" in CLAUDE.md: Critical and High advisories are fixed, not ignored,
+# unless no fix is reachable and the code path cannot be fed untrusted input).
+
+[advisories]
+ignore = [
+    # quick-xml 0.30 (High: memory exhaustion via namespace declarations, quadratic
+    # duplicate-attribute check). Pulled in only on Linux/BSD through egui-winit 0.31 ->
+    # accesskit_unix 0.13 -> atspi -> zbus-lockstep -> zbus_xml 4.0, every link already at
+    # its newest semver-compatible version. It parses D-Bus introspection XML from the
+    # user's own session bus for screen readers, never a file the user opens; feeding it
+    # hostile XML needs code already running in the user's session.
+    # Remove when egui/eframe is upgraded to a version whose accesskit_unix no longer
+    # pulls quick-xml < 0.41 (check with `cargo tree -i quick-xml --target all`).
+    "RUSTSEC-2026-0194",
+    "RUSTSEC-2026-0195",
+]

@@ -89,7 +89,9 @@ pub fn run(profile: &BackupProfile, p: &Progress) -> Res<String> {
         "host": std::env::var("HOSTNAME").or_else(|_| std::env::var("COMPUTERNAME")).unwrap_or_default(),
     });
     let extra = vec![(MANIFEST.to_string(), serde_json::to_vec_pretty(&manifest).map_err(es)?)];
-    archive::create(&sources, excludes.as_ref(), &dest, profile.format, profile.level, &extra, p)?;
+    // Only a complete, synced archive gets its name (a name taken meanwhile gets a free one),
+    // so rotation never counts a partial backup.
+    let dest = archive::create(&sources, excludes.as_ref(), &dest, profile.format, profile.level, &extra, p)?;
     if profile.keep_last > 0 {
         rotate(profile, &dest_dir, &dest);
     }

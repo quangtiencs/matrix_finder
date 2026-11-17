@@ -182,7 +182,7 @@ fn git_dir(dir: &Path) -> Option<PathBuf> {
         return Some(dot);
     }
     if meta.is_file() && meta.len() < 4096 {
-        let text = std::fs::read_to_string(&dot).ok()?;
+        let text = crate::util::read_regular_string(&dot).ok()?;
         let target = text.lines().find_map(|l| l.strip_prefix("gitdir:"))?.trim();
         let target = Path::new(target);
         return Some(if target.is_absolute() { target.to_path_buf() } else { dir.join(target) });
@@ -193,7 +193,7 @@ fn git_dir(dir: &Path) -> Option<PathBuf> {
 /// The checked-out branch of the repository in `dir` (and whether HEAD is detached),
 /// or `None` if `dir` is not a repository.
 fn read_head(dir: &Path) -> Option<(String, bool)> {
-    let head = std::fs::read(git_dir(dir)?.join("HEAD")).ok()?;
+    let head = crate::util::read_regular(&git_dir(dir)?.join("HEAD")).ok()?;
     parse_head(&head[..head.len().min(4096)])
 }
 
@@ -285,7 +285,7 @@ fn status(dir: &Path) -> Option<Status> {
     let out_path = tmp.path().join("status");
     let mut cmd = safe_git(git, dir);
     cmd.args(["status", "--porcelain=v2", "--branch", "--ignore-submodules=all", "--untracked-files=normal"]);
-    cmd.stdout(std::fs::File::create(&out_path).ok()?);
+    cmd.stdout(std::fs::File::create_new(&out_path).ok()?);
     let mut child = cmd.spawn().ok()?;
     let started = Instant::now();
     loop {

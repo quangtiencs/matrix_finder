@@ -56,6 +56,8 @@ enum Dialog {
     /// An SFTP server whose host key is not known yet: trust it, or do not connect.
     TrustHostKey { profile: ConnectionProfile, fingerprint: String },
     Message { title: String, text: String },
+    /// Replace every setting with those read from `path`.
+    ImportSettings { path: PathBuf, settings: Box<Settings> },
     /// Closing terminals that are running programs (named in `programs`).
     CloseTerminals { target: CloseTarget, programs: Vec<String> },
 }
@@ -71,6 +73,8 @@ enum After {
     Refresh,
     OpenFile(PathBuf),
     OpenWithDialog(PathBuf),
+    /// The changes of temporary copy (id) were uploaded, as they were then.
+    Uploaded(u64, crate::tempcopy::Stamp),
 }
 
 struct RunningJob {
@@ -264,6 +268,12 @@ pub struct App {
     toolbar_right_w: f32,
     /// Listens for later launches (single instance); `None` when another Matrix Finder does.
     instance: Option<crate::instance::Server>,
+    /// The settings file: saves merge with what another Matrix Finder saved meanwhile.
+    store: crate::config::Store,
+    /// Files from servers and archives opened in other apps through a temporary copy.
+    temp_copies: crate::tempcopy::Copies,
+    /// Edited copies (ids) asked about: upload the changes, or keep the copy.
+    copy_prompts: Vec<u64>,
 }
 
 /// What to go on with when an archive's password has been accepted.
@@ -294,8 +304,10 @@ enum SettingsPage {
 impl App {
     /// `open`: a folder given on the command line, shown first.
     pub fn new(cc: &eframe::CreationContext, chrome: crate::chrome::Chrome, open: Option<String>) -> Self {
-        let cfg = Settings::load();
+        let (cfg, store) = crate::config::Store::open();
         i18n::set_language(&cfg.language);
+        // Previews' temporary folders left by a Matrix Finder that crashed.
+        crate::util::clean_stale_temp_dirs(&[crate::media::TEMP_PREFIX]);
         let theme = theme::by_name(&cfg.theme);
         let mut cfg = cfg;
         if cfg.theme != theme::SYSTEM {
@@ -406,7 +418,13 @@ impl App {
             // Not in tests: they must not take over the running Matrix Finder's instance file.
             instance: if cfg!(test) { None } else { crate::instance::Server::start(cc.egui_ctx.clone()) },
             cfg,
+            store,
+            temp_copies: Default::default(),
+            copy_prompts: Vec::new(),
         };
+        if let Some(note) = app.store.note.take() {
+            app.tell_settings_note(note);
+        }
         let restored = session.is_some();
         if let Some(s) = session {
             app.restore_session(s);
@@ -693,9 +711,45 @@ impl App {
             .collect();
         self.cfg.session = Some(self.save_session());
         self.cfg.right_paths = self.other().and_then(|o| local(&self.panes[o])).into_iter().collect();
-        if let Err(e) = self.cfg.save() {
-            self.toast(format!("{}: {e}", t("Cannot save settings")), true);
+        match self.store.save(&self.cfg) {
+            Ok(None) => {}
+            // Another Matrix Finder saved meanwhile: what it added or changed is kept, here too.
+            Ok(Some(merged)) => {
+                self.cfg = merged;
+                if self.quit != Quit::Go {
+                    let ctx = self.egui_ctx.clone();
+                    self.apply_cfg(&ctx);
+                }
+            }
+            Err(e) => self.toast(format!("{}: {e}", t("Cannot save settings")), true),
         }
+    }
+
+    /// Tell what loading the settings ran into (a file that could not be read, …).
+    fn tell_settings_note(&mut self, note: crate::config::LoadNote) {
+        use crate::config::LoadNote;
+        let (title, text) = match note {
+            LoadNote::Repaired { reset, copy } => {
+                let mut text = format!("{}\n\n{}", t("Some settings had values this version cannot read. Only these went back to their defaults; everything else, saved connections included, was kept:"), reset.join(", "));
+                if let Some(c) = copy {
+                    text.push_str(&format!("\n\n{}\n{}", t("The settings file as it was is kept at:"), c.display()));
+                }
+                (t("Some settings could not be read"), text)
+            }
+            LoadNote::Broken { error, moved, from_backup, read_only } => {
+                let mut text = format!("{}\n{error}", self.store.path().display());
+                if let Some(m) = moved {
+                    text.push_str(&format!("\n\n{}\n{}", t("It was set aside, not deleted:"), m.display()));
+                }
+                text.push_str(&format!("\n\n{}", if from_backup { t("The previous version of the settings (the backup) was loaded instead.") } else { t("Matrix Finder starts with the default settings.") }));
+                if read_only {
+                    text.push_str(&format!("\n\n{}", t("Changes to the settings are not saved until that file can be read.")));
+                }
+                (t("The settings file could not be read"), text)
+            }
+            LoadNote::FromBackup(bak) => (t("Settings restored from the backup"), format!("{}\n{}", t("The settings file was missing, so the previous version was loaded:"), bak.display())),
+        };
+        self.show_dialog(Dialog::Message { title, text }, false);
     }
 
     /// Every tab with its windows and layout. Windows that cannot be saved (remote
@@ -1440,7 +1494,8 @@ impl App {
             Location::Local(dir) => {
                 let path = dir.join(&e.name);
                 // An app chosen for archives takes over from browsing inside them.
-                if archive::is_archive(&path) && crate::defaultapps::program_for(&self.cfg.default_apps, &e.name).is_none() {
+                // Only a regular file is browsed as an archive (a named pipe would block).
+                if archive::is_archive(&path) && path.is_file() && crate::defaultapps::program_for(&self.cfg.default_apps, &e.name).is_none() {
                     if archive::lock_state(&path) == archive::Lock::Everything {
                         self.ask_archive_password(path.clone(), AfterPassword::Browse(path));
                         return;
@@ -1504,16 +1559,117 @@ impl App {
             }
         }
         let Some(src) = self.endpoint(&loc) else { return };
-        let tmp = std::env::temp_dir().join("matrix_finder").join(format!("{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&tmp);
+        // A new private folder each time: an earlier copy (maybe edited) is never written over.
+        let tmp = match crate::util::private_temp_dir(crate::tempcopy::TEMP_PREFIX) {
+            Ok(d) => d,
+            Err(err) => {
+                self.toast(format!("{} {}: {err}", t("Could not open"), e.name), true);
+                return;
+            }
+        };
         let target = tmp.join(&e.name);
+        let label = loc.child(&e.name).display(|id| self.remote_label(id));
+        self.temp_copies.add(loc.clone(), e.name.clone(), label, tmp.clone(), target.clone());
         let items = vec![ops::Item { name: e.name.clone(), is_dir: false, size: e.size }];
         let dst = Endpoint::Local(tmp);
         let after = if with_dialog { After::OpenWithDialog(target) } else { After::OpenFile(target) };
         let sources = local_file_of(&loc).into_iter().collect();
         self.spawn_job(format!("{} {}", t("Opening"), e.name), after, None, sources, move |p| {
-            ops::transfer(src, items, dst, false, Conflict::Overwrite, p)
+            ops::transfer(src, items, dst, false, Conflict::Skip, p)
         });
+    }
+
+    /// Every two seconds: a copy opened from a server or an archive that an app saved is
+    /// asked about (upload the changes, or keep the copy).
+    fn poll_temp_copies(&mut self, ctx: &egui::Context) {
+        if self.temp_copies.list.is_empty() {
+            return;
+        }
+        for id in self.temp_copies.poll(false) {
+            if !self.copy_prompts.contains(&id) {
+                self.copy_prompts.push(id);
+            }
+        }
+        ctx.request_repaint_after(Duration::from_secs(2));
+    }
+
+    /// Upload the edited copy `id` over the file it came from on the server.
+    fn upload_copy(&mut self, id: u64) {
+        let Some(c) = self.temp_copies.list.iter().find(|c| c.id == id) else { return };
+        let (src, name, dir, label) = (c.src.clone(), c.name.clone(), c.dir.clone(), c.label.clone());
+        let Some(stamp) = crate::tempcopy::stamp(&c.path) else { return };
+        let Some(dst) = self.endpoint(&src) else {
+            self.toast(format!("{}: {label}", t("Not connected any more; the edited copy is kept")), true);
+            return;
+        };
+        if let Some(c) = self.temp_copies.get_mut(id) {
+            c.uploading = true;
+            c.asked = Some(stamp);
+        }
+        let items = vec![ops::Item { name: name.clone(), is_dir: false, size: stamp.0 }];
+        self.spawn_job(format!("{} {name}", t("Uploading changes to")), After::Uploaded(id, stamp), Some(src), vec![dir.clone()], move |p| {
+            ops::transfer(Endpoint::Local(dir), items, dst, false, Conflict::Overwrite, p)
+        });
+    }
+
+    /// The notes about edited copies, above the toasts.
+    fn copy_prompts_ui(&mut self, ctx: &egui::Context) {
+        self.copy_prompts.retain(|id| self.temp_copies.list.iter().any(|c| c.id == *id && !c.uploading));
+        if self.copy_prompts.is_empty() {
+            return;
+        }
+        let th = self.theme;
+        let mut act: Option<(u64, u8)> = None;
+        egui::Area::new(egui::Id::new("copy-prompts"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-18.0, 64.0))
+            .order(egui::Order::Foreground)
+            .show(ctx, |ui| {
+                for c in self.temp_copies.list.iter().filter(|c| self.copy_prompts.contains(&c.id)) {
+                    egui::Frame::popup(ui.style()).fill(th.panel).corner_radius(10).inner_margin(egui::Margin::symmetric(14, 10)).stroke(egui::Stroke::new(1.0_f32, th.border)).show(ui, |ui| {
+                        ui.set_max_width(420.0);
+                        ui.label(RichText::new(format!("{} “{}”", t("Changed in another app:"), c.name)).strong().color(th.text));
+                        ui.add(egui::Label::new(RichText::new(&c.label).color(th.weak)).truncate());
+                        if !c.is_remote() {
+                            ui.label(RichText::new(t("It came from an archive, which cannot be changed: keep the copy somewhere.")).color(th.weak));
+                        }
+                        ui.horizontal(|ui| {
+                            if c.is_remote() {
+                                let b = egui::Button::new(RichText::new(t("Upload changes")).color(th.on_accent()).strong()).fill(th.accent);
+                                if ui.add(b).clicked() {
+                                    act = Some((c.id, 0));
+                                }
+                            } else if ui.button(t("Show copy")).clicked() {
+                                act = Some((c.id, 1));
+                            }
+                            if ui.button(t("Keep local copy")).clicked() {
+                                act = Some((c.id, 2));
+                            }
+                        });
+                    });
+                    ui.add_space(4.0);
+                }
+            });
+        let Some((id, what)) = act else { return };
+        match what {
+            0 => self.upload_copy(id),
+            1 => {
+                if let Some(c) = self.temp_copies.list.iter().find(|c| c.id == id) {
+                    if let Err(e) = terminal::reveal(&c.path) {
+                        self.toast(e, true);
+                    }
+                }
+            }
+            _ => {
+                if let Some(c) = self.temp_copies.get_mut(id) {
+                    c.asked = crate::tempcopy::stamp(&c.path);
+                }
+                let dir = crate::tempcopy::recovered_dir();
+                self.toast(format!("{} {}", t("Kept. When Matrix Finder quits, edited copies are moved to"), dir.display()), false);
+            }
+        }
+        if what != 1 {
+            self.copy_prompts.retain(|x| *x != id);
+        }
     }
 
     fn preview_for_cursor(&self, side: usize) -> Option<Preview> {
@@ -1532,8 +1688,14 @@ impl App {
                     let name = e.name.clone();
                     return Some(Preview::text_async(key, e.name.clone(), move |cancel| folder_summary(&path, &name, cancel)));
                 }
-                // Only asks the file system for the size (of the target, for a link).
-                let size = std::fs::metadata(&path).map_or(e.size, |m| m.len());
+                // Only asks the file system (about the target, for a link). Only regular
+                // files are read: a named pipe or a device could block forever, or give
+                // away data meant for another program.
+                let size = match std::fs::metadata(&path) {
+                    Ok(m) if m.is_file() => m.len(),
+                    Ok(_) => return Some(Preview::info(key, e.name.clone(), special_file_note(&path))),
+                    Err(err) => return Some(Preview::info(key, e.name.clone(), err.to_string())),
+                };
                 if preview::too_large(&e.name, size, None) {
                     return Some(Preview::too_large(key, e.name.clone(), size));
                 }
@@ -1671,7 +1833,9 @@ impl App {
                 }
                 let trash = self.cfg.use_trash && loc.is_local();
                 let view = self.panes[a].tab().uid;
-                if self.cfg.confirm_delete {
+                // Turning confirmations off skips them only for the trash: what cannot be
+                // brought back (Shift+Delete, servers) is always asked.
+                if self.cfg.confirm_delete || !trash {
                     self.show_dialog(Dialog::Delete { items: sel, trash, loc, view }, false);
                 } else {
                     self.do_delete(&loc, view, sel, trash);
@@ -3384,9 +3548,21 @@ impl App {
             };
             match r {
                 Ok(msg) => match rj.after {
-                    After::OpenFile(p) => self.open_file(&p),
-                    After::OpenWithDialog(p) => self.open_with_dialog(p),
-                    After::Refresh => {
+                    After::OpenFile(p) => {
+                        self.temp_copies.downloaded(&p);
+                        self.open_file(&p)
+                    }
+                    After::OpenWithDialog(p) => {
+                        self.temp_copies.downloaded(&p);
+                        self.open_with_dialog(p)
+                    }
+                    After::Refresh | After::Uploaded(..) => {
+                        if let After::Uploaded(id, stamp) = rj.after {
+                            if let Some(c) = self.temp_copies.get_mut(id) {
+                                c.uploading = false;
+                                c.saved = Some(stamp);
+                            }
+                        }
                         refresh = true;
                         self.toast(format!("✔ {}: {msg}", rj.job.title), false);
                         self.history.insert(0, entry(true, msg));
@@ -3398,8 +3574,17 @@ impl App {
                     if !cancelled {
                         self.toast(format!("✖ {}: {e}", rj.job.title), true);
                     }
-                    if matches!(rj.after, After::Refresh) {
-                        self.history.insert(0, entry(false, e));
+                    match rj.after {
+                        After::OpenFile(p) | After::OpenWithDialog(p) => self.temp_copies.forget(&p),
+                        // Not uploaded: asked again.
+                        After::Uploaded(id, _) => {
+                            if let Some(c) = self.temp_copies.get_mut(id) {
+                                c.uploading = false;
+                                c.asked = None;
+                            }
+                            self.history.insert(0, entry(false, e));
+                        }
+                        After::Refresh => self.history.insert(0, entry(false, e)),
                     }
                 }
             }
@@ -3421,7 +3606,13 @@ impl App {
         let asked = crate::chrome::take_native_quit_request();
         let jobs = !self.jobs.is_empty();
         let terms = self.cfg.term_confirm_close && all_panes!(self).any(|p| p.tab().term.as_ref().is_some_and(|t| t.foreground_pid().is_some()));
-        let busy = jobs || terms;
+        if close || asked {
+            // Looked at again now: one saved a moment ago counts.
+            self.temp_copies.poll(true);
+        }
+        // Copies from servers or archives edited in other apps: where they go is told first.
+        let copies = self.temp_copies.has_unsaved();
+        let busy = jobs || terms || copies;
         if close && busy && self.quit != Quit::Go {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
@@ -3461,10 +3652,25 @@ impl App {
         let stopping = matches!(self.quit, Quit::Stopping(_));
         let mut keep = false;
         let mut stop = false;
+        let edited: Vec<String> = self.temp_copies.unsaved().map(|c| c.name.clone()).collect();
         egui::Modal::new(egui::Id::new("quit-confirm")).show(ctx, |ui| {
             ui.set_width(420.0);
-            ui.heading(if n > 0 { t("Quit while tasks are running?") } else { t("Quit while programs are running?") });
+            ui.heading(if n > 0 {
+                t("Quit while tasks are running?")
+            } else if !programs.is_empty() {
+                t("Quit while programs are running?")
+            } else {
+                t("Quit with edited copies?")
+            });
             ui.add_space(6.0);
+            if !edited.is_empty() {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(t("Edited in other apps and not uploaded:"));
+                    ui.label(RichText::new(edited.join(", ")).strong());
+                });
+                ui.label(RichText::new(format!("{}\n{}", t("They are not deleted: quitting moves them to"), crate::tempcopy::recovered_dir().display())).color(th.weak));
+                ui.add_space(4.0);
+            }
             if n > 0 {
                 ui.label(format!("{n} {}", t("task(s) still running or waiting.")));
                 ui.label(RichText::new(t("Quitting stops them. What has not finished will not be completed; files already finished are kept.")).color(th.weak));
@@ -3819,7 +4025,7 @@ impl App {
     /// Batch rename in `loc`: the pairs done and the errors.
     fn run_rename(&mut self, loc: &Location, pairs: &[(String, String)]) -> (Vec<(String, String)>, Vec<String>) {
         match loc {
-            Location::Local(dir) => ren::apply(pairs, |f, to| std::fs::rename(dir.join(f), dir.join(to)).map_err(es), |n| dir.join(n).symlink_metadata().is_ok()),
+            Location::Local(dir) => ren::apply(pairs, |f, to| crate::safefs::rename_item(&dir.join(f), &dir.join(to)).map_err(es), |n| crate::safefs::exists(&dir.join(n))),
             Location::Remote { id, path } => {
                 let Some(fs) = self.remotes.get(id).map(|r| r.1.clone()) else { return (vec![], vec![t("Connection closed")]) };
                 // Never waits for a transfer on this connection (the window would freeze).
@@ -3991,17 +4197,7 @@ impl App {
                 }
                 if ui.button(t("Import settings…")).clicked() {
                     ui.close_menu();
-                    if let Some(p) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-                        match Settings::import_from(&p) {
-                            Ok(s) => {
-                                self.cfg = s;
-                                self.apply_cfg(ui.ctx());
-                                self.save_cfg();
-                                self.toast(t("Settings imported"), false);
-                            }
-                            Err(e) => self.toast(e, true),
-                        }
-                    }
+                    self.import_settings();
                 }
                 ui.separator();
                 if ui.button(t("Quit")).clicked() {
@@ -4960,7 +5156,7 @@ impl App {
                 Act::InvertSelection => self.panes[a].tab_mut().invert_marks(),
                 Act::DeselectAll => self.panes[a].tab_mut().marked.clear(),
                 Act::ExportSettings => self.export_settings(),
-                Act::ImportSettings => self.import_settings(ctx),
+                Act::ImportSettings => self.import_settings(),
                 Act::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 Act::NewTerminalTab => self.new_terminal_here(None, None),
                 Act::ReopenClosedTab => self.reopen_closed_tab(),
@@ -4997,17 +5193,34 @@ impl App {
         }
     }
 
-    fn import_settings(&mut self, ctx: &egui::Context) {
+    /// Pick a settings file; replacing the settings with it is asked first.
+    fn import_settings(&mut self) {
         if let Some(p) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-            match Settings::import_from(&p) {
-                Ok(s) => {
-                    self.cfg = s;
-                    self.apply_cfg(ctx);
-                    self.save_cfg();
-                    self.toast(t("Settings imported"), false);
-                }
-                Err(e) => self.toast(e, true),
+            self.ask_import_settings(p);
+        }
+    }
+
+    fn ask_import_settings(&mut self, path: PathBuf) {
+        match Settings::import_from(&path) {
+            Ok(s) => self.show_dialog(Dialog::ImportSettings { path, settings: Box::new(s) }, false),
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    /// Replace the settings with imported ones, after keeping a copy of the current ones
+    /// (passwords included). Without that copy nothing is replaced.
+    fn import_confirmed(&mut self, settings: Settings) {
+        // The open tabs too, as they are now.
+        self.save_cfg();
+        match self.store.backup_before_import(&self.cfg) {
+            Ok(copy) => {
+                self.cfg = settings;
+                let ctx = self.egui_ctx.clone();
+                self.apply_cfg(&ctx);
+                self.save_cfg();
+                self.toast(format!("{} {}", t("Settings imported. The previous settings are kept in"), copy.display()), false);
             }
+            Err(e) => self.toast(format!("{}: {e}", t("Settings not imported: the current settings could not be backed up")), true),
         }
     }
 
@@ -5651,6 +5864,13 @@ impl App {
                     });
                     ui.label(RichText::new(t("Closing stops what is still running.")).color(th.weak));
                 }
+                Dialog::ImportSettings { path, .. } => {
+                    ui.heading(t("Replace all settings?"));
+                    ui.add(egui::Label::new(RichText::new(path.display().to_string()).color(th.weak)).truncate());
+                    ui.add_space(4.0);
+                    ui.label(t("Every setting is replaced by the imported ones, saved connections, bookmarks and backup profiles included. Exported files hold no passwords."));
+                    ui.label(RichText::new(t("A copy of the current settings, passwords included, is kept next to the settings file first.")).color(th.weak));
+                }
                 Dialog::Message { title, text } => {
                     ui.heading(title.as_str());
                     egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
@@ -5683,13 +5903,16 @@ impl App {
                     Dialog::OpenWith { .. } => t("Open"),
                     Dialog::ArchivePassword { .. } => t("Unlock"),
                     Dialog::CloseTerminals { .. } => t("Close"),
+                    Dialog::ImportSettings { .. } => t("Replace settings"),
                     _ => t("OK"),
                 };
-                let danger = matches!(dialog, Dialog::Delete { trash: false, .. } | Dialog::CloseTerminals { .. });
+                let danger = matches!(dialog, Dialog::Delete { trash: false, .. } | Dialog::CloseTerminals { .. } | Dialog::ImportSettings { .. });
                 let (fill, fg) = if danger { (th.danger, egui::Color32::WHITE) } else { (th.accent, th.on_accent()) };
                 let ok = ui.add(egui::Button::new(RichText::new(ok_label).color(fg).strong()).fill(fill).min_size(egui::vec2(96.0, 30.0)));
-                // Trusting a server takes a deliberate click, not a stray Enter.
-                let enter_confirms = enter && enter_free && !matches!(dialog, Dialog::TrustHostKey { .. });
+                // Trusting a server, deleting for good and replacing the settings take a
+                // deliberate click (or Enter on that button, tabbed to), never a stray Enter.
+                let deliberate = matches!(dialog, Dialog::TrustHostKey { .. } | Dialog::Delete { trash: false, .. } | Dialog::ImportSettings { .. });
+                let enter_confirms = enter && enter_free && !deliberate;
                 if ok.clicked() || enter_confirms {
                     confirmed = true;
                 }
@@ -5700,7 +5923,7 @@ impl App {
         });
         // Esc closes every dialog; a click outside only those that hold nothing typed or chosen.
         let esc = modal.is_top_modal && !modal.any_popup_open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
-        let simple = matches!(dialog, Dialog::Message { .. } | Dialog::CloseTerminals { .. } | Dialog::TrustHostKey { .. } | Dialog::Delete { .. });
+        let simple = matches!(dialog, Dialog::Message { .. } | Dialog::CloseTerminals { .. } | Dialog::TrustHostKey { .. } | Dialog::Delete { .. } | Dialog::ImportSettings { .. });
         if esc || (simple && modal.backdrop_response.clicked()) {
             close = true;
         }
@@ -5789,23 +6012,24 @@ impl App {
                         let p = d.join(&name);
                         if file {
                             std::fs::OpenOptions::new().write(true).create_new(true).open(&p).map(|_| ()).map_err(es)
+                        } else if crate::safefs::exists(&p) {
+                            Err(format!("{}: {name}", t("Already exists")))
                         } else {
                             std::fs::create_dir_all(&p).map_err(es)
                         }
                     }
                     Location::Remote { id, path } => match self.remotes.get(id) {
-                        Some((_, fs)) => {
+                        // A name that is taken is refused: uploading an empty file would empty it.
+                        Some((_, fs)) => remote::try_use(fs).and_then(|mut g| {
                             let rp = join_slash(path, &name);
-                            if file {
-                                let tmp = std::env::temp_dir().join(format!("matrix_finder-empty-{}", std::process::id()));
-                                let _ = std::fs::write(&tmp, b"");
-                                let r = remote::try_use(fs).and_then(|mut g| g.upload(&tmp, &rp, &|_| {}, &std::sync::atomic::AtomicBool::new(false)));
-                                let _ = std::fs::remove_file(&tmp);
-                                r
+                            if g.exists(&rp)? {
+                                Err(format!("{}: {name}", t("Already exists")))
+                            } else if file {
+                                g.create_file(&rp)
                             } else {
-                                remote::try_use(fs).and_then(|mut g| g.mkdir(&rp))
+                                g.mkdir(&rp)
                             }
-                        }
+                        }),
                         None => Err(t("Connection closed")),
                     },
                     Location::Archive { .. } => Err(t("Archives are read-only")),
@@ -5829,10 +6053,11 @@ impl App {
                     Location::Local(d) => {
                         let target = d.join(&new);
                         // Only the same file may be there: the name changes case on a disk that ignores it.
-                        if target.exists() && !same_entry(&d.join(&old), &target, &old, &new) {
+                        if crate::safefs::exists(&target) && !same_entry(&d.join(&old), &target, &old, &new) {
                             Err(format!("{}: {new}", t("Already exists")))
                         } else {
-                            std::fs::rename(d.join(&old), target).map_err(es)
+                            // Never over a file that appeared since.
+                            crate::safefs::rename_item(&d.join(&old), &target).map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { format!("{}: {new}", t("Already exists")) } else { es(e) })
                         }
                     }
                     Location::Remote { id, path } => match self.remotes.get(id) {
@@ -5857,7 +6082,7 @@ impl App {
                 let Some(dest) = pack_dest(&dest_dir, &name, format, dirs::home_dir().as_deref(), &src_dir) else {
                     return Some(Dialog::Pack { items, src_dir, name, dest_dir, format, level });
                 };
-                if dest.exists() {
+                if crate::safefs::exists(&dest) {
                     self.toast(format!("{}: {}", t("Already exists"), dest.display()), true);
                     return Some(Dialog::Pack { items, src_dir, name, dest_dir, format, level });
                 }
@@ -5865,8 +6090,8 @@ impl App {
                 let title = format!("{} {}", t("Compressing"), dest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
                 let dest_dir_loc = Location::Local(dest.parent().map(Path::to_path_buf).unwrap_or_default());
                 self.spawn_job(title, After::Refresh, Some(dest_dir_loc), vec![src_dir.clone()], move |p| {
-                    archive::create(&sources, None, &dest, format, level, &[], p)?;
-                    Ok(dest.to_string_lossy().to_string())
+                    let made = archive::create(&sources, None, &dest, format, level, &[], p)?;
+                    Ok(made.to_string_lossy().to_string())
                 });
             }
             Dialog::Unpack { archive, dest, selection, strip, policy } => {
@@ -5906,6 +6131,7 @@ impl App {
             }
             Dialog::TrustHostKey { profile, fingerprint } => self.spawn_connect(profile, false, Some(fingerprint)),
             Dialog::Message { .. } => {}
+            Dialog::ImportSettings { settings, .. } => self.import_confirmed(*settings),
         }
         None
     }
@@ -6233,6 +6459,7 @@ impl eframe::App for App {
         self.handle_dropped_files(ctx);
         self.poll_drives(ctx);
         self.poll_update(ctx);
+        self.poll_temp_copies(ctx);
         self.save_cfg_pending(ctx);
         let mut busy = self.connecting.is_some();
         for side in 0..self.panes.len() {
@@ -6441,6 +6668,7 @@ impl eframe::App for App {
         self.chrome.caption_buttons(ctx, self.theme);
         self.chrome.outline(ctx, self.theme);
         self.drag_ghost(ctx);
+        self.copy_prompts_ui(ctx);
         self.toasts_ui(ctx);
         if let Some(text) = self.copy_text.take() {
             ctx.copy_text(text);
@@ -6451,8 +6679,17 @@ impl eframe::App for App {
         if let Some(s) = &self.instance {
             s.stop();
         }
+        self.quit = Quit::Go;
         self.save_cfg();
-        let _ = std::fs::remove_dir_all(std::env::temp_dir().join("matrix_finder").join(format!("{}", std::process::id())));
+        // Copies opened from servers and archives: edited ones are kept (moved where the
+        // quit confirmation said), the others removed. One that cannot be moved stays in
+        // its temporary folder, which is not cleaned up.
+        for r in self.temp_copies.finish(&crate::tempcopy::recovered_dir()) {
+            match r {
+                Ok(p) => eprintln!("matrix_finder: kept an edited copy at {}", p.display()),
+                Err(e) => eprintln!("matrix_finder: could not move an edited copy: {e}"),
+            }
+        }
     }
 }
 
@@ -6622,9 +6859,20 @@ fn quick_apps() -> Vec<&'static str> {
     }
 }
 
+/// What Quick View says about a named pipe, socket or device: it is not opened.
+fn special_file_note(path: &Path) -> String {
+    let kind = match crate::util::special_kind(path) {
+        Some("Named pipe") => t("Named pipe"),
+        Some("Socket") => t("Socket"),
+        Some("Device") => t("Device"),
+        _ => t("Special file"),
+    };
+    format!("{kind}\n\n{}", t("Not opened: only regular files are previewed, so nothing waits on it or takes data meant for another program."))
+}
+
 fn read_head(path: &Path, limit: usize) -> Res<Vec<u8>> {
     use std::io::Read;
-    let f = std::fs::File::open(path).map_err(es)?;
+    let f = crate::util::open_regular(path).map_err(es)?;
     let mut buf = Vec::new();
     f.take(limit as u64).read_to_end(&mut buf).map_err(es)?;
     Ok(buf)

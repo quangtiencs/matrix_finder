@@ -418,7 +418,7 @@ impl ChecksumUi {
 
     /// Verify the checksum list `file`; names in it are relative to its folder.
     pub fn start_verify(&mut self, ctx: &egui::Context, file: PathBuf) -> Result<(), String> {
-        let text = std::fs::read_to_string(&file).map_err(|e| e.to_string())?;
+        let text = crate::util::read_regular_string(&file).map_err(|e| e.to_string())?;
         let name = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let entries = parse_list(&text, Algo::from_file_name(&name));
         if entries.is_empty() {
@@ -522,7 +522,7 @@ impl ChecksumUi {
                 if let Ok(mut c) = cur2.lock() {
                     *c = name;
                 }
-                let res = std::fs::File::open(&path).map_err(|e| e.to_string()).and_then(|f| {
+                let res = crate::util::open_regular(&path).map_err(|e| e.to_string()).and_then(|f| {
                     hash_reader(std::io::BufReader::with_capacity(1 << 20, f), algo, |n| {
                         b2.fetch_add(n, Ordering::Relaxed);
                         if last.elapsed().as_millis() > 100 {

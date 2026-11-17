@@ -31,7 +31,7 @@ pub fn sqlite_uri(path: &Path) -> String {
 
 pub fn sqlite_from_path(path: &Path) -> Res<TableData> {
     use rusqlite::{Connection, OpenFlags};
-    let conn = Connection::open_with_flags(sqlite_uri(path), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(es)?;
+    let mut conn = Connection::open_with_flags(sqlite_uri(path), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(es)?;
     // A database file is untrusted data: its views must not call anything risky.
     conn.pragma_update(None, "trusted_schema", "OFF").map_err(es)?;
     let objects: Vec<(String, String)> = {
@@ -45,7 +45,7 @@ pub fn sqlite_from_path(path: &Path) -> Res<TableData> {
     let mut sheets = vec![];
     let mut text_left = SQL_MAX_TEXT;
     for (name, kind) in objects.into_iter().take(MAX_TABLES) {
-        sheets.push(sqlite_sheet(&conn, &name, &kind, &mut text_left));
+        sheets.push(sqlite_sheet(&mut conn, &name, &kind, &mut text_left));
     }
     // Open on something worth seeing: empty tables go last.
     sheets.sort_by_key(|s| s.rows.is_empty());
@@ -59,15 +59,15 @@ pub fn sqlite_from_path(path: &Path) -> Res<TableData> {
     Ok(TableData { format: "SQLite", info, sheets })
 }
 
-fn sqlite_sheet(conn: &rusqlite::Connection, name: &str, kind: &str, text_left: &mut usize) -> Sheet {
+fn sqlite_sheet(conn: &mut rusqlite::Connection, name: &str, kind: &str, text_left: &mut usize) -> Sheet {
     let quoted = format!("\"{}\"", name.replace('"', "\"\""));
     let sheet_name = if kind == "view" { format!("{name} ({})", t("view")) } else { name.to_string() };
     let started = Instant::now();
     let _ = conn.progress_handler(10_000, Some(move || started.elapsed() > SQL_TIME_LIMIT));
     let mut read = || -> rusqlite::Result<Sheet> {
         let mut q = conn.prepare(&format!("SELECT * FROM {quoted} LIMIT {MAX_ROWS}"))?;
-        let columns: Vec<String> = q.column_names().iter().take(MAX_COLS).map(|c| c.to_string()).collect();
-        let types: Vec<String> = q.columns().iter().take(MAX_COLS).map(|c| c.decl_type().unwrap_or("").to_lowercase()).collect();
+        let columns: Vec<String> = q.column_names().take(MAX_COLS).map(|c| c.to_string()).collect();
+        let types: Vec<String> = q.columns().take(MAX_COLS).map(|c| c.decl_type().unwrap_or("").to_lowercase()).collect();
         let mut rows = vec![];
         let mut result = q.query([])?;
         while let Some(row) = result.next()? {
