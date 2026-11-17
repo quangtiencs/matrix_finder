@@ -487,6 +487,8 @@ impl App {
         if ui.rect_contains_pointer(ui.max_rect()) && ui.input(|i| i.pointer.any_pressed()) {
             self.active = side;
         }
+        // What the file lists depend on: they are rebuilt only when it changes.
+        let list_before = (self.cfg.show_hidden, self.cfg.dirs_first, self.cfg.quick_filters.clone());
         let h = ui.available_height();
         ui.horizontal_top(|ui| {
             // ---- navigation
@@ -540,13 +542,47 @@ impl App {
                 });
             });
         });
+        // The UI scale applies once the slider is let go: zooming while it is dragged
+        // moves the slider under the pointer, and the value jumps.
+        let scale = self.cfg.ui_scale.clamp(0.6, 2.5);
+        if (ctx.zoom_factor() - scale).abs() > 1e-4 && !ctx.input(|i| i.pointer.any_down()) {
+            ctx.set_zoom_factor(scale);
+        }
         if changed {
-            ctx.set_zoom_factor(self.cfg.ui_scale);
             self.apply_fonts(&ctx);
             self.sync_terminal_profiles();
-            self.rebuild_views();
+            if (self.cfg.show_hidden, self.cfg.dirs_first, &self.cfg.quick_filters) != (list_before.0, list_before.1, &list_before.2) {
+                self.rebuild_views();
+            }
+            self.save_cfg_soon(&ctx);
+        }
+    }
+
+    /// Save the settings after a change: a click saves at once; a drag or typing waits
+    /// until the pointer is let go or the typing pauses (see `save_cfg_pending`).
+    pub(super) fn save_cfg_soon(&mut self, ctx: &egui::Context) {
+        let keyed = typing(ctx) && ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Text(_) | egui::Event::Key { .. } | egui::Event::Paste(_))));
+        if ctx.input(|i| i.pointer.any_down()) || keyed {
+            self.cfg_dirty = Some(Instant::now());
+            ctx.request_repaint_after(Duration::from_millis(500));
+        } else {
+            self.cfg_dirty = None;
             self.save_cfg();
         }
+    }
+
+    /// Save settings changed by a drag or typing, once that is over.
+    pub(super) fn save_cfg_pending(&mut self, ctx: &egui::Context) {
+        let Some(at) = self.cfg_dirty else { return };
+        if ctx.input(|i| i.pointer.any_down()) {
+            return;
+        }
+        if typing(ctx) && at.elapsed() < Duration::from_millis(500) {
+            ctx.request_repaint_after(Duration::from_millis(500) - at.elapsed());
+            return;
+        }
+        self.cfg_dirty = None;
+        self.save_cfg();
     }
 
     /// Rebuild the fonts if their settings changed. A font that turns out to be
@@ -1199,4 +1235,9 @@ impl App {
         }
         changed
     }
+}
+
+/// A text field has the keyboard.
+fn typing(ctx: &egui::Context) -> bool {
+    ctx.memory(|m| m.focused()).is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some())
 }

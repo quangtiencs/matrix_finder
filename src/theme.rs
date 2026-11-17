@@ -209,7 +209,7 @@ pub const THEMES: &[Theme] = &[
         weak: hex(0x6a6d78),
         accent: hex(0x5360d8),
         selection: hex(0xe5e8fb),
-        marked: hex(0xa4661c),
+        marked: hex(0x9a601a),
         dir: hex(0x5a72d0),
         archive: hex(0x8752c4),
         border: hex(0xe2e2e8),
@@ -231,7 +231,7 @@ pub const THEMES: &[Theme] = &[
         weak: hex(0x86868b),
         accent: hex(0x007aff),
         selection: hex(0xd6e6fd),
-        marked: hex(0xe8890c),
+        marked: hex(0x9e5d08),
         dir: hex(0x3b9cf0),
         archive: hex(0x8e8e93),
         border: hex(0xe1e1e6),
@@ -271,7 +271,7 @@ pub const THEMES: &[Theme] = &[
         weak: hex(0x77767b),
         accent: hex(0x3584e4),
         selection: hex(0xd3e3f8),
-        marked: hex(0xc64600),
+        marked: hex(0xc04400),
         dir: hex(0x3584e4),
         archive: hex(0x9141ac),
         border: hex(0xdededf),
@@ -311,7 +311,7 @@ pub const THEMES: &[Theme] = &[
         weak: hex(0x5f5f5f),
         accent: hex(0x0067c0),
         selection: hex(0xcce4f7),
-        marked: hex(0xc25e00),
+        marked: hex(0xab5300),
         dir: hex(0xe8a317),
         archive: hex(0x8764b8),
         border: hex(0xe5e5e5),
@@ -351,7 +351,7 @@ pub const THEMES: &[Theme] = &[
         weak: hex(0x707d8a),
         accent: hex(0x3daee9),
         selection: hex(0xcde9f8),
-        marked: hex(0xf67400),
+        marked: hex(0xaf5200),
         dir: hex(0x3daee9),
         archive: hex(0x9b59b6),
         border: hex(0xd1d2d3),
@@ -471,7 +471,7 @@ pub const THEMES: &[Theme] = &[
         weak: hex(0x657b83),
         accent: hex(0xb58900),
         selection: hex(0x174652),
-        marked: hex(0xcb4b16),
+        marked: hex(0xee8040),
         dir: hex(0x268bd2),
         archive: hex(0xd33682),
         border: hex(0x0f4b59),
@@ -488,10 +488,10 @@ pub const THEMES: &[Theme] = &[
         panel: hex(0xeee8d5),
         surface: hex(0xfffbef),
         text: hex(0x586e75),
-        weak: hex(0x93a1a1),
+        weak: hex(0x818e8e),
         accent: hex(0xb58900),
         selection: hex(0xe3dcc6),
-        marked: hex(0xcb4b16),
+        marked: hex(0xb54314),
         dir: hex(0x268bd2),
         archive: hex(0xd33682),
         border: hex(0xd8d0b8),
@@ -663,6 +663,26 @@ impl Theme {
         }
     }
 
+    /// `c` drawn on the cursor row (`selection`), moved toward black or white until it
+    /// reads there: 4.5:1 for the current name (`strong`), 3:1 for the rest (marked,
+    /// hidden, sizes). Most themes need no change; Classic Commander's cyan bar does.
+    pub fn on_cursor(&self, c: Color32) -> Color32 {
+        let min = if c == self.strong() { 4.5 } else { 3.0 };
+        if contrast(c, self.selection) >= min {
+            return c;
+        }
+        for i in 1..=20 {
+            let t = i as f32 / 20.0;
+            for to in [Color32::BLACK, Color32::WHITE] {
+                let moved = c.lerp_to_gamma(to, t);
+                if contrast(moved, self.selection) >= min {
+                    return moved;
+                }
+            }
+        }
+        if contrast(Color32::BLACK, self.selection) > contrast(Color32::WHITE, self.selection) { Color32::BLACK } else { Color32::WHITE }
+    }
+
     /// Hover background for list rows and flat buttons.
     pub fn hover(&self) -> Color32 {
         self.bg.lerp_to_gamma(self.surface, 0.55)
@@ -673,6 +693,21 @@ impl Theme {
     pub fn tab_hover(&self) -> Color32 {
         self.panel.lerp_to_gamma(self.text, if self.dark { 0.13 } else { 0.10 })
     }
+}
+
+/// Relative luminance of a colour (WCAG).
+fn luminance(c: Color32) -> f32 {
+    let f = |v: u8| {
+        let v = v as f32 / 255.0;
+        if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+    };
+    0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
+}
+
+/// WCAG contrast ratio of two colours (1 to 21).
+pub fn contrast(a: Color32, b: Color32) -> f32 {
+    let (a, b) = (luminance(a), luminance(b));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
 pub fn apply(ctx: &egui::Context, t: &Theme) {
@@ -767,14 +802,6 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
 mod tests {
     use super::*;
 
-    fn luminance(c: Color32) -> f32 {
-        let f = |v: u8| {
-            let v = v as f32 / 255.0;
-            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
-        };
-        0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
-    }
-
     #[test]
     fn terminal_schemes_are_distinct_and_readable() {
         let mut names: Vec<&str> = TERM_THEMES.iter().map(|t| t.name).collect();
@@ -804,6 +831,33 @@ mod tests {
             // The title, drawn strong while hovered, stays readable.
             assert!(contrast(h, t.strong()) >= 4.5, "{}: title {:.3}", t.name, contrast(h, t.strong()));
         }
+    }
+
+    /// File names stay readable in every app theme: plain, marked and hidden names, on
+    /// a row and under the cursor (WCAG contrast: 4.5 for text, 3 where a row is lit).
+    #[test]
+    fn file_list_colours_are_readable() {
+        let mut bad = vec![];
+        for t in THEMES {
+            // A marked row has a faint tint of the marked colour, and the cursor row
+            // draws its text through `on_cursor` (as pane.rs does).
+            let tinted = t.bg.lerp_to_gamma(t.marked, if t.dark { 0.10 } else { 0.08 });
+            let checks = [
+                ("text on bg", t.text, t.bg, 4.5),
+                ("marked on its row", t.marked, tinted, 4.5),
+                ("weak on bg", t.weak, t.bg, 3.0),
+                ("current name on the cursor", t.on_cursor(t.strong()), t.selection, 4.5),
+                ("marked on the cursor", t.on_cursor(t.marked), t.selection, 3.0),
+                ("weak on the cursor", t.on_cursor(t.weak), t.selection, 3.0),
+            ];
+            for (what, fg, bg, min) in checks {
+                let c = contrast(fg, bg);
+                if c < min {
+                    bad.push(format!("{}: {what} {c:.2} < {min}", t.name));
+                }
+            }
+        }
+        assert!(bad.is_empty(), "{}", bad.join("\n"));
     }
 
     #[test]

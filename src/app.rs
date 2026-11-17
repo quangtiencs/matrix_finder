@@ -42,11 +42,13 @@ macro_rules! all_panes {
 
 enum Dialog {
     Transfer { src: Location, mv: bool, items: Vec<Entry>, dst: String, policy: Conflict },
-    NewItem { name: String, file: bool },
-    Rename { old: String, new: String },
-    Delete { items: Vec<Entry>, trash: bool },
+    /// `loc`: the folder it works in, and `view` the window it was asked from (kept, so
+    /// that the dialog acts there even if the window shows another folder meanwhile).
+    NewItem { name: String, file: bool, loc: Location, view: u64 },
+    Rename { old: String, new: String, loc: Location, view: u64 },
+    Delete { items: Vec<Entry>, trash: bool, loc: Location, view: u64 },
     Pack { items: Vec<Entry>, src_dir: PathBuf, name: String, dest_dir: String, format: ArchiveFormat, level: u32 },
-    Unpack { archive: PathBuf, dest: String, selection: Vec<String>, strip: String },
+    Unpack { archive: PathBuf, dest: String, selection: Vec<String>, strip: String, policy: Conflict },
     OpenWith { path: PathBuf, program: String, always: bool },
     /// Asks for an archive's password, tries it in the background, then goes on with `then`.
     ArchivePassword { file: PathBuf, password: String, wrong: bool, checking: Option<Receiver<bool>>, then: AfterPassword },
@@ -102,8 +104,12 @@ const QUIT_WAIT: Duration = Duration::from_secs(10);
 struct FinishedJob {
     title: String,
     ok: bool,
+    /// Stopped by the user: neither done nor failed.
+    cancelled: bool,
     msg: String,
+    /// Bytes done, or items for a job that counts items (`items`).
     bytes: u64,
+    items: bool,
     secs: f32,
     dest: Option<Location>,
     at: String,
@@ -177,7 +183,14 @@ pub struct App {
     jobs: Vec<RunningJob>,
     dialog: Option<Dialog>,
     dialog_focus: bool,
+    /// Dialogs that came up while another was open (and whether their field takes the
+    /// keyboard): each shows when the one before it closes.
+    pending_dialogs: std::collections::VecDeque<(Dialog, bool)>,
+    /// Settings changed by a drag or typing, saved once that is over (since when).
+    cfg_dirty: Option<Instant>,
     quick: Option<Preview>,
+    /// When the terminal text size last changed (pinch, buttons): saved once it settles.
+    term_font_saved_at: Option<Instant>,
     viewer: Option<Preview>,
     backup: BackupUi,
     show_help: bool,
@@ -216,8 +229,9 @@ pub struct App {
     /// the search under way.
     agents: Option<Vec<crate::agents::Found>>,
     agents_rx: Option<Receiver<Vec<crate::agents::Found>>>,
-    /// Live filter while typing in the search box: (pane, tab uid, filter before).
-    pal_filter: Option<(usize, u64, String)>,
+    /// Live filter while typing in the search box: (pane, tab uid, filter before, the
+    /// cursor's entry before).
+    pal_filter: Option<(usize, u64, String, Option<String>)>,
     /// Typing in a file window: a small search box that filters it as you type.
     type_search: Option<TypeSearch>,
     settings_page: SettingsPage,
@@ -292,6 +306,9 @@ impl App {
         let _ = crate::fonts::apply(&cc.egui_ctx, &crate::fonts::FontPrefs::of(&cfg));
         theme::apply(&cc.egui_ctx, theme);
         cc.egui_ctx.set_zoom_factor(cfg.ui_scale.clamp(0.6, 2.5));
+        // Zooming by keys is the app's own (saved, and rebindable): egui's would not be
+        // saved, and its Ctrl+− would reach the terminals too.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         let to_locs = |v: &Vec<String>| -> Vec<Location> {
             v.iter()
                 .map(PathBuf::from)
@@ -337,6 +354,7 @@ impl App {
             dialog: None,
             dialog_focus: false,
             quick: None,
+            term_font_saved_at: None,
             viewer: None,
             backup: BackupUi::default(),
             show_help: false,
@@ -367,6 +385,8 @@ impl App {
             agents: None,
             agents_rx: None,
             pal_filter: None,
+            pending_dialogs: std::collections::VecDeque::new(),
+            cfg_dirty: None,
             type_search: None,
             settings_page: SettingsPage::Appearance,
             shortcut_capture: None,
@@ -580,11 +600,15 @@ impl App {
         let pane = self.panes.remove(side);
         let fix = |i: usize| if i > side { i - 1 } else if i == side { usize::MAX } else { i };
         let leaves = self.layout.leaves();
+        let prev = fix(self.prev_active);
+        // Another window closing keeps the focus where it is; the focused one closing
+        // gives it to the window focused before, or else the first.
         self.active = match fix(self.active) {
+            usize::MAX if prev != usize::MAX => prev,
             usize::MAX => leaves[0],
             i => i,
         };
-        self.prev_active = match fix(self.prev_active) {
+        self.prev_active = match prev {
             usize::MAX => self.active,
             i => i,
         };
@@ -616,7 +640,7 @@ impl App {
         if programs.is_empty() {
             self.close_pane(side);
         } else {
-            self.dialog = Some(Dialog::CloseTerminals { target: CloseTarget::Window(self.panes[side].tab().uid), programs });
+            self.show_dialog(Dialog::CloseTerminals { target: CloseTarget::Window(self.panes[side].tab().uid), programs }, false);
         }
     }
 
@@ -631,7 +655,7 @@ impl App {
         if programs.is_empty() {
             self.close_tabs(uids);
         } else {
-            self.dialog = Some(Dialog::CloseTerminals { target: CloseTarget::Tabs(uids.to_vec()), programs });
+            self.show_dialog(Dialog::CloseTerminals { target: CloseTarget::Tabs(uids.to_vec()), programs }, false);
         }
     }
 
@@ -788,10 +812,9 @@ impl App {
     // ------------------------------------------------------------ navigation
 
     fn navigate_active(&mut self, loc: Location) {
-        // A Transfers or terminal window has no folder to go to: use a file window of
-        // this tab, or a new tab.
-        let tab = self.panes[self.active].tab();
-        if tab.transfers || tab.is_terminal() || tab.is_tool() {
+        // Settings, Tasks, Disk usage, terminal and tool windows have no folder to go to:
+        // use a file window of this tab, or a new tab.
+        if !self.panes[self.active].tab().is_files() {
             match self.panes.iter().position(|p| p.tab().is_files()) {
                 Some(side) => self.active = side,
                 None => {
@@ -872,8 +895,7 @@ impl App {
             .cloned()
             .unwrap_or(ConnectionProfile { name: format!("{user}@{host}"), protocol: proto, host, port, user, ..Default::default() });
         profile.initial_path = path;
-        self.dialog = Some(Dialog::Connect { profile, save: false, save_password: false });
-        self.dialog_focus = true;
+        self.show_dialog(Dialog::Connect { profile, save: false, save_password: false }, true);
     }
 
     /// Open what a launch asked for (see `instance`): a folder, archive or URL, or a
@@ -1448,13 +1470,11 @@ impl App {
     fn open_with_dialog(&mut self, path: PathBuf) {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let program = crate::defaultapps::program_for(&self.cfg.default_apps, &name).unwrap_or_default().to_string();
-        self.dialog = Some(Dialog::OpenWith { path, program, always: false });
-        self.dialog_focus = true;
+        self.show_dialog(Dialog::OpenWith { path, program, always: false }, true);
     }
 
     fn ask_archive_password(&mut self, file: PathBuf, then: AfterPassword) {
-        self.dialog = Some(Dialog::ArchivePassword { file, password: String::new(), wrong: false, checking: None, then });
-        self.dialog_focus = true;
+        self.show_dialog(Dialog::ArchivePassword { file, password: String::new(), wrong: false, checking: None, then }, true);
     }
 
     /// The password was accepted: go on with what it was asked for.
@@ -1466,7 +1486,7 @@ impl App {
             AfterPassword::Command(cmd) => self.run_cmd(cmd),
             AfterPassword::Confirm(dialog) => {
                 if let Some(next) = self.confirm_dialog(*dialog) {
-                    self.dialog = Some(next);
+                    self.keep_dialog(next);
                 }
             }
         }
@@ -1510,7 +1530,7 @@ impl App {
                 let path = dir.join(&e.name);
                 if e.is_dir {
                     let name = e.name.clone();
-                    return Some(Preview::text_async(key, e.name.clone(), move || folder_summary(&path, &name)));
+                    return Some(Preview::text_async(key, e.name.clone(), move |cancel| folder_summary(&path, &name, cancel)));
                 }
                 // Only asks the file system for the size (of the target, for a link).
                 let size = std::fs::metadata(&path).map_or(e.size, |m| m.len());
@@ -1519,7 +1539,7 @@ impl App {
                 }
                 // Comic books are archives shown by their cover.
                 if archive::is_archive(&path) && preview::classify(&e.name) != preview::Kind::Package {
-                    return Some(Preview::text_async(key, e.name.clone(), move || archive_summary(&path)));
+                    return Some(Preview::text_async(key, e.name.clone(), move |cancel| archive_summary(&path, cancel)));
                 }
                 if preview::classify(&e.name) == preview::Kind::Table {
                     return Some(Preview::table_local(key, e.name.clone(), path, syntax));
@@ -1528,7 +1548,7 @@ impl App {
                     return Some(Preview::local_file(key, e.name.clone(), path, syntax, self.max_texture));
                 }
                 let loader: preview::Loader = Box::new(move || read_head(&path, limit));
-                Some(Preview::new(key, e.name.clone(), loader, limit, syntax, self.max_texture))
+                Some(Preview::new(key, e.name.clone(), loader, limit, syntax, self.max_texture).of_size(size))
             }
             Location::Archive { file, inner } => {
                 if e.is_dir {
@@ -1541,7 +1561,7 @@ impl App {
                 let inner = join_slash(inner, &e.name);
                 let archive_file = file.clone();
                 let loader: preview::Loader = Box::new(move || archive::read_entry(&file, &inner, limit));
-                Some(Preview::new(key, e.name.clone(), loader, limit, syntax, self.max_texture).in_archive(archive_file))
+                Some(Preview::new(key, e.name.clone(), loader, limit, syntax, self.max_texture).in_archive(archive_file).of_size(e.size))
             }
             Location::Remote { id, path } => {
                 if e.is_dir {
@@ -1553,8 +1573,20 @@ impl App {
                 if preview::too_large(&e.name, e.size, Some(limit as u64)) {
                     return Some(Preview::too_large(key, e.name.clone(), e.size));
                 }
-                let loader: preview::Loader = Box::new(move || fs.lock().map_err(es)?.read_head(&rp, limit));
-                Some(Preview::new(key, e.name.clone(), loader, limit, syntax, self.max_texture))
+                // The preview's cancel flag, once it exists: moving on stops the read. A
+                // transfer holds the connection for a whole file, so this does not wait for it.
+                let flag: Arc<std::sync::OnceLock<crate::media::Cancel>> = Arc::default();
+                let f2 = flag.clone();
+                let loader: preview::Loader = Box::new(move || {
+                    // It is set right after the preview is made.
+                    let cancel = (0..1000).find_map(|_| f2.get().cloned().or_else(|| { std::thread::sleep(Duration::from_millis(1)); None })).unwrap_or_default();
+                    let gone = || cancel.load(std::sync::atomic::Ordering::Relaxed);
+                    let mut g = remote::use_soon(&fs, Duration::from_secs(2), &gone)?;
+                    g.read_head(&rp, limit, &cancel)
+                });
+                let p = Preview::new(key, e.name.clone(), loader, limit, syntax, self.max_texture).of_size(e.size);
+                let _ = flag.set(p.cancel_flag());
+                Some(p)
             }
         }
     }
@@ -1564,6 +1596,11 @@ impl App {
     fn run_cmd(&mut self, cmd: Cmd) {
         let a = self.active;
         let tab = self.panes[a].tab();
+        // Settings, Tasks, Disk usage, terminal and tool windows have no file list: what acts
+        // on one would work unseen in the folder behind them.
+        if !cmd_works_in(cmd, tab) {
+            return;
+        }
         let loc = tab.loc.clone();
         let sel = tab.selection();
         let cursor = tab.cursor_entry().cloned();
@@ -1602,8 +1639,7 @@ impl App {
                     None => loc.clone(),
                 };
                 let dst = dst_loc.display(|id| self.remote_label(id));
-                self.dialog = Some(Dialog::Transfer { src: loc.clone(), mv: cmd == Cmd::Move, items: sel, dst, policy: Conflict::Rename });
-                self.dialog_focus = true;
+                self.show_dialog(Dialog::Transfer { src: loc.clone(), mv: cmd == Cmd::Move, items: sel, dst, policy: Conflict::Rename }, true);
             }
             Cmd::BatchRename => self.open_batch_rename(),
             Cmd::Checksum => self.open_checksum(),
@@ -1622,8 +1658,8 @@ impl App {
                     self.toast(t("Archives are read-only"), true);
                     return;
                 }
-                self.dialog = Some(Dialog::Rename { old: e.name.clone(), new: e.name });
-                self.dialog_focus = true;
+                let view = self.panes[a].tab().uid;
+                self.show_dialog(Dialog::Rename { old: e.name.clone(), new: e.name, loc, view }, true);
             }
             Cmd::Delete => {
                 if sel.is_empty() {
@@ -1634,10 +1670,11 @@ impl App {
                     return;
                 }
                 let trash = self.cfg.use_trash && loc.is_local();
+                let view = self.panes[a].tab().uid;
                 if self.cfg.confirm_delete {
-                    self.dialog = Some(Dialog::Delete { items: sel, trash });
+                    self.show_dialog(Dialog::Delete { items: sel, trash, loc, view }, false);
                 } else {
-                    self.do_delete(sel, trash);
+                    self.do_delete(&loc, view, sel, trash);
                 }
             }
             Cmd::NewFolder | Cmd::NewFile => {
@@ -1645,8 +1682,8 @@ impl App {
                     self.toast(t("Archives are read-only"), true);
                     return;
                 }
-                self.dialog = Some(Dialog::NewItem { name: String::new(), file: cmd == Cmd::NewFile });
-                self.dialog_focus = true;
+                let view = self.panes[a].tab().uid;
+                self.show_dialog(Dialog::NewItem { name: String::new(), file: cmd == Cmd::NewFile, loc, view }, true);
             }
             Cmd::Pack => {
                 let Location::Local(dir) = &loc else {
@@ -1667,8 +1704,7 @@ impl App {
                     None => dir.to_string_lossy().to_string(),
                 };
                 let format = ArchiveFormat::Zip;
-                self.dialog = Some(Dialog::Pack { items: sel, src_dir: dir.clone(), name, dest_dir, format, level: 6 });
-                self.dialog_focus = true;
+                self.show_dialog(Dialog::Pack { items: sel, src_dir: dir.clone(), name, dest_dir, format, level: 6 }, true);
             }
             Cmd::ExtractHere | Cmd::ExtractOther => self.start_unpack(cmd == Cmd::ExtractHere),
             Cmd::CopyPath => {
@@ -1819,26 +1855,40 @@ impl App {
                 let base = if here { dir.clone() } else { other.local_path().map(|p| p.to_path_buf()).unwrap_or(dir.clone()) };
                 let stem = e.name.trim_end_matches(&format!(".{}", ArchiveFormat::detect(&path).map(|f| f.extension()).unwrap_or(""))).to_string();
                 let dest = base.join(stem);
-                self.dialog = Some(Dialog::Unpack { archive: path, dest: dest.to_string_lossy().to_string(), selection: vec![], strip: String::new() });
-                self.dialog_focus = true;
+                self.show_dialog(Dialog::Unpack { archive: path, dest: dest.to_string_lossy().to_string(), selection: vec![], strip: String::new(), policy: Conflict::Rename }, true);
             }
             Location::Archive { file, inner } => {
                 // Inside an archive: extract the selection.
                 let sel: Vec<String> = tab.selection().iter().map(|e| join_slash(&inner, &e.name)).collect();
                 let dest = other.local_path().map(|p| p.to_path_buf()).or_else(|| file.parent().map(|p| p.to_path_buf())).unwrap_or_default();
-                self.dialog = Some(Dialog::Unpack { archive: file, dest: dest.to_string_lossy().to_string(), selection: sel, strip: inner });
-                self.dialog_focus = true;
+                self.show_dialog(Dialog::Unpack { archive: file, dest: dest.to_string_lossy().to_string(), selection: sel, strip: inner, policy: Conflict::Rename }, true);
             }
             Location::Remote { .. } => self.toast(t("Download the archive first"), true),
         }
     }
 
-    fn do_delete(&mut self, items: Vec<Entry>, trash: bool) {
-        let a = self.active;
-        let loc = self.panes[a].tab().loc.clone();
+    /// Show folder `loc` again wherever it is shown, with the cursor on `name` in window `view`.
+    fn reload_and_select(&mut self, loc: &Location, view: u64, name: &str) {
+        let c = lc!(self);
+        for p in all_panes!(self) {
+            let tab = p.tab_mut();
+            if tab.loc == *loc && tab.is_files() {
+                tab.reload(&c);
+                if tab.uid == view {
+                    tab.select_name(name);
+                }
+            }
+        }
+    }
+
+    /// Delete `items` of folder `loc`, asked for in window `view`.
+    fn do_delete(&mut self, loc: &Location, view: u64, items: Vec<Entry>, trash: bool) {
+        let loc = loc.clone();
         let Some(src) = self.endpoint(&loc) else { return };
         let items: Vec<ops::Item> = items.iter().map(|e| ops::Item { name: e.name.clone(), is_dir: e.is_dir, size: e.size }).collect();
-        self.panes[a].tab_mut().marked.clear();
+        if let Some(p) = all_panes!(self).find(|p| p.tab().uid == view && p.tab().loc == loc) {
+            p.tab_mut().marked.clear();
+        }
         let what = if items.len() == 1 { items[0].name.clone() } else { format!("{} {}", items.len(), t("item(s)")) };
         self.spawn_job(format!("{} {what}", t("Deleting")), After::Refresh, Some(loc), vec![], move |p| ops::delete(src, items, trash, p));
     }
@@ -1881,7 +1931,7 @@ impl App {
                 }
             }
         }
-        self.dialog = Some(Dialog::Message { title: t("Properties"), text });
+        self.show_dialog(Dialog::Message { title: t("Properties"), text }, false);
     }
 
     // ------------------------------------------------------------ keyboard
@@ -2040,7 +2090,7 @@ impl App {
     }
 
     /// Do what a shortcut stands for.
-    fn run_shortcut(&mut self, _ctx: &egui::Context, action: Action) {
+    fn run_shortcut(&mut self, ctx: &egui::Context, action: Action) {
         let a = self.active;
         // Disk usage and Settings windows have no file list.
         if action.needs_file_list() && !self.panes[a].tab().is_files() {
@@ -2069,12 +2119,7 @@ impl App {
                 }
             }
             Action::NextWindow => self.active = self.layout.next_after(self.active),
-            Action::PrevWindow => {
-                let leaves = self.layout.leaves();
-                if let Some(at) = leaves.iter().position(|s| *s == self.active) {
-                    self.active = leaves[(at + leaves.len() - 1) % leaves.len()];
-                }
-            }
+            Action::PrevWindow => self.active = self.layout.prev_before(self.active),
             Action::SplitRight | Action::SplitLeft | Action::SplitDown | Action::SplitUp => {
                 let dir = match action {
                     Action::SplitRight => SplitDir::Right,
@@ -2146,6 +2191,9 @@ impl App {
             Action::Backup => self.backup.open = true,
             Action::Settings => self.open_settings(self.settings_page),
             Action::Help => self.show_help = true,
+            Action::ZoomIn => self.set_ui_scale(ctx, self.cfg.ui_scale + 0.1),
+            Action::ZoomOut => self.set_ui_scale(ctx, self.cfg.ui_scale - 0.1),
+            Action::ZoomReset => self.set_ui_scale(ctx, 1.0),
         }
         // Whatever is now in front gets the keyboard.
         self.sync_tab();
@@ -2155,6 +2203,16 @@ impl App {
         ) {
             self.quick = None;
             self.focus_window();
+        }
+    }
+
+    /// Zoom the whole interface (as Settings → UI scale does), and save it.
+    fn set_ui_scale(&mut self, ctx: &egui::Context, scale: f32) {
+        let scale = ((scale * 20.0).round() / 20.0).clamp(0.7, 2.0);
+        if scale != self.cfg.ui_scale {
+            self.cfg.ui_scale = scale;
+            ctx.set_zoom_factor(scale);
+            self.save_cfg();
         }
     }
 
@@ -2341,7 +2399,7 @@ impl App {
             let plain = !m.command && !m.alt && !m.ctrl;
             match key {
                 Key::Tab => {
-                    self.active = self.layout.next_after(self.active);
+                    self.active = if shift { self.layout.prev_before(self.active) } else { self.layout.next_after(self.active) };
                     self.quick = None;
                     self.focus_window();
                 }
@@ -2780,9 +2838,15 @@ impl App {
                 return None;
             }
             let p = w.panes.remove(i);
-            let fix = |k: usize| if k > i { k - 1 } else if k == i { 0 } else { k };
-            w.active = fix(w.active).min(w.panes.len() - 1);
-            w.prev_active = fix(w.prev_active).min(w.panes.len() - 1);
+            let fix = |k: usize| if k > i { k - 1 } else if k == i { usize::MAX } else { k };
+            let prev = fix(w.prev_active);
+            w.active = match fix(w.active) {
+                usize::MAX if prev != usize::MAX => prev,
+                usize::MAX => 0,
+                k => k,
+            }
+            .min(w.panes.len() - 1);
+            w.prev_active = if prev == usize::MAX { w.active } else { prev.min(w.panes.len() - 1) };
             return Some(p);
         }
         None
@@ -2914,7 +2978,9 @@ impl App {
             self.quick = None;
         }
         if r.font_delta != 0.0 {
-            self.cfg.term_font_size = (self.cfg.term_font_size + r.font_delta).clamp(8.0, 32.0);
+            let (sizes, old) = (crate::fonts::TERM_SIZES, self.cfg.term_font_size);
+            self.cfg.term_font_size = (old + r.font_delta).clamp(sizes.start().min(old), sizes.end().max(old));
+            self.term_font_saved_at = Some(Instant::now());
         }
         if let Some(dir) = r.open_dir {
             let (at, group) = self.next_slot();
@@ -3005,6 +3071,15 @@ impl App {
 
     /// Poll every terminal (also in hidden tabs): titles, folder, exit.
     fn poll_terminals(&mut self, ctx: &egui::Context) {
+        // A pinch changes the text size many times a second: save once it settles.
+        if let Some(at) = self.term_font_saved_at {
+            if at.elapsed() >= Duration::from_millis(800) {
+                self.term_font_saved_at = None;
+                self.save_cfg();
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(800) - at.elapsed());
+            }
+        }
         let mut done: Vec<u64> = Vec::new();
         let close = self.cfg.term_close_on_exit;
         for pane in all_panes!(self) {
@@ -3020,9 +3095,9 @@ impl App {
         }
         for view in done {
             if let Some(side) = self.panes.iter().position(|p| p.tab().uid == view) {
-                // In the shown tab: close its window (or the tab, if it is the only one).
-                self.active = side;
-                self.close_current();
+                // In the shown tab: close its window (or the tab, if it is the only one),
+                // leaving the focus where it is.
+                self.close_pane(side);
                 self.closed_tabs.pop();
             } else if self.take_window(view).is_none() {
                 // The only window of a hidden tab: close that tab.
@@ -3099,8 +3174,7 @@ impl App {
     }
 
     fn open_connect_dialog(&mut self, profile: Option<ConnectionProfile>) {
-        self.dialog = Some(Dialog::Connect { profile: profile.unwrap_or_default(), save: true, save_password: false });
-        self.dialog_focus = true;
+        self.show_dialog(Dialog::Connect { profile: profile.unwrap_or_default(), save: true, save_password: false }, true);
     }
 
     fn start_connect(&mut self, profile: ConnectionProfile, save: bool, save_password: bool) {
@@ -3137,6 +3211,10 @@ impl App {
     }
 
     fn poll_connect(&mut self) {
+        // Not while a dialog is open: it would lose the folder it acts on, or be replaced.
+        if self.dialog.is_some() {
+            return;
+        }
         let Some((profile, _, rx)) = &self.connecting else { return };
         let Ok(r) = rx.try_recv() else { return };
         let profile = profile.clone();
@@ -3152,11 +3230,11 @@ impl App {
                 self.navigate_active(Location::Remote { id, path: home });
             }
             Err(remote::ConnectError::UnknownHostKey { fingerprint }) => {
-                self.dialog = Some(Dialog::TrustHostKey { profile, fingerprint });
+                self.show_dialog(Dialog::TrustHostKey { profile, fingerprint }, false);
             }
             Err(remote::ConnectError::Other(e)) => {
                 self.toast(format!("{}: {e}", t("Connection failed")), true);
-                self.dialog = Some(Dialog::Connect { profile, save: false, save_password: false });
+                self.show_dialog(Dialog::Connect { profile, save: false, save_password: false }, false);
             }
         }
     }
@@ -3292,11 +3370,14 @@ impl App {
         for (i, r) in finished.into_iter().rev() {
             let rj = self.jobs.remove(i);
             let secs = rj.started_running.map(|s| s.elapsed().as_secs_f32()).unwrap_or(0.0);
+            let cancelled = rj.job.progress.cancelled();
             let entry = |ok: bool, msg: String| FinishedJob {
                 title: rj.job.title.clone(),
                 ok,
+                cancelled: !ok && cancelled,
                 msg,
                 bytes: rj.job.progress.done(),
+                items: rj.job.progress.counts_items(),
                 secs,
                 dest: rj.dest.clone(),
                 at: chrono::Local::now().format("%H:%M:%S").to_string(),
@@ -3313,7 +3394,10 @@ impl App {
                 },
                 Err(e) => {
                     refresh = true;
-                    self.toast(format!("✖ {}: {e}", rj.job.title), true);
+                    // A cancel the user asked for is no error: it shows only in the history.
+                    if !cancelled {
+                        self.toast(format!("✖ {}: {e}", rj.job.title), true);
+                    }
                     if matches!(rj.after, After::Refresh) {
                         self.history.insert(0, entry(false, e));
                     }
@@ -3515,18 +3599,17 @@ impl App {
                         t("Waiting in queue…")
                     } else if p.is_paused() {
                         match p.fraction() {
-                            Some(f) => format!("{} · {:.0}% · {} / {}", t("Paused"), f * 100.0, human_size(p.done()), human_size(p.total())),
-                            None => format!("{} · {}", t("Paused"), human_size(p.done())),
+                            Some(f) => format!("{} · {:.0}% · {}", t("Paused"), f * 100.0, p.amount_text()),
+                            None => format!("{} · {}", t("Paused"), p.amount_text()),
                         }
                     } else {
                         let mut parts = vec![];
                         if let Some(f) = p.fraction() {
                             parts.push(format!("{:.0}%", f * 100.0));
-                            parts.push(format!("{} / {}", human_size(p.done()), human_size(p.total())));
-                        } else {
-                            parts.push(human_size(p.done()));
                         }
-                        if j.speed > 1.0 {
+                        parts.push(p.amount_text());
+                        // Items are no bytes: no speed or time left for them.
+                        if j.speed > 1.0 && !p.counts_items() {
                             parts.push(format!("{}/s", human_size(j.speed as u64)));
                             if p.total() > p.done() {
                                 let eta = (p.total() - p.done()) as f64 / j.speed;
@@ -3556,10 +3639,14 @@ impl App {
                 for h in &self.history {
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 18.0), egui::Sense::hover());
-                        ui.painter().circle_filled(r.center(), 4.0, if h.ok { th.accent } else { th.danger });
+                        let color = if h.ok { th.accent } else if h.cancelled { th.weak } else { th.danger };
+                        ui.painter().circle_filled(r.center(), 4.0, color);
                         ui.label(RichText::new(&h.title).color(th.text));
+                        let amount = if h.items { format!("{} {}", h.bytes, t("items")) } else { human_size(h.bytes) };
                         let detail = if h.ok {
-                            format!("{} · {} · {}", human_size(h.bytes), fmt_duration(h.secs), h.at)
+                            format!("{amount} · {} · {}", fmt_duration(h.secs), h.at)
+                        } else if h.cancelled {
+                            format!("{} · {amount} · {}", t("Cancelled"), h.at)
                         } else {
                             format!("{} · {}", h.msg, h.at)
                         };
@@ -3569,7 +3656,7 @@ impl App {
                                     navigate = Some(d.clone());
                                 }
                             }
-                            ui.add(egui::Label::new(RichText::new(detail).size(11.5).color(if h.ok { th.weak } else { th.danger })).truncate());
+                            ui.add(egui::Label::new(RichText::new(detail).size(11.5).color(if h.ok || h.cancelled { th.weak } else { th.danger })).truncate());
                         });
                     });
                 }
@@ -3655,29 +3742,35 @@ impl App {
             self.refresh_location(&Location::Local(dir));
         }
         match action {
-            Some(RenameAction::Apply(loc, pairs)) => match self.run_rename(&loc, &pairs) {
-                Ok(done) => {
+            Some(RenameAction::Apply(loc, pairs)) => {
+                // What went through is kept (and can be undone) even when some items failed.
+                let (done, errors) = self.run_rename(&loc, &pairs);
+                if errors.is_empty() {
                     self.toast(format!("{} {} {}", t("Renamed"), done.len(), t("item(s)")), false);
+                } else {
+                    self.toast(errors.join("\n"), true);
+                }
+                if !done.is_empty() {
                     if let Some(r) = self.panes[side].tab_mut().renamer.as_mut() {
                         r.applied(loc.clone(), done);
                     }
-                    self.refresh_location(&loc);
                 }
-                Err(e) => {
-                    self.toast(e, true);
-                    self.refresh_location(&loc);
-                }
-            },
-            Some(RenameAction::Undo(loc, back)) => match self.run_rename(&loc, &back) {
-                Ok(_) => {
+                self.refresh_location(&loc);
+            }
+            Some(RenameAction::Undo(loc, back)) => {
+                let (done, errors) = self.run_rename(&loc, &back);
+                if errors.is_empty() {
                     self.toast(t("Rename undone"), false);
+                } else {
+                    self.toast(errors.join("\n"), true);
+                }
+                if !done.is_empty() {
                     if let Some(r) = self.panes[side].tab_mut().renamer.as_mut() {
-                        r.undone(&back);
+                        r.undone(&done);
                     }
                     self.refresh_location(&loc);
                 }
-                Err(e) => self.toast(e, true),
-            },
+            }
             None => {}
         }
     }
@@ -3692,7 +3785,7 @@ impl App {
             return;
         }
         // Marked items, or everything currently visible (respects the quick filter).
-        let entries: Vec<Entry> = if tab.marked.is_empty() {
+        let entries: Vec<Entry> = if tab.marked_shown().is_empty() {
             tab.view.iter().map(|&i| tab.entries[i].clone()).filter(|e| !e.is_parent).collect()
         } else {
             tab.selection()
@@ -3701,7 +3794,21 @@ impl App {
             return;
         }
         let items = entries.iter().map(|e| ren::Item { name: e.name.clone(), is_dir: e.is_dir, modified: e.modified }).collect();
-        let existing = tab.entries.iter().filter(|e| !e.is_parent).map(|e| e.name.clone()).collect();
+        // Every name taken in the folders involved, not just the ones listed: search
+        // results and filters show only some, and the others must not be overwritten.
+        let existing: std::collections::HashSet<String> = match &tab.loc {
+            Location::Local(dir) => {
+                let dirs: std::collections::HashSet<&str> = entries.iter().map(|e| ren::split_dir(&e.name).0).collect();
+                let mut all = std::collections::HashSet::new();
+                for sub in dirs {
+                    if let Ok(rd) = std::fs::read_dir(dir.join(sub)) {
+                        all.extend(rd.flatten().map(|d| format!("{sub}{}", d.file_name().to_string_lossy())));
+                    }
+                }
+                all
+            }
+            _ => tab.entries.iter().filter(|e| !e.is_parent).map(|e| e.name.clone()).collect(),
+        };
         let parent = tab.loc.short_name_raw();
         let loc = tab.loc.clone();
         let mut tool = BatchRename::default();
@@ -3709,14 +3816,26 @@ impl App {
         self.open_tool(Tab::rename_tool(tool, loc));
     }
 
-    fn run_rename(&mut self, loc: &Location, pairs: &[(String, String)]) -> Res<Vec<(String, String)>> {
+    /// Batch rename in `loc`: the pairs done and the errors.
+    fn run_rename(&mut self, loc: &Location, pairs: &[(String, String)]) -> (Vec<(String, String)>, Vec<String>) {
         match loc {
-            Location::Local(dir) => ren::apply(pairs, |f, to| std::fs::rename(dir.join(f), dir.join(to)).map_err(es)),
+            Location::Local(dir) => ren::apply(pairs, |f, to| std::fs::rename(dir.join(f), dir.join(to)).map_err(es), |n| dir.join(n).symlink_metadata().is_ok()),
             Location::Remote { id, path } => {
-                let fs = self.remotes.get(id).map(|r| r.1.clone()).ok_or_else(|| t("Connection closed"))?;
-                ren::apply(pairs, |f, to| fs.lock().map_err(es)?.rename(&join_slash(path, f), &join_slash(path, to)))
+                let Some(fs) = self.remotes.get(id).map(|r| r.1.clone()) else { return (vec![], vec![t("Connection closed")]) };
+                // Never waits for a transfer on this connection (the window would freeze).
+                let mut g = match remote::try_use(&fs) {
+                    Ok(g) => g,
+                    Err(e) => return (vec![], vec![e]),
+                };
+                // What is in the folder now, less the items that move away first.
+                let moving: std::collections::HashSet<&str> = pairs.iter().map(|(a, _)| a.as_str()).collect();
+                let taken: std::collections::HashSet<String> = match g.list(path) {
+                    Ok(list) => list.into_iter().map(|e| e.name).filter(|n| !moving.contains(n.as_str())).collect(),
+                    Err(e) => return (vec![], vec![e]),
+                };
+                ren::apply(pairs, |f, to| g.rename(&join_slash(path, f), &join_slash(path, to)), |n| taken.contains(n))
             }
-            Location::Archive { .. } => Err(t("Archives are read-only")),
+            Location::Archive { .. } => (vec![], vec![t("Archives are read-only")]),
         }
     }
 
@@ -3750,8 +3869,7 @@ impl App {
         if self.cfg.confirm_dnd {
             let dst = target.display(|id| self.remote_label(id));
             self.dialog_dst = Some(target);
-            self.dialog = Some(Dialog::Transfer { src: payload.loc.clone(), mv, items: payload.items.clone(), dst, policy: Conflict::Rename });
-            self.dialog_focus = false;
+            self.show_dialog(Dialog::Transfer { src: payload.loc.clone(), mv, items: payload.items.clone(), dst, policy: Conflict::Rename }, false);
         } else {
             self.start_transfer(&payload.loc, payload.items.clone(), &target, mv, Conflict::Rename);
         }
@@ -4028,7 +4146,7 @@ impl App {
                                 ui.close_menu();
                             }
                             if ui.small_button("✏").on_hover_text(t("Edit")).clicked() {
-                                self.dialog = Some(Dialog::Connect { save_password: !c.password.is_empty(), profile: c, save: true });
+                                self.show_dialog(Dialog::Connect { save_password: !c.password.is_empty(), profile: c, save: true }, false);
                                 ui.close_menu();
                             }
                             if ui.small_button("🗑").on_hover_text(t("Delete")).clicked() {
@@ -4466,7 +4584,7 @@ impl App {
                 }
                 resp.context_menu(|ui| {
                     if ui.button(t("Edit")).clicked() {
-                        self.dialog = Some(Dialog::Connect { save_password: !c.password.is_empty(), profile: c.clone(), save: true });
+                        self.show_dialog(Dialog::Connect { save_password: !c.password.is_empty(), profile: c.clone(), save: true }, false);
                         ui.close_menu();
                     }
                     if ui.button(t("Delete")).clicked() {
@@ -4508,7 +4626,10 @@ impl App {
                 } else {
                     ui.spinner();
                 }
-                ui.label(RichText::new(&rj.job.title).size(12.0).color(th.text));
+                // A long title is cut (the whole one shows on hover), so that the progress
+                // bar and the Cancel button stay in view.
+                let title_w = (ui.available_width() - 380.0).clamp(40.0, 360.0);
+                ui.allocate_ui(egui::vec2(title_w, 16.0), |ui| ui.add(egui::Label::new(RichText::new(&rj.job.title).size(12.0).color(th.text)).truncate()));
                 let (r, _) = ui.allocate_exact_size(egui::vec2(140.0, 5.0), egui::Sense::hover());
                 ui.painter().rect_filled(r, 2.5, th.surface);
                 match p.fraction() {
@@ -4523,10 +4644,11 @@ impl App {
                         ui.painter().rect_filled(seg, 2.5, th.accent);
                     }
                 }
-                let rate = if rj.speed > 1.0 { format!(" · {}/s", human_size(rj.speed as u64)) } else { String::new() };
+                let rate = if rj.speed > 1.0 && !p.counts_items() { format!(" · {}/s", human_size(rj.speed as u64)) } else { String::new() };
+                let done = if p.counts_items() { p.amount_text() } else { human_size(p.done()) };
                 let txt = match p.fraction() {
-                    Some(f) => format!("{:.0}% · {}{rate}", f * 100.0, human_size(p.done())),
-                    None => format!("{}{rate}", human_size(p.done())),
+                    Some(f) => format!("{:.0}% · {done}{rate}", f * 100.0),
+                    None => format!("{done}{rate}"),
                 };
                 ui.label(RichText::new(txt).size(11.5).color(th.weak)).on_hover_text(p.current());
                 if icons::icon_button(ui, 20.0, true, th, |pp, r, c| close_x(pp, r, c)).on_hover_text(t("Cancel")).clicked() {
@@ -4558,6 +4680,9 @@ impl App {
                     key_hint(ui, th, "↑↓", &t("Move"));
                 });
             } else if self.cfg.show_key_hints {
+                // The keys of the focused window: none for file lists where there is none.
+                let files = self.panes[self.active].tab().is_files();
+                let terminal = self.panes[self.active].tab().is_terminal();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let hints: [(&str, String, Cmd); 7] = [
@@ -4569,7 +4694,7 @@ impl App {
                         (hint(Action::Delete), t("Delete"), Cmd::Delete),
                         (hint(Action::OpenTerminal), t("Terminal"), Cmd::Terminal),
                     ];
-                    for (key, label, cmd) in hints.iter().rev() {
+                    for (key, label, cmd) in hints.iter().rev().filter(|h| if h.2 == Cmd::Terminal { !terminal } else { files }) {
                         // Right to left: the ones that no longer fit are left out, not drawn over the job's progress.
                         if ui.available_width() < key_hint_width(ui, key, label) {
                             break;
@@ -4730,12 +4855,12 @@ impl App {
         let a = self.active;
         if self.pal_filter.is_none() {
             let tab = self.panes[a].tab();
-            if tab.is_terminal() {
+            if !tab.is_files() {
                 return;
             }
-            self.pal_filter = Some((a, tab.uid, tab.filter_text.clone()));
+            self.pal_filter = Some((a, tab.uid, tab.filter_text.clone(), tab.cursor_entry().map(|e| e.name.clone())));
         }
-        let Some((side, uid, prev)) = self.pal_filter.clone() else { return };
+        let Some((side, uid, prev, _)) = self.pal_filter.clone() else { return };
         let q = self.palette.query().trim().to_string();
         let target = if looks_like_path(&q) { prev } else { q };
         let lc = lc!(self);
@@ -4746,12 +4871,18 @@ impl App {
         }
     }
 
+    /// Put back the filter and the cursor the window had before the search box opened
+    /// (a command chosen there acts on the file the cursor was on).
     fn restore_pal_filter(&mut self) {
-        let Some((side, uid, prev)) = self.pal_filter.take() else { return };
+        let Some((side, uid, prev, cursor)) = self.pal_filter.take() else { return };
         let lc = lc!(self);
         if let Some(tab) = self.panes.get_mut(side).map(|p| p.tab_mut()).filter(|t| t.uid == uid) {
             if tab.filter_text != prev {
                 tab.set_filter(&prev, &lc);
+            }
+            if let Some(pos) = cursor.and_then(|n| tab.view.iter().position(|&i| tab.entries[i].name == n)) {
+                tab.cursor = pos;
+                tab.ensure_visible = true;
             }
         }
     }
@@ -5083,6 +5214,9 @@ impl App {
         };
         if want_key.is_some() && self.quick.as_ref().map(|q| Some(&q.key)) != Some(want_key.as_ref()) {
             self.quick = self.preview_for_cursor(a);
+        } else if want_key.is_none() && self.panes[a].tab().is_files() {
+            // An empty list (a filter that matches nothing) has nothing to preview.
+            self.quick = None;
         }
         egui::Frame::NONE
             .fill(th.bg)
@@ -5172,6 +5306,12 @@ impl App {
     // ------------------------------------------------------------ dialogs
 
     fn dialogs(&mut self, ctx: &egui::Context) {
+        if self.dialog.is_none() {
+            if let Some((next, focus)) = self.pending_dialogs.pop_front() {
+                self.dialog = Some(next);
+                self.dialog_focus = focus;
+            }
+        }
         let Some(mut dialog) = self.dialog.take() else { return };
         // The result of trying an archive's password.
         if let Dialog::ArchivePassword { file, password, wrong, checking, .. } = &mut dialog {
@@ -5207,6 +5347,9 @@ impl App {
         let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
             ui.set_min_width(440.0);
             let enter = ui.input(|i| i.key_pressed(Key::Enter));
+            // Enter confirms from a text field, or when nothing has the keyboard. On a button
+            // or a checkbox it is that widget's key: Cancel cancels, a checkbox only ticks.
+            let enter_free = ui.ctx().memory(|m| m.focused()).is_none_or(|id| egui::TextEdit::load_state(ui.ctx(), id).is_some());
             let focus_edit = |r: &egui::Response| {
                 if focus {
                     r.request_focus();
@@ -5230,12 +5373,12 @@ impl App {
                         ui.radio_value(policy, Conflict::Skip, t("Skip"));
                     });
                 }
-                Dialog::NewItem { name, file } => {
+                Dialog::NewItem { name, file, .. } => {
                     ui.heading(if *file { t("New file") } else { t("New folder") });
                     let r = ui.add(egui::TextEdit::singleline(name).desired_width(f32::INFINITY).hint_text(t("Name")));
                     focus_edit(&r);
                 }
-                Dialog::Rename { old, new } => {
+                Dialog::Rename { old, new, .. } => {
                     ui.heading(format!("{} “{}”", t("Rename"), old));
                     let r = ui.add(egui::TextEdit::singleline(new).desired_width(f32::INFINITY));
                     if focus {
@@ -5249,14 +5392,14 @@ impl App {
                         }
                     }
                 }
-                Dialog::Delete { items, trash } => {
+                Dialog::Delete { items, trash, loc, .. } => {
                     let verb = if *trash { t("Move to Trash") } else { t("Delete permanently") };
                     ui.heading(format!("{verb} {}?", what(items)));
                     if items.len() > 1 {
                         ui.label(RichText::new(preview_names(items)).color(th.weak));
                     }
                     ui.add_space(4.0);
-                    if self.panes[self.active].tab().loc.is_local() {
+                    if loc.is_local() {
                         ui.checkbox(trash, t("Move to trash (recycle bin)"));
                     }
                     if !*trash {
@@ -5355,7 +5498,7 @@ impl App {
                         ui.label(RichText::new(note).size(12.0).color(color));
                     });
                 }
-                Dialog::Unpack { archive, dest, selection, .. } => {
+                Dialog::Unpack { archive, dest, selection, policy, .. } => {
                     ui.heading(t("Extract"));
                     ui.label(archive.to_string_lossy());
                     if !selection.is_empty() {
@@ -5365,6 +5508,12 @@ impl App {
                     let o = crate::pathfield::Opts { base: archive.parent(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
                     let r = self.dialog_path.show(ui, dest, dst_id, o, th);
                     focus_edit(&r);
+                    ui.horizontal(|ui| {
+                        ui.label(t("If file exists:"));
+                        ui.radio_value(policy, Conflict::Rename, t("Keep both"));
+                        ui.radio_value(policy, Conflict::Overwrite, t("Overwrite"));
+                        ui.radio_value(policy, Conflict::Skip, t("Skip"));
+                    });
                 }
                 Dialog::ArchivePassword { file, password, wrong, checking, .. } => {
                     ui.heading(format!("🔒 {}", t("Password required")));
@@ -5540,7 +5689,7 @@ impl App {
                 let (fill, fg) = if danger { (th.danger, egui::Color32::WHITE) } else { (th.accent, th.on_accent()) };
                 let ok = ui.add(egui::Button::new(RichText::new(ok_label).color(fg).strong()).fill(fill).min_size(egui::vec2(96.0, 30.0)));
                 // Trusting a server takes a deliberate click, not a stray Enter.
-                let enter_confirms = enter && !matches!(dialog, Dialog::TrustHostKey { .. });
+                let enter_confirms = enter && enter_free && !matches!(dialog, Dialog::TrustHostKey { .. });
                 if ok.clicked() || enter_confirms {
                     confirmed = true;
                 }
@@ -5549,18 +5698,43 @@ impl App {
                 }
             });
         });
-        if modal.should_close() {
+        // Esc closes every dialog; a click outside only those that hold nothing typed or chosen.
+        let esc = modal.is_top_modal && !modal.any_popup_open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+        let simple = matches!(dialog, Dialog::Message { .. } | Dialog::CloseTerminals { .. } | Dialog::TrustHostKey { .. } | Dialog::Delete { .. });
+        if esc || (simple && modal.backdrop_response.clicked()) {
             close = true;
+        }
+        // Cancel (or Esc) wins over an Enter pressed in the same frame.
+        if close {
+            confirmed = false;
         }
         if close || confirmed {
             self.dialog_path.reset();
         }
         if confirmed {
             if let Some(next) = self.confirm_dialog(dialog) {
-                self.dialog = Some(next);
+                self.keep_dialog(next);
             }
         } else if !close {
-            self.dialog = Some(dialog);
+            self.keep_dialog(dialog);
+        }
+    }
+
+    /// Open dialog `d` (its field taking the keyboard if `focus`). One already open is
+    /// not replaced: `d` waits until it closes.
+    fn show_dialog(&mut self, d: Dialog, focus: bool) {
+        if self.dialog.is_some() {
+            self.pending_dialogs.push_back((d, focus));
+        } else {
+            self.dialog = Some(d);
+            self.dialog_focus = focus;
+        }
+    }
+
+    /// Keep showing dialog `d`; one opened meanwhile waits for it.
+    fn keep_dialog(&mut self, d: Dialog) {
+        if let Some(other) = self.dialog.replace(d) {
+            self.pending_dialogs.push_front((other, true));
         }
     }
 
@@ -5576,8 +5750,6 @@ impl App {
         if let Some(file) = reads_from.filter(|f| archive::lock_state(f) != archive::Lock::Open).cloned() {
             return Some(Dialog::ArchivePassword { file, password: String::new(), wrong: false, checking: None, then: AfterPassword::Confirm(Box::new(d)) });
         }
-        let a = self.active;
-        let loc = self.panes[a].tab().loc.clone();
         match d {
             Dialog::ArchivePassword { file, password, wrong, checking, then } => {
                 // Enter again while checking, or nothing typed: keep waiting.
@@ -5607,7 +5779,7 @@ impl App {
                 };
                 self.start_transfer(&src, items, &dst_loc, mv, policy);
             }
-            Dialog::NewItem { name, file } => {
+            Dialog::NewItem { name, file, loc, view } => {
                 let name = name.trim().to_string();
                 if name.is_empty() {
                     return None;
@@ -5627,11 +5799,11 @@ impl App {
                             if file {
                                 let tmp = std::env::temp_dir().join(format!("matrix_finder-empty-{}", std::process::id()));
                                 let _ = std::fs::write(&tmp, b"");
-                                let r = fs.lock().map_err(es).and_then(|mut g| g.upload(&tmp, &rp, &|_| {}, &std::sync::atomic::AtomicBool::new(false)));
+                                let r = remote::try_use(fs).and_then(|mut g| g.upload(&tmp, &rp, &|_| {}, &std::sync::atomic::AtomicBool::new(false)));
                                 let _ = std::fs::remove_file(&tmp);
                                 r
                             } else {
-                                fs.lock().map_err(es).and_then(|mut g| g.mkdir(&rp))
+                                remote::try_use(fs).and_then(|mut g| g.mkdir(&rp))
                             }
                         }
                         None => Err(t("Connection closed")),
@@ -5639,43 +5811,42 @@ impl App {
                     Location::Archive { .. } => Err(t("Archives are read-only")),
                 };
                 match res {
-                    Ok(()) => {
-                        let tab = self.panes[a].tab_mut();
-                        tab.reload(&lc!(self));
-                        self.panes[a].tab_mut().select_name(&name);
-                    }
+                    Ok(()) => self.reload_and_select(&loc, view, &name),
                     Err(e) => self.toast(e, true),
                 }
             }
-            Dialog::Rename { old, new } => {
+            Dialog::Rename { old, new, loc, view } => {
                 let new = new.trim().to_string();
                 if new.is_empty() || new == old {
+                    return None;
+                }
+                // A server may replace a file silently: a name the folder shows is refused.
+                if matches!(loc, Location::Remote { .. }) && all_panes!(self).any(|p| p.tab().loc == loc && p.tab().entries.iter().any(|e| e.name == new)) {
+                    self.toast(format!("{}: {new}", t("Already exists")), true);
                     return None;
                 }
                 let res: Res<()> = match &loc {
                     Location::Local(d) => {
                         let target = d.join(&new);
-                        if target.exists() && !old.eq_ignore_ascii_case(&new) {
+                        // Only the same file may be there: the name changes case on a disk that ignores it.
+                        if target.exists() && !same_entry(&d.join(&old), &target, &old, &new) {
                             Err(format!("{}: {new}", t("Already exists")))
                         } else {
                             std::fs::rename(d.join(&old), target).map_err(es)
                         }
                     }
                     Location::Remote { id, path } => match self.remotes.get(id) {
-                        Some((_, fs)) => fs.lock().map_err(es).and_then(|mut g| g.rename(&join_slash(path, &old), &join_slash(path, &new))),
+                        Some((_, fs)) => remote::try_use(fs).and_then(|mut g| g.rename(&join_slash(path, &old), &join_slash(path, &new))),
                         None => Err(t("Connection closed")),
                     },
                     Location::Archive { .. } => Err(t("Archives are read-only")),
                 };
                 match res {
-                    Ok(()) => {
-                        self.panes[a].tab_mut().reload(&lc!(self));
-                        self.panes[a].tab_mut().select_name(&new);
-                    }
+                    Ok(()) => self.reload_and_select(&loc, view, &new),
                     Err(e) => self.toast(e, true),
                 }
             }
-            Dialog::Delete { items, trash } => self.do_delete(items, trash),
+            Dialog::Delete { items, trash, loc, view } => self.do_delete(&loc, view, items, trash),
             Dialog::CloseTerminals { target: CloseTarget::Window(view), .. } => {
                 if let Some(side) = self.panes.iter().position(|p| p.tab().uid == view) {
                     self.close_pane(side);
@@ -5698,14 +5869,14 @@ impl App {
                     Ok(dest.to_string_lossy().to_string())
                 });
             }
-            Dialog::Unpack { archive, dest, selection, strip } => {
+            Dialog::Unpack { archive, dest, selection, strip, policy } => {
                 // `~` and relative paths, as the field suggests them (relative: from the archive's folder).
                 let Some(dest) = crate::pathfield::typed_dir(&dest, dirs::home_dir().as_deref(), archive.parent()) else {
-                    return Some(Dialog::Unpack { archive, dest, selection, strip });
+                    return Some(Dialog::Unpack { archive, dest, selection, strip, policy });
                 };
                 let title = format!("{} {}", t("Extracting"), archive.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
                 self.spawn_job(title, After::Refresh, Some(Location::Local(dest.clone())), vec![archive.clone()], move |p| {
-                    archive::extract(&archive, &dest, &selection, &strip, Conflict::Overwrite, p)?;
+                    archive::extract(&archive, &dest, &selection, &strip, policy, p)?;
                     Ok(dest.to_string_lossy().to_string())
                 });
             }
@@ -5969,6 +6140,26 @@ impl App {
         // Drop into the panel under the pointer (fall back to the active one).
         let pos = ctx.input(|i| i.pointer.hover_pos());
         let a = pos.and_then(|p| self.pane_rects.iter().find(|(_, r)| r.contains(p)).map(|(i, _)| *i)).unwrap_or(self.active);
+        // On a terminal: type the paths at the prompt, as other terminals do.
+        if let Some(term) = &self.panes[a].tab().term {
+            if self.dialog.is_some() {
+                return;
+            }
+            let text = dropped.iter().map(|p| quote_dropped(&p.to_string_lossy())).collect::<Vec<_>>().join(" ");
+            if !crate::termview::is_typeable(&text) {
+                self.toast(t("A dropped name has control characters: it is not typed into the terminal"), true);
+                return;
+            }
+            term.paste(&format!("{text} "));
+            self.active = a;
+            self.focus_window();
+            return;
+        }
+        // Settings, Tasks, Disk usage and tool windows show no folder to copy into.
+        if !self.panes[a].tab().is_files() {
+            self.toast(t("Drop files on a file window to copy them there"), true);
+            return;
+        }
         let loc = self.panes[a].tab().loc.clone();
         let Some(dst) = self.endpoint(&loc) else { return };
         // Group by parent folder (usually a single one).
@@ -5981,6 +6172,16 @@ impl App {
                 is_dir: meta.as_ref().is_some_and(|m| m.is_dir()),
                 size: meta.map(|m| m.len()).unwrap_or(0),
             });
+        }
+        // Asked first when Settings say so, and always while a dialog is open (it waits
+        // for that one).
+        if self.cfg.confirm_dnd || self.dialog.is_some() {
+            let dst_text = loc.display(|id| self.remote_label(id));
+            for (parent, items) in groups {
+                let items = items.into_iter().map(|i| Entry::new(i.name, i.is_dir, i.size, None)).collect();
+                self.show_dialog(Dialog::Transfer { src: Location::Local(parent), mv: false, items, dst: dst_text.clone(), policy: Conflict::Rename }, false);
+            }
+            return;
         }
         for (parent, items) in groups {
             let d = dst.clone();
@@ -6032,6 +6233,7 @@ impl eframe::App for App {
         self.handle_dropped_files(ctx);
         self.poll_drives(ctx);
         self.poll_update(ctx);
+        self.save_cfg_pending(ctx);
         let mut busy = self.connecting.is_some();
         for side in 0..self.panes.len() {
             let tab = self.panes[side].tab_mut();
@@ -6169,7 +6371,8 @@ impl eframe::App for App {
                 Some(BackupAction::Restore(file, dest)) => {
                     let title = format!("{} {}", t("Restoring"), file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
                     self.spawn_job(title, After::Refresh, Some(Location::Local(dest.clone())), vec![file.clone()], move |p| {
-                        archive::extract(&file, &dest, &[], "", Conflict::Overwrite, p)?;
+                        // Files already there are kept: the restored ones get a free name next to them.
+                        archive::extract(&file, &dest, &[], "", Conflict::Rename, p)?;
                         Ok(dest.to_string_lossy().to_string())
                     });
                 }
@@ -6324,6 +6527,47 @@ fn looks_like_path(q: &str) -> bool {
     q.starts_with('/') || q.starts_with('~') || q.contains(":\\") || q.starts_with("sftp://") || q.starts_with("ftp://")
 }
 
+/// Whether `old` and `new` (named `old_name` and `new_name`) are the same directory entry:
+/// on a disk that ignores case, `a.txt` is there as `A.TXT` too.
+fn same_entry(old: &Path, new: &Path, old_name: &str, new_name: &str) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        match (std::fs::symlink_metadata(old), std::fs::symlink_metadata(new)) {
+            // Two hard links of one file are two entries: only a change of case is the same one.
+            (Ok(a), Ok(b)) => a.dev() == b.dev() && a.ino() == b.ino() && (a.is_dir() || a.nlink() <= 1 || old_name.to_lowercase() == new_name.to_lowercase()),
+            _ => false,
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        match (std::fs::canonicalize(old), std::fs::canonicalize(new)) {
+            (Ok(a), Ok(b)) => a == b,
+            _ => old_name.to_lowercase() == new_name.to_lowercase(),
+        }
+    }
+}
+
+/// A dropped file's path as typed in a terminal: quoted when it has spaces or other
+/// characters the shell would read.
+fn quote_dropped(path: &str) -> String {
+    if cfg!(windows) {
+        if path.contains([' ', '&', '(', ')', '^', ';', ',', '\'', '%', '!']) { format!("\"{path}\"") } else { path.to_string() }
+    } else {
+        terminal::sh_quote(path)
+    }
+}
+
+/// Whether `cmd` can act in window `tab`: most act on its file list (the cursor, the marks).
+fn cmd_works_in(cmd: Cmd, tab: &Tab) -> bool {
+    match cmd {
+        Cmd::DefaultApps | Cmd::Terminal | Cmd::TerminalProfile(_) | Cmd::Split(..) | Cmd::ClosePane | Cmd::Refresh => true,
+        // A terminal's folder and the one disk usage shows are real folders too.
+        Cmd::DiskUsage | Cmd::Bookmark => tab.is_files() || tab.is_terminal() || tab.is_disk_usage(),
+        _ => tab.is_files(),
+    }
+}
+
 fn preview_names(items: &[Entry]) -> String {
     let names: Vec<&str> = items.iter().take(4).map(|e| e.name.as_str()).collect();
     let more = if items.len() > 4 { format!(" … (+{})", items.len() - 4) } else { String::new() };
@@ -6386,13 +6630,38 @@ fn read_head(path: &Path, limit: usize) -> Res<Vec<u8>> {
     Ok(buf)
 }
 
-fn folder_summary(path: &Path, name: &str) -> String {
+/// How long a folder or archive summary may read before it shows what it has.
+const SUMMARY_TIME: Duration = Duration::from_secs(4);
+/// Most names a summary collects (and sorts) to show its first few.
+const SUMMARY_NAMES: usize = 10_000;
+/// Names shown in a summary.
+const SUMMARY_SHOWN: usize = 40;
+
+/// The last line of a summary list: how many names were left out.
+fn summary_rest(left: usize, cut: bool) -> String {
+    match (left, cut) {
+        (_, true) => format!("\n{}", t("…and more")),
+        (0, false) => String::new(),
+        (n, false) => format!("\n… {n} {}", t("more not shown")),
+    }
+}
+
+fn folder_summary(path: &Path, name: &str, cancel: &crate::media::Cancel) -> String {
+    let started = Instant::now();
     let mut files = 0;
     let mut dirs = 0;
     let mut size = 0u64;
-    let mut names = vec![];
+    let mut names: Vec<(bool, String)> = vec![];
+    let mut cut = false;
     if let Ok(rd) = std::fs::read_dir(path) {
         for e in rd.flatten() {
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                return String::new();
+            }
+            if started.elapsed() > SUMMARY_TIME {
+                cut = true;
+                break;
+            }
             let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
             if is_dir {
                 dirs += 1;
@@ -6400,29 +6669,40 @@ fn folder_summary(path: &Path, name: &str) -> String {
                 files += 1;
                 size += e.metadata().map(|m| m.len()).unwrap_or(0);
             }
-            if names.len() < 40 {
-                names.push(format!("{} {}", if is_dir { "📁" } else { "🗋" }, e.file_name().to_string_lossy()));
+            // Past this many the counts go on, but only these names are sorted.
+            if names.len() < SUMMARY_NAMES {
+                names.push((is_dir, e.file_name().to_string_lossy().to_string()));
             }
         }
     }
-    names.sort();
+    // Folders first, then by name.
+    names.sort_by_cached_key(|(is_dir, n)| (!is_dir, n.to_lowercase()));
+    let shown: Vec<String> = names.iter().take(SUMMARY_SHOWN).map(|(is_dir, n)| format!("{} {n}", if *is_dir { "📁" } else { "🗋" })).collect();
+    let left = (dirs + files) - shown.len();
+    let more = if cut { "+" } else { "" };
     format!(
-        "📁 {name}\n\n{dirs} {}, {files} {} ({})\n\n{}",
+        "📁 {name}\n\n{dirs}{more} {}, {files}{more} {}\n{}{more} {}\n\n{}{}",
         t("folders"),
         t("files"),
         human_size(size),
-        names.join("\n")
+        t("in the files at this level (not counting subfolders)"),
+        shown.join("\n"),
+        summary_rest(left, cut)
     )
 }
 
-fn archive_summary(path: &Path) -> String {
-    match archive::list(path) {
+fn archive_summary(path: &Path, cancel: &crate::media::Cancel) -> String {
+    let started = Instant::now();
+    let stop = || cancel.load(std::sync::atomic::Ordering::Relaxed) || started.elapsed() > SUMMARY_TIME;
+    match archive::list_until(path, 200_000, &stop) {
+        _ if cancel.load(std::sync::atomic::Ordering::Relaxed) => String::new(),
         Err(e) if archive::is_password_error(&e) => format!("🔒 {}\n\n{}", t("Password protected"), t("Press Enter to enter the password.")),
-        Ok(entries) => {
+        Ok((entries, cut)) => {
             let files = entries.iter().filter(|e| !e.is_dir).count();
             let total: u64 = entries.iter().map(|e| e.size).sum();
             let packed = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-            let ratio = if total > 0 { packed as f64 * 100.0 / total as f64 } else { 0.0 };
+            let ratio = if total > 0 && !cut { format!(" ({:.0}%)", packed as f64 * 100.0 / total as f64) } else { String::new() };
+            let more = if cut { "+" } else { "" };
             let top = archive::children(&entries, "");
             let list: Vec<String> = top
                 .iter()
@@ -6430,14 +6710,14 @@ fn archive_summary(path: &Path) -> String {
                 .map(|e| format!("{} {}  {}", if e.is_dir { "📁" } else { "🗋" }, e.name, if e.is_dir { String::new() } else { human_size(e.size) }))
                 .collect();
             format!(
-                "📦 {}\n\n{} {} · {} → {} ({ratio:.0}%)\n{}\n\n{}",
+                "📦 {}\n\n{files}{more} {} · {}{more} → {}{ratio}\n{}\n\n{}{}",
                 path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
-                files,
                 t("files"),
                 human_size(total),
                 human_size(packed),
                 if archive::lock_state(path) == archive::Lock::Open { t("Press Enter to browse inside the archive.") } else { format!("🔒 {}. {}", t("Password protected"), t("Press Enter to browse inside the archive.")) },
-                list.join("\n")
+                list.join("\n"),
+                summary_rest(top.len() - list.len(), cut)
             )
         }
         Err(e) => format!("{}: {e}", t("Cannot read archive")),

@@ -155,7 +155,7 @@ impl PdfView {
             return;
         }
         let total = self.total.unwrap_or(self.pages.len());
-        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::both().id_salt(("pdf", key)).auto_shrink([false, false]).show(ui, |ui| {
             let avail = ui.available_width() - 16.0;
             ui.vertical_centered(|ui| {
                 for (i, tex) in self.pages.iter().enumerate() {
@@ -322,7 +322,7 @@ impl NotebookView {
         crate::preview::header_row(ui, th, name, &[(facts, th.weak)], |_| {});
         ui.separator();
         let gutter = 58.0;
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        egui::ScrollArea::vertical().id_salt(("notebook", key)).auto_shrink([false, false]).show(ui, |ui| {
             for cell in &self.cells {
                 ui.horizontal_top(|ui| {
                     let label = match cell {

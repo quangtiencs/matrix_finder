@@ -35,6 +35,9 @@ pub struct Search {
     pub truncated: bool,
     rx: Receiver<Vec<Entry>>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// A re-run (after a reload): its results, swapped in when it ends, so the list
+    /// does not empty and the cursor and marks stay.
+    pending: Option<Vec<Entry>>,
 }
 
 impl Drop for Search {
@@ -67,7 +70,10 @@ pub struct Tab {
     pub view: Vec<usize>,
     pub cursor: usize,
     pub marked: HashSet<String>,
-    anchor: Option<usize>,
+    /// Shift selection: the entry it started from (by name, so it survives re-sorting).
+    anchor: Option<String>,
+    /// The marks the current Shift range added (it can shrink again).
+    range_marks: HashSet<String>,
     pub sort: SortKey,
     pub desc: bool,
     pub filter_text: String,
@@ -191,6 +197,7 @@ impl Tab {
             cursor: 0,
             marked: HashSet::new(),
             anchor: None,
+            range_marks: HashSet::new(),
             sort: SortKey::Name,
             desc: false,
             filter_text: String::new(),
@@ -302,46 +309,48 @@ impl Tab {
                 self.back.remove(0);
             }
             self.fwd.clear();
-            // When going up, keep the cursor on the folder we came from.
-            self.select_name = if loc.parent().is_some() && self.loc.parent().as_ref() == Some(&loc) {
-                Some(self.loc.short_name_raw())
-            } else {
-                None
-            };
-            self.loc = loc;
-            self.marked.clear();
-            self.cursor = 0;
-            self.scroll_offset = 0.0;
-            self.filter_text.clear();
-            self.filter = Ok(Filter::All);
-            self.search = None;
+            let from = std::mem::replace(&mut self.loc, loc);
+            self.entered_from(&from);
         }
         self.reload(ctx);
     }
 
+    /// A folder was just entered from `from`: no marks, filter or search there, and
+    /// when going up, the cursor on the folder we came from.
+    fn entered_from(&mut self, from: &Location) {
+        self.select_name = Some(from.short_name_raw()).filter(|n| !n.is_empty() && from.parent().as_ref() == Some(&self.loc));
+        self.marked.clear();
+        self.end_range();
+        self.cursor = 0;
+        self.scroll_offset = 0.0;
+        self.filter_text.clear();
+        self.filter = Ok(Filter::All);
+        self.scan = None;
+        self.search = None;
+        self.loading = None;
+    }
+
     pub fn go_back(&mut self, ctx: &ListCtx) {
         if let Some(l) = self.back.pop() {
-            self.fwd.push(std::mem::replace(&mut self.loc, l));
-            self.marked.clear();
-            self.cursor = 0;
+            let from = std::mem::replace(&mut self.loc, l);
+            self.fwd.push(from.clone());
+            self.entered_from(&from);
             self.reload(ctx);
         }
     }
 
     pub fn go_forward(&mut self, ctx: &ListCtx) {
         if let Some(l) = self.fwd.pop() {
-            self.back.push(std::mem::replace(&mut self.loc, l));
-            self.marked.clear();
-            self.cursor = 0;
+            let from = std::mem::replace(&mut self.loc, l);
+            self.back.push(from.clone());
+            self.entered_from(&from);
             self.reload(ctx);
         }
     }
 
     pub fn go_up(&mut self, ctx: &ListCtx) {
         if let Some(p) = self.loc.parent() {
-            let from = self.loc.short_name_raw();
             self.navigate(p, ctx);
-            self.select_name = Some(from);
         }
     }
 
@@ -350,15 +359,18 @@ impl Tab {
         if self.term.is_some() {
             return;
         }
-        if let Some(q) = self.search.as_ref().map(|s| s.query.clone()) {
-            let _ = self.start_search(&q, ctx);
+        if self.search.is_some() {
+            self.refresh_search(ctx);
             return;
         }
         if self.select_name.is_none() {
             self.select_name = self.cursor_entry().map(|e| e.name.clone());
         }
         self.error = None;
-        self.path_text = self.loc.display(|id| remote_label(ctx, id));
+        // Not while the address is being typed: that would wipe it.
+        if !self.editing_path {
+            self.path_text = self.loc.display(|id| remote_label(ctx, id));
+        }
         match self.loc.clone() {
             Location::Local(p) => match list_local(&p) {
                 Ok(list) => self.set_entries(list, ctx),
@@ -412,54 +424,32 @@ impl Tab {
         self.search = None;
         self.filter_text.clear();
         self.filter = Ok(Filter::All);
+        self.scan = None;
         self.marked.clear();
+        self.end_range();
         self.cursor = 0;
         self.scroll_offset = 0.0;
         self.loading = None;
         self.error = None;
-        let (tx, rx) = channel();
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop = cancel.clone();
-        let show_hidden = ctx.show_hidden;
-        std::thread::spawn(move || {
-            let mut batch = Vec::new();
-            let mut last = std::time::Instant::now();
-            let mut found = 0usize;
-            let walker = walkdir::WalkDir::new(&root).min_depth(1).follow_links(false).into_iter().filter_entry(|d| show_hidden || !d.file_name().to_string_lossy().starts_with('.'));
-            for d in walker.flatten() {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                let meta = d.metadata().ok();
-                let is_dir = d.file_type().is_dir();
-                let mut e = Entry::new(d.file_name().to_string_lossy().to_string(), is_dir, meta.as_ref().filter(|_| !is_dir).map(|m| m.len()).unwrap_or(0), meta.and_then(|m| m.modified().ok()));
-                e.is_link = d.path_is_symlink();
-                if !filter.matches_at(&e, Some(d.path()), &stop) {
-                    continue;
-                }
-                // Results are named by their path below the search folder.
-                e.name = d.path().strip_prefix(&root).unwrap_or(d.path()).to_string_lossy().to_string();
-                batch.push(e);
-                found += 1;
-                if batch.len() >= 500 || last.elapsed().as_millis() > 120 {
-                    if tx.send(std::mem::take(&mut batch)).is_err() {
-                        return;
-                    }
-                    last = std::time::Instant::now();
-                }
-                if found >= SEARCH_LIMIT {
-                    break;
-                }
-            }
-            let _ = tx.send(batch);
-        });
-        self.search = Some(Search { query: query.to_string(), running: true, truncated: false, rx, cancel });
+        let (rx, cancel) = spawn_search(root, filter, ctx.show_hidden);
+        self.search = Some(Search { query: query.to_string(), running: true, truncated: false, rx, cancel, pending: None });
+        self.view.clear();
         self.entries.clear();
         if self.loc.parent().is_some() {
             self.entries.push(Entry::parent());
         }
         self.rebuild_view(ctx);
         Ok(())
+    }
+
+    /// Run the search again (a reload, e.g. after a file operation). The results shown
+    /// stay until the new ones are complete; then the cursor and the marks are kept by name.
+    fn refresh_search(&mut self, ctx: &ListCtx) {
+        let Some(query) = self.search.as_ref().map(|s| s.query.clone()) else { return };
+        let (Some(root), Ok(filter)) = (self.loc.local_path().map(|p| p.to_path_buf()), Filter::parse(&query)) else { return };
+        let (rx, cancel) = spawn_search(root, filter, ctx.show_hidden);
+        // The search it replaces stops when dropped.
+        self.search = Some(Search { query, running: true, truncated: false, rx, cancel, pending: Some(Vec::new()) });
     }
 
     /// Leave search / filter mode.
@@ -482,9 +472,10 @@ impl Tab {
     /// Turn the quick filter on (a category) or off (`None`).
     pub fn set_quick(&mut self, q: Option<QuickActive>, ctx: &ListCtx) {
         self.quick = q;
-        let keep = self.cursor_entry().map(|e| e.name.clone());
-        self.rebuild_view(ctx);
-        self.cursor = keep.and_then(|n| self.view.iter().position(|&i| self.entries[i].name == n)).unwrap_or(0);
+        self.end_range();
+        if !self.rebuild_view(ctx) {
+            self.cursor = 0;
+        }
         self.ensure_visible = true;
     }
 
@@ -492,24 +483,62 @@ impl Tab {
     pub fn poll(&mut self, ctx: &ListCtx) -> bool {
         let mut changed = false;
         if let Some(s) = &mut self.search {
-            let mut got = false;
+            let (mut got, mut done) = (false, false);
             loop {
                 match s.rx.try_recv() {
-                    Ok(batch) => {
-                        self.entries.extend(batch);
-                        got = true;
-                    }
+                    Ok(batch) => match &mut s.pending {
+                        Some(p) => p.extend(batch),
+                        None => {
+                            self.entries.extend(batch);
+                            got = true;
+                        }
+                    },
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(_) => {
                         s.running = false;
-                        s.truncated = self.entries.len() >= SEARCH_LIMIT;
                         got = true;
+                        done = true;
                         break;
                     }
                 }
             }
+            if done {
+                let found = match s.pending.take() {
+                    // A re-run: its results replace the old ones at once.
+                    Some(list) => {
+                        let n = list.len();
+                        let keep = self.cursor_entry().map(|e| e.name.clone());
+                        self.view.clear();
+                        self.entries.clear();
+                        if self.loc.parent().is_some() {
+                            self.entries.push(Entry::parent());
+                        }
+                        self.entries.extend(list);
+                        let existing: HashSet<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
+                        self.marked.retain(|m| existing.contains(m.as_str()));
+                        self.range_marks.retain(|m| existing.contains(m.as_str()));
+                        if self.select_name.is_none() {
+                            self.select_name = keep;
+                        }
+                        n
+                    }
+                    None => self.entries.iter().filter(|e| !e.is_parent).count(),
+                };
+                if let Some(s) = &mut self.search {
+                    s.truncated = found >= SEARCH_LIMIT;
+                }
+            }
             if got {
                 self.rebuild_view(ctx);
+                // A name to show (a reload, a new item) once it is among the results.
+                if let Some(p) = self.select_name.as_deref().and_then(|n| self.pos_of(n)) {
+                    self.cursor = p;
+                    self.select_name = None;
+                    self.ensure_visible = true;
+                }
+                if done {
+                    self.select_name = None;
+                }
                 changed = true;
             }
         }
@@ -530,11 +559,7 @@ impl Tab {
                 }
             }
             if got {
-                let keep = self.cursor_entry().map(|e| e.name.clone());
                 self.rebuild_view(ctx);
-                if let Some(p) = keep.and_then(|n| self.view.iter().position(|&i| self.entries[i].name == n)) {
-                    self.cursor = p;
-                }
                 changed = true;
             }
         }
@@ -563,7 +588,10 @@ impl Tab {
                     changed = true;
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
-                Err(_) => self.loading = None,
+                Err(_) => {
+                    self.loading = None;
+                    self.select_name = None;
+                }
             }
         }
         if let Some(rx) = &self.dir_sizes {
@@ -595,13 +623,16 @@ impl Tab {
         if self.loc.parent().is_some() {
             list.insert(0, Entry::parent());
         }
+        // The old view points into the old list.
+        self.view.clear();
         self.entries = list;
         let existing: HashSet<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
         self.marked.retain(|m| existing.contains(m.as_str()));
+        self.end_range();
         self.restart_scan(ctx);
         self.rebuild_view(ctx);
         if let Some(name) = self.select_name.take() {
-            if let Some(pos) = self.view.iter().position(|&i| self.entries[i].name == name) {
+            if let Some(pos) = self.pos_of(&name) {
                 self.cursor = pos;
             }
         }
@@ -612,12 +643,11 @@ impl Tab {
     pub fn set_filter(&mut self, text: &str, ctx: &ListCtx) {
         self.filter_text = text.to_string();
         self.filter = Filter::parse(text);
+        self.end_range();
         self.restart_scan(ctx);
-        let keep = self.cursor_entry().map(|e| e.name.clone());
-        self.rebuild_view(ctx);
-        self.cursor = keep
-            .and_then(|n| self.view.iter().position(|&i| self.entries[i].name == n))
-            .unwrap_or(0);
+        if !self.rebuild_view(ctx) {
+            self.cursor = 0;
+        }
         self.ensure_visible = true;
     }
 
@@ -662,7 +692,21 @@ impl Tab {
         self.scan = Some(ContentScan { running: true, hits: HashSet::new(), rx, cancel });
     }
 
-    pub fn rebuild_view(&mut self, ctx: &ListCtx) {
+    /// Filter and sort the listing again, keeping the cursor on the same entry. Returns
+    /// whether that entry is still shown.
+    pub fn rebuild_view(&mut self, ctx: &ListCtx) -> bool {
+        let keep = self.cursor_entry().map(|e| e.name.clone());
+        self.build_view(ctx);
+        match keep.and_then(|n| self.pos_of(&n)) {
+            Some(p) => {
+                self.cursor = p;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn build_view(&mut self, ctx: &ListCtx) {
         let filter = self.filter.as_ref().ok();
         let hits = self.scan.as_ref().map(|s| &s.hits);
         let mut view: Vec<usize> = (0..self.entries.len())
@@ -716,30 +760,35 @@ impl Tab {
             self.sort = key;
             self.desc = matches!(key, SortKey::Size | SortKey::Modified);
         }
-        let keep = self.cursor_entry().map(|e| e.name.clone());
+        // Rows move: a Shift range starts again.
+        self.end_range();
         self.rebuild_view(ctx);
-        if let Some(n) = keep {
-            if let Some(p) = self.view.iter().position(|&i| self.entries[i].name == n) {
-                self.cursor = p;
-            }
-        }
         self.ensure_visible = true;
     }
 
     pub fn cursor_entry(&self) -> Option<&Entry> {
-        self.view.get(self.cursor).map(|&i| &self.entries[i])
+        self.view.get(self.cursor).and_then(|&i| self.entries.get(i))
     }
 
-    /// Marked entries, or the cursor entry if nothing is marked. Never includes `..`.
+    /// The row of the entry called `name`, if it is shown.
+    fn pos_of(&self, name: &str) -> Option<usize> {
+        self.view.iter().position(|&i| self.entries.get(i).is_some_and(|e| e.name == name))
+    }
+
+    /// The marked entries that are shown (the filter may hide some): what the footer
+    /// counts and what commands act on.
+    pub fn marked_shown(&self) -> Vec<&Entry> {
+        if self.marked.is_empty() {
+            return vec![];
+        }
+        self.view.iter().filter_map(|&i| self.entries.get(i)).filter(|e| !e.is_parent && self.marked.contains(&e.name)).collect()
+    }
+
+    /// Marked entries that are shown, or the cursor entry if none is. Never includes `..`.
     pub fn selection(&self) -> Vec<Entry> {
-        if !self.marked.is_empty() {
-            return self
-                .view
-                .iter()
-                .map(|&i| &self.entries[i])
-                .filter(|e| self.marked.contains(&e.name))
-                .cloned()
-                .collect();
+        let marked = self.marked_shown();
+        if !marked.is_empty() {
+            return marked.into_iter().cloned().collect();
         }
         self.cursor_entry().filter(|e| !e.is_parent).cloned().into_iter().collect()
     }
@@ -748,16 +797,14 @@ impl Tab {
         if self.view.is_empty() {
             return;
         }
-        let old = self.cursor;
         let n = self.view.len() as isize;
         let new = (self.cursor as isize + delta).clamp(0, n - 1) as usize;
         if extend {
-            let anchor = *self.anchor.get_or_insert(old);
-            self.select_range(anchor, new);
+            self.extend_to(new);
         } else {
-            self.anchor = None;
+            self.end_range();
+            self.cursor = new;
         }
-        self.cursor = new;
         self.ensure_visible = true;
     }
 
@@ -765,12 +812,43 @@ impl Tab {
         ((self.view_height / ROW_H) as isize - 1).max(1)
     }
 
+    /// The marks made so far stay as they are; the next Shift range starts afresh.
+    fn end_range(&mut self) {
+        self.anchor = None;
+        self.range_marks.clear();
+    }
+
+    /// Shift+click or Shift+arrow: mark the rows from the anchor (where the range began)
+    /// to `row` and put the cursor there. The range replaces the one marked before, so it
+    /// can also shrink.
+    fn extend_to(&mut self, row: usize) {
+        if self.view.is_empty() {
+            return;
+        }
+        let row = row.min(self.view.len() - 1);
+        let a = match self.anchor.as_deref().and_then(|n| self.pos_of(n)) {
+            Some(a) => a,
+            None => {
+                let a = self.cursor.min(self.view.len() - 1);
+                self.range_marks.clear();
+                self.anchor = self.entries.get(self.view[a]).map(|e| e.name.clone());
+                a
+            }
+        };
+        self.select_range(a, row);
+        self.cursor = row;
+    }
+
     fn select_range(&mut self, a: usize, b: usize) {
-        let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
+        for n in std::mem::take(&mut self.range_marks) {
+            self.marked.remove(&n);
+        }
+        let Some(last) = self.view.len().checked_sub(1) else { return };
+        let (lo, hi) = (a.min(b).min(last), a.max(b).min(last));
         for i in lo..=hi {
-            let e = &self.entries[self.view[i]];
-            if !e.is_parent {
-                self.marked.insert(e.name.clone());
+            let Some(e) = self.entries.get(self.view[i]) else { continue };
+            if !e.is_parent && self.marked.insert(e.name.clone()) {
+                self.range_marks.insert(e.name.clone());
             }
         }
     }
@@ -788,6 +866,7 @@ impl Tab {
     }
 
     pub fn mark_all(&mut self) {
+        self.end_range();
         for &i in &self.view {
             let e = &self.entries[i];
             if !e.is_parent {
@@ -797,6 +876,7 @@ impl Tab {
     }
 
     pub fn invert_marks(&mut self) {
+        self.end_range();
         let names: Vec<String> = self
             .view
             .iter()
@@ -811,12 +891,18 @@ impl Tab {
         }
     }
 
+    /// Put the cursor on `name` now if it is shown. It is kept for later only while a
+    /// listing is on its way (or none was loaded yet): once found, a later reload must
+    /// not jump back to it.
     pub fn select_name(&mut self, name: &str) {
-        self.select_name = Some(name.to_string());
-        if let Some(p) = self.view.iter().position(|&i| self.entries[i].name == name) {
+        let pos = self.pos_of(name);
+        if let Some(p) = pos {
             self.cursor = p;
             self.ensure_visible = true;
+            self.end_range();
         }
+        let later = self.loading.is_some() || self.search.as_ref().is_some_and(|s| s.running) || (pos.is_none() && self.entries.is_empty());
+        self.select_name = later.then(|| name.to_string());
     }
 
     pub fn title(&self) -> String {
@@ -853,6 +939,47 @@ impl Tab {
             s
         }
     }
+}
+
+/// Walk the folders below `root` in the background; the entries that pass `filter`
+/// arrive in batches, named by their path below `root`.
+fn spawn_search(root: PathBuf, filter: Filter, show_hidden: bool) -> (Receiver<Vec<Entry>>, Arc<std::sync::atomic::AtomicBool>) {
+    let (tx, rx) = channel();
+    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop = cancel.clone();
+    std::thread::spawn(move || {
+        let mut batch = Vec::new();
+        let mut last = std::time::Instant::now();
+        let mut found = 0usize;
+        let walker = walkdir::WalkDir::new(&root).min_depth(1).follow_links(false).into_iter().filter_entry(|d| show_hidden || !d.file_name().to_string_lossy().starts_with('.'));
+        for d in walker.flatten() {
+            if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                return;
+            }
+            let meta = d.metadata().ok();
+            let is_dir = d.file_type().is_dir();
+            let mut e = Entry::new(d.file_name().to_string_lossy().to_string(), is_dir, meta.as_ref().filter(|_| !is_dir).map(|m| m.len()).unwrap_or(0), meta.and_then(|m| m.modified().ok()));
+            e.is_link = d.path_is_symlink();
+            if !filter.matches_at(&e, Some(d.path()), &stop) {
+                continue;
+            }
+            // Results are named by their path below the search folder.
+            e.name = d.path().strip_prefix(&root).unwrap_or(d.path()).to_string_lossy().to_string();
+            batch.push(e);
+            found += 1;
+            if batch.len() >= 500 || last.elapsed().as_millis() > 120 {
+                if tx.send(std::mem::take(&mut batch)).is_err() {
+                    return;
+                }
+                last = std::time::Instant::now();
+            }
+            if found >= SEARCH_LIMIT {
+                break;
+            }
+        }
+        let _ = tx.send(batch);
+    });
+    (rx, cancel)
 }
 
 impl Location {
@@ -1439,8 +1566,14 @@ fn quick_filter_button(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec
         ui.set_min_width(240.0);
         menu_style(ui);
         ui.label(egui::RichText::new(t("Show only")).size(11.5).color(th.weak));
+        // Files of the listing by extension, to count each category.
+        let mut by_ext: HashMap<&str, usize> = HashMap::new();
+        for e in tab.entries.iter().filter(|e| !e.is_dir && (c.list.show_hidden || !e.hidden)) {
+            *by_ext.entry(e.ext.as_str()).or_default() += 1;
+        }
         for (i, q) in c.quick_filters.iter().enumerate() {
             let exts = q.ext_list();
+            let count: usize = exts.iter().map(|x| by_ext.get(x.as_str()).copied().unwrap_or(0)).sum();
             let (row, resp) = ui.allocate_exact_size(vec2(240.0, 28.0), Sense::click());
             let sel = tab.quick.as_ref().is_some_and(|a| a.has(&q.name));
             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, sel, t(&q.name)));
@@ -1457,10 +1590,14 @@ fn quick_filter_button(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec
             }
             quick_filter_icon(ui.painter(), Rect::from_center_size(pos2(row.left() + 36.0, row.center().y), vec2(16.0, 16.0)), &exts, th);
             ui.painter().text(pos2(row.left() + 52.0, row.center().y), Align2::LEFT_CENTER, t(&q.name), FontId::proportional(13.5), th.text);
-            ui.painter().text(pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, exts.len().to_string(), FontId::proportional(11.5), th.weak);
+            // How many files here are of this kind (none: no number).
+            if count > 0 {
+                ui.painter().text(pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, count.to_string(), FontId::proportional(11.5), th.weak);
+            }
             let shown: Vec<String> = exts.iter().take(14).map(|e| format!(".{e}")).collect();
             let more = if exts.len() > 14 { " …" } else { "" };
-            if resp.on_hover_text(format!("{}{more}", shown.join(" "))).clicked() {
+            let tip = format!("{}{more}\n{count} {}", shown.join(" "), t("files here"));
+            if resp.on_hover_text(tip).clicked() {
                 ev.push(PaneEvent::QuickFilter(Some(i)));
             }
         }
@@ -1899,20 +2036,35 @@ fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
     }
     segs.reverse();
     let font = FontId::proportional(14.0);
+    // The current folder is drawn bold: measured with that font.
+    let bold = FontId::new(13.5, egui::FontFamily::Name("bold".into()));
+    let last = segs.len().saturating_sub(1);
     let widths: Vec<f32> = segs
         .iter()
-        .map(|(l, _)| ui.fonts(|f| f.layout_no_wrap(l.clone(), font.clone(), th.text).size().x) + 12.0)
+        .enumerate()
+        .map(|(i, (l, _))| ui.fonts(|f| f.layout_no_wrap(l.clone(), if i == last { bold.clone() } else { font.clone() }, th.text).size().x) + 12.0)
         .collect();
     let sep_w = 12.0;
-    let mut first = segs.len().saturating_sub(1);
+    // The "…" button for the folders left out, and its separator.
+    let more_w = 24.0 + sep_w;
+    let mut first = last;
     let mut total = widths.last().copied().unwrap_or(0.0);
-    while first > 0 && total + widths[first - 1] + sep_w + 30.0 < width {
+    while first > 0 {
+        let more = if first > 1 { more_w } else { 0.0 };
+        if total + widths[first - 1] + sep_w + more > width {
+            break;
+        }
         first -= 1;
         total += widths[first] + sep_w;
     }
+    // In a narrow window the current folder comes first: the "…" only when there is
+    // still room for a fair part of its name.
+    let show_more = first > 0 && width - more_w >= total.min(90.0);
+    // What is left for the current folder's name; cut with "…" when it does not fit.
+    let last_w = (width - (total - widths.get(last).copied().unwrap_or(0.0)) - if show_more { more_w } else { 0.0 }).max(24.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        if first > 0 {
+        if show_more {
             let (r, resp) = ui.allocate_exact_size(vec2(24.0, 26.0), Sense::click());
             if resp.hovered() {
                 ui.painter().rect_filled(r, 6.0, th.hover());
@@ -1924,10 +2076,10 @@ fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
             }
             sep(ui, th, sep_w);
         }
-        let last = segs.len().saturating_sub(1);
         for i in first..segs.len() {
             let (label, loc) = &segs[i];
-            let (r, resp) = ui.allocate_exact_size(vec2(widths[i].min(width), 26.0), Sense::click());
+            let w = if i == last { widths[i].min(last_w) } else { widths[i] };
+            let (r, mut resp) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click());
             if resp.hovered() {
                 ui.painter().rect_filled(r, 6.0, th.hover());
             }
@@ -1950,8 +2102,12 @@ fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
             } else {
                 th.weak
             };
-            let f = if i == last { FontId::new(13.5, egui::FontFamily::Name("bold".into())) } else { font.clone() };
-            ui.painter().with_clip_rect(r).text(r.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, label, f, color);
+            let f = if i == last { bold.clone() } else { font.clone() };
+            let (galley, cut) = fit_text(ui, label, f, color, r.width() - 12.0);
+            ui.painter().with_clip_rect(r).galley(pos2(r.left() + 6.0, r.center().y - galley.size().y / 2.0), galley, color);
+            if cut {
+                resp = resp.on_hover_text(label);
+            }
             if resp.clicked() {
                 if i == last {
                     tab.editing_path = true;
@@ -2101,6 +2257,15 @@ pub fn suggestion_popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, comp: &mu
         });
 }
 
+/// `text` on one line, cut with "…" to fit `width`; and whether it had to be cut.
+fn fit_text(ui: &egui::Ui, text: &str, font: FontId, color: Color32, width: f32) -> (Arc<egui::Galley>, bool) {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(4.0));
+    let galley = ui.fonts(|f| f.layout_job(job));
+    let cut = galley.elided;
+    (galley, cut)
+}
+
 fn sep(ui: &mut egui::Ui, th: &Theme, w: f32) {
     let (r, _) = ui.allocate_exact_size(vec2(w, 26.0), Sense::hover());
     ui.painter().text(r.center(), Align2::CENTER_CENTER, "›", FontId::proportional(14.0), th.weak.gamma_multiply(0.7));
@@ -2233,12 +2398,21 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 } else {
                     th.text
                 };
+                // On the lit cursor row every colour is made to read against it.
+                let on_row = |col: egui::Color32| if is_cur && c.active { th.on_cursor(col) } else { col };
+                let name_color = on_row(name_color);
                 let base_name = match e.name.rfind('.') {
                     Some(i) if show_ext && !e.is_dir && !e.ext.is_empty() && i > 0 => &e.name[..i],
                     _ => e.name.as_str(),
                 };
                 let name_rect = Rect::from_min_size(pos2(rect.left() + name_x, rect.top()), vec2(w_name - 8.0, ROW_H));
-                let name_drawn = p.with_clip_rect(name_rect).text(name_rect.left_center(), Align2::LEFT_CENTER, base_name, FontId::proportional(14.0), name_color);
+                // Too long for the column: cut with "…", and the whole name on hover.
+                let (galley, cut) = fit_text(ui, base_name, FontId::proportional(14.0), name_color, name_rect.width());
+                let name_drawn = Rect::from_min_size(pos2(name_rect.left(), name_rect.center().y - galley.size().y / 2.0), galley.size());
+                p.with_clip_rect(name_rect).galley(name_drawn.min, galley, name_color);
+                if cut && ui.rect_contains_pointer(name_rect) {
+                    resp.clone().on_hover_text(&e.name);
+                }
                 if let Some(repo) = &git {
                     let filled = c.git_style == crate::config::GitStyle::Filled;
                     let color = branch_color(repo.state, c.git_status, filled, th);
@@ -2249,7 +2423,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     }
                 }
                 let meta = FontId::proportional(13.0);
-                let meta_color = if is_marked { th.marked.gamma_multiply(0.85) } else { th.weak };
+                let meta_color = on_row(if is_marked { th.marked.gamma_multiply(0.85) } else { th.weak });
                 let mut x = rect.left() + name_x + w_name;
                 if show_ext {
                     let r = Rect::from_min_size(pos2(x, rect.top()), vec2(w_ext - 6.0, ROW_H));
@@ -2266,7 +2440,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 p.text(pos2(x + w_size, rect.center().y), Align2::RIGHT_CENTER, size_txt, meta.clone(), meta_color);
                 x += w_size;
                 if show_date {
-                    p.text(pos2(x + w_date, rect.center().y), Align2::RIGHT_CENTER, format_time(e.modified), meta, th.weak);
+                    p.text(pos2(x + w_date, rect.center().y), Align2::RIGHT_CENTER, format_time(e.modified), meta, on_row(th.weak));
                 }
                 if let Some(pl) = &payload {
                     let dragged_here = pl.side == side && pl.loc == tab.loc && pl.items.iter().any(|i| i.name == e.name);
@@ -2412,15 +2586,13 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
         ev.push(PaneEvent::Focus);
         if m.command {
             tab.cursor = row;
+            tab.end_range();
             tab.toggle_mark_cursor();
         } else if m.shift {
-            let anchor = tab.anchor.unwrap_or(tab.cursor);
-            tab.anchor = Some(anchor);
-            tab.select_range(anchor, row);
-            tab.cursor = row;
+            tab.extend_to(row);
         } else {
             tab.cursor = row;
-            tab.anchor = None;
+            tab.end_range();
         }
     }
     if let Some(row) = double {
@@ -2462,14 +2634,16 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
             .filter(|e| !e.is_parent)
             .fold((0, 0), |(f, d), e| if e.is_dir { (f, d + 1) } else { (f + 1, d) });
         let mut s = format!("{dirs} {} · {files} {}", t("folders"), t("files"));
-        if !tab.marked.is_empty() {
-            let size: u64 = tab.entries.iter().filter(|e| tab.marked.contains(&e.name)).map(|e| e.size).sum();
-            s = format!("{} {} · {}   ·   {s}", tab.marked.len(), t("selected"), human_size(size));
+        // Only the marks the filter shows: the ones commands act on.
+        let marked = tab.marked_shown();
+        if !marked.is_empty() {
+            let size: u64 = marked.iter().map(|e| e.size).sum();
+            s = format!("{} {} · {}   ·   {s}", marked.len(), t("selected"), human_size(size));
         }
         if !tab.filter.as_ref().map(|f| f.is_all()).unwrap_or(true) {
             s.push_str(&format!("   ·   {} {}", t("filtered from"), tab.entries.len().saturating_sub(1)));
         }
-        p.with_clip_rect(frect).text(left, Align2::LEFT_CENTER, s, small.clone(), if tab.marked.is_empty() { th.weak } else { th.marked });
+        p.with_clip_rect(frect).text(left, Align2::LEFT_CENTER, s, small.clone(), if marked.is_empty() { th.weak } else { th.marked });
     }
     if let Some(path) = tab.loc.local_path().filter(|_| c.show_free) {
         if let Some((total, avail)) = crate::vfs::free_space(path, c.drives) {
@@ -2806,5 +2980,192 @@ mod quick_filter_tests {
         let q = QuickActive::toggle(None, "Mine", &twins).unwrap();
         assert_eq!(q.names, ["Mine"]);
         assert!(q.matches(&e("x.a")) && !q.matches(&e("x.b")));
+    }
+}
+
+#[cfg(test)]
+mod list_state_tests {
+    use super::*;
+
+    fn wait(tab: &mut Tab, ctx: &ListCtx) {
+        let t0 = std::time::Instant::now();
+        while tab.is_loading() && t0.elapsed().as_secs() < 5 {
+            tab.poll(ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn cur(tab: &Tab) -> String {
+        tab.cursor_entry().map(|e| e.name.clone()).unwrap_or_default()
+    }
+
+    fn marks(tab: &Tab) -> Vec<String> {
+        let mut v: Vec<String> = tab.marked.iter().cloned().collect();
+        v.sort_by(|a, b| natural_cmp(a, b));
+        v
+    }
+
+    /// A folder with `big` (60 files), `small` (3 files) and a few files of its own.
+    fn tree(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mf-ls-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("big")).unwrap();
+        std::fs::create_dir_all(dir.join("small")).unwrap();
+        for i in 0..60 {
+            std::fs::write(dir.join(format!("big/f{i}.txt")), b"x").unwrap();
+        }
+        for f in ["small/a.txt", "small/b.txt", "small/c.txt", "notebook.ipynb", "one.txt", "two.txt"] {
+            std::fs::write(dir.join(f), b"x").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn shift_range_survives_new_folders_and_shrinks() {
+        let dir = tree("shift");
+        let remotes = HashMap::new();
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let mut tab = Tab::new(Location::Local(dir.join("big")));
+        tab.reload(&ctx);
+        tab.cursor = 50;
+        tab.extend_to(52);
+        assert_eq!(tab.marked.len(), 3);
+        // A smaller folder: the old anchor row no longer exists. This used to panic.
+        tab.navigate(Location::Local(dir.join("small")), &ctx);
+        tab.move_cursor(1, true);
+        tab.move_cursor(1, true);
+        assert_eq!(marks(&tab), ["a.txt", "b.txt"]);
+        // Down ×3 then Up ×2 (from the top): the range follows the cursor back.
+        tab.cursor = 0;
+        tab.marked.clear();
+        tab.end_range();
+        for _ in 0..3 {
+            tab.move_cursor(1, true);
+        }
+        assert_eq!(marks(&tab), ["a.txt", "b.txt", "c.txt"]);
+        tab.move_cursor(-2, true);
+        assert_eq!(marks(&tab), ["a.txt"]);
+        // Marks made before the range are kept when it shrinks.
+        tab.end_range();
+        tab.marked.clear();
+        tab.marked.insert("c.txt".into());
+        tab.cursor = 1;
+        tab.move_cursor(2, true);
+        tab.move_cursor(-2, true);
+        assert_eq!(marks(&tab), ["a.txt", "c.txt"]);
+        // An anchor that is gone is never used as a row.
+        tab.anchor = Some("gone".into());
+        tab.extend_to(99);
+        assert_eq!(cur(&tab), "c.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cursor_lands_on_the_folder_left_and_stays_put() {
+        let dir = tree("up");
+        let remotes = HashMap::new();
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let mut tab = Tab::new(Location::Local(dir.join("small")));
+        tab.reload(&ctx);
+        tab.go_up(&ctx);
+        assert_eq!(cur(&tab), "small");
+        // Moving on, then a reload (e.g. after a copy): no jump back to "small".
+        tab.select_name("one.txt");
+        tab.reload(&ctx);
+        assert_eq!(cur(&tab), "one.txt");
+        tab.move_cursor(1, false);
+        let here = cur(&tab);
+        tab.reload(&ctx);
+        assert_eq!(cur(&tab), here);
+        // Back to the folder: the cursor goes to it too, and the filter is gone.
+        tab.navigate(Location::Local(dir.join("big")), &ctx);
+        tab.set_filter("f1", &ctx);
+        tab.go_back(&ctx);
+        assert_eq!(cur(&tab), "big");
+        tab.go_forward(&ctx);
+        assert!(tab.filter_text.is_empty() && tab.view.len() == 61);
+        // Up to the root of the file system: on the folder left as well.
+        let mut tab = Tab::new(Location::Local(PathBuf::from("/tmp")));
+        tab.reload(&ctx);
+        tab.go_up(&ctx);
+        if tab.error.is_none() && tab.loc == Location::Local(PathBuf::from("/")) {
+            assert_eq!(cur(&tab), "tmp");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn re_sorting_keeps_the_cursor_entry() {
+        let dir = tree("sort");
+        std::fs::write(dir.join("big/.aaa"), b"x").unwrap();
+        let remotes = HashMap::new();
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let mut tab = Tab::new(Location::Local(dir.join("big")));
+        tab.reload(&ctx);
+        tab.select_name("f7.txt");
+        // Hidden files shown: rows move, the cursor stays on the file.
+        let shown = ListCtx { show_hidden: true, ..ctx.clone() };
+        tab.rebuild_view(&shown);
+        assert_eq!(cur(&tab), "f7.txt");
+        tab.set_sort(SortKey::Name, &ctx);
+        assert_eq!(cur(&tab), "f7.txt");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reload_keeps_search_results_cursor_and_marks() {
+        let dir = tree("search");
+        let remotes = HashMap::new();
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        tab.start_search("*.txt", &ctx).unwrap();
+        wait(&mut tab, &ctx);
+        let b = ["small", "b.txt"].iter().collect::<PathBuf>().to_string_lossy().to_string();
+        tab.select_name(&b);
+        tab.toggle_mark_cursor();
+        let n = tab.view.len();
+        tab.reload(&ctx);
+        // While it runs again, the results stay.
+        assert_eq!(tab.view.len(), n);
+        wait(&mut tab, &ctx);
+        assert_eq!(cur(&tab), b);
+        assert!(tab.marked.contains(&b));
+        assert_eq!(tab.view.len(), n);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn address_being_typed_survives_a_reload() {
+        let dir = tree("addr");
+        let remotes = HashMap::new();
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        tab.editing_path = true;
+        tab.path_text = "/usr/lo".into();
+        tab.reload(&ctx);
+        assert_eq!(tab.path_text, "/usr/lo");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn marks_hidden_by_the_filter_are_not_acted_on() {
+        let dir = tree("marks");
+        let remotes = HashMap::new();
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        tab.marked.insert("one.txt".into());
+        tab.marked.insert("two.txt".into());
+        assert_eq!(tab.marked_shown().len(), 2);
+        tab.set_filter("two", &ctx);
+        assert_eq!(tab.marked_shown().len(), 1);
+        assert_eq!(tab.selection().iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["two.txt"]);
+        // Typing "not" on the way to "notebook" filters as text.
+        tab.set_filter("not", &ctx);
+        assert!(tab.filter.is_ok());
+        assert_eq!(tab.marked_shown().len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

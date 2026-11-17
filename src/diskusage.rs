@@ -327,6 +327,10 @@ impl DiskUsage {
     pub fn cancel(&mut self) {
         if let Some(j) = self.job.take() {
             j.progress.cancel.store(true, Ordering::Relaxed);
+            // Back to the folder still shown (a scan of another one was started by Up or a click).
+            if let Some((_, p, _)) = self.current() {
+                self.path = p;
+            }
         }
     }
 
@@ -654,6 +658,22 @@ mod tests {
         let csv = d.csv().unwrap();
         assert!(csv.starts_with("path,name,type,level,size_bytes"));
         assert!(csv.lines().any(|l| l.contains(",top.txt,file,1,")), "{csv}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Cancelling the scan that Up started keeps the folder that is still shown.
+    #[test]
+    fn a_cancelled_scan_keeps_the_shown_folder() {
+        let dir = std::env::temp_dir().join(format!("mf-du-cancel-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a")).unwrap();
+        let mut d = DiskUsage::new(dir.join("a"), 1);
+        wait(&mut d);
+        d.go_up();
+        assert_eq!(d.path, dir, "scanning the parent");
+        d.cancel();
+        assert_eq!(d.path, dir.join("a"));
+        assert_eq!(d.current().unwrap().1, d.path);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

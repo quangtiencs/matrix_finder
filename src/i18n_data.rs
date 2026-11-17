@@ -1099,6 +1099,35 @@ const KEYS: &[&str] = &[
     "Exit search",
     "Keep the filter",
     "Not a valid HDF5 file.",
+    // fix: transfers
+    "The connection is busy with a transfer; try again when it finishes",
+    "{done} / {total} items",
+    "Copied {n} item(s)",
+    "Moved {n} item(s)",
+    "Copied {n} item(s); some files were skipped",
+    "Moved {n} item(s); skipped files were left in place",
+    "Deleted {n} item(s)",
+    "Cannot copy “{name}” into itself",
+    "Cannot move out of an archive (archives are read-only). Use copy.",
+    "Archives are read-only here. Use Compress to create a new archive.",
+    "This transfer combination is not supported (copy via a local folder).",
+    "Refusing an unsafe file name from the server",
+    "Not checked",
+    "not checked",
+    "Not all files were checked",
+    "Cancelled after {done} of {total} files",
+    // fix: file list
+    "files here",
+    // fix: dialogs
+    "Drop files on a file window to copy them there",
+    "A dropped name has control characters: it is not typed into the terminal",
+    "Zoom in",
+    "Zoom out",
+    "Actual size",
+    // fix: preview and terminal
+    "…and more",
+    "more not shown",
+    "in the files at this level (not counting subfolders)",
 ];
 
 const VI: &[(&str, &str)] = &[
@@ -2199,4 +2228,33 @@ const VI: &[(&str, &str)] = &[
     ("Exit search", "Thoát tìm kiếm"),
     ("Keep the filter", "Giữ bộ lọc"),
     ("Not a valid HDF5 file.", "Không phải tệp HDF5 hợp lệ."),
+    // fix: transfers
+    ("The connection is busy with a transfer; try again when it finishes", "Kết nối đang bận truyền tệp; hãy thử lại khi truyền xong"),
+    ("{done} / {total} items", "{done} / {total} mục"),
+    ("Copied {n} item(s)", "Đã sao chép {n} mục"),
+    ("Moved {n} item(s)", "Đã di chuyển {n} mục"),
+    ("Copied {n} item(s); some files were skipped", "Đã sao chép {n} mục; một số tệp đã được bỏ qua"),
+    ("Moved {n} item(s); skipped files were left in place", "Đã di chuyển {n} mục; các tệp bị bỏ qua vẫn ở chỗ cũ"),
+    ("Deleted {n} item(s)", "Đã xoá {n} mục"),
+    ("Cannot copy “{name}” into itself", "Không thể sao chép “{name}” vào chính nó"),
+    ("Cannot move out of an archive (archives are read-only). Use copy.", "Không thể di chuyển ra khỏi tệp nén (tệp nén chỉ đọc). Hãy dùng sao chép."),
+    ("Archives are read-only here. Use Compress to create a new archive.", "Tệp nén ở đây chỉ đọc. Hãy dùng Nén để tạo tệp nén mới."),
+    ("This transfer combination is not supported (copy via a local folder).", "Không hỗ trợ kiểu truyền này (hãy sao chép qua một thư mục trên máy)."),
+    ("Refusing an unsafe file name from the server", "Từ chối tên tệp không an toàn từ máy chủ"),
+    ("Not checked", "Chưa kiểm tra"),
+    ("not checked", "chưa kiểm tra"),
+    ("Not all files were checked", "Chưa kiểm tra hết các tệp"),
+    ("Cancelled after {done} of {total} files", "Đã huỷ sau {done} trên {total} tệp"),
+    // fix: file list
+    ("files here", "tệp ở đây"),
+    // fix: dialogs
+    ("Drop files on a file window to copy them there", "Thả tệp vào một cửa sổ tệp để sao chép vào đó"),
+    ("A dropped name has control characters: it is not typed into the terminal", "Tên được thả vào có ký tự điều khiển: không gõ vào terminal"),
+    ("Zoom in", "Phóng to"),
+    ("Zoom out", "Thu nhỏ"),
+    ("Actual size", "Kích thước thật"),
+    // fix: preview and terminal
+    ("…and more", "…và còn nữa"),
+    ("more not shown", "mục nữa không hiển thị"),
+    ("in the files at this level (not counting subfolders)", "trong các tệp ở cấp này (không tính thư mục con)"),
 ];

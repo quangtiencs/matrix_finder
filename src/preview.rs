@@ -186,7 +186,8 @@ enum Loaded {
     Image { rgba: Vec<u8>, w: usize, h: usize, orig: (u32, u32), premultiplied: bool, fmt: String, more_frames: Vec<AnimFrame>, first_delay: f32, details: Vec<crate::certview::Row> },
     Code { lines: Vec<Styled>, bg: Color32, truncated: bool, lang: String },
     Markdown { blocks: Vec<MdBlock>, source: Vec<Styled>, bg: Color32 },
-    Hex { bytes: Vec<u8>, total: usize },
+    /// `total` is how much was read; `more` when the file goes on past it.
+    Hex { bytes: Vec<u8>, total: usize, more: bool },
     Table { data: crate::table::TableData, source: Option<(Vec<Styled>, Color32)> },
     Pdf(Box<crate::docview::PdfView>),
     Notebook(Box<crate::docview::NotebookView>),
@@ -249,7 +250,19 @@ pub struct Preview {
     archive: Option<PathBuf>,
     /// `Enter password` was pressed.
     password_wanted: bool,
+    /// The file's real size, when the caller knows it (only the start may be read).
+    size: Option<u64>,
+    /// When loading started: the spinner shows only for slow files.
+    born: std::time::Instant,
+    /// The context to wake when the loader is done (set on the first frame).
+    wake: Wake,
 }
+
+/// Wakes the UI when a background loader has sent its result.
+type Wake = Arc<std::sync::OnceLock<egui::Context>>;
+
+/// A preview still loading after this long shows a spinner; quicker ones do not flash it.
+const SPINNER_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 
 impl Drop for Preview {
     fn drop(&mut self) {
@@ -313,9 +326,15 @@ impl Drop for LoadingTurn {
     }
 }
 
-/// Load in the background: on a roomy stack, and turning a panic into a message, so a
-/// file that breaks a parser shows an error instead of loading forever.
+#[cfg(test)]
 fn in_background(cancel: Option<crate::media::Cancel>, job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static) -> Receiver<Loaded> {
+    in_background_waking(cancel, Wake::default(), job)
+}
+
+/// Load in the background: on a roomy stack, and turning a panic into a message, so a
+/// file that breaks a parser shows an error instead of loading forever. The UI is woken
+/// when the result is sent.
+fn in_background_waking(cancel: Option<crate::media::Cancel>, wake: Wake, job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static) -> Receiver<Loaded> {
     let (tx, rx) = channel();
     let _ = std::thread::Builder::new().name("preview".into()).stack_size(LOADER_STACK).spawn(move || {
         let _turn = match &cancel {
@@ -331,6 +350,9 @@ fn in_background(cancel: Option<crate::media::Cancel>, job: impl FnOnce(&std::sy
             Loaded::Error(e) if e == LOCKED || crate::archive::is_password_error(&e) => Loaded::Locked,
             other => other,
         });
+        if let Some(ctx) = wake.get() {
+            ctx.request_repaint();
+        }
     });
     rx
 }
@@ -375,7 +397,26 @@ impl Preview {
             cancel: Arc::new(AtomicBool::new(false)),
             archive: None,
             password_wanted: false,
+            size: None,
+            born: std::time::Instant::now(),
+            wake: Wake::default(),
         }
+    }
+
+    /// Set once nobody waits for this preview any more: a loader still reading can stop.
+    pub fn cancel_flag(&self) -> crate::media::Cancel {
+        self.cancel.clone()
+    }
+
+    /// Start loading in the background (with a loading turn when `turn`).
+    fn load(&mut self, turn: bool, job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static) {
+        self.rx = Some(in_background_waking(turn.then(|| self.cancel.clone()), self.wake.clone(), job));
+    }
+
+    /// The file's real size, for a preview that reads only its start.
+    pub fn of_size(mut self, size: u64) -> Self {
+        self.size = Some(size);
+        self
     }
 
     /// This file is in an archive that a password can open.
@@ -395,17 +436,18 @@ impl Preview {
         let theme = syntax_theme.to_string();
         let mut p = Self::blank(key, name, false);
         let cancel = p.cancel.clone();
-        p.rx = Some(in_background(Some(p.cancel.clone()), move |tx| match loader() {
+        p.load(true, move |tx| match loader() {
             Ok(bytes) => {
                 let cut_short = bytes.len() >= limit;
                 match decode(&n, bytes, &theme, max_texture, &cancel, &|early| drop(tx.send(early))) {
                     // What it failed on is the missing rest of the file.
                     Loaded::Error(_) if cut_short => Loaded::Error(format!("{} ({} {})", crate::i18n::t("This file is too large to preview here."), crate::i18n::t("limit:"), human_size(limit as u64))),
+                    Loaded::Hex { bytes, total, .. } => Loaded::Hex { bytes, total, more: cut_short },
                     loaded => loaded,
                 }
             }
             Err(e) => Loaded::Error(e),
-        }));
+        });
         p
     }
 
@@ -424,7 +466,7 @@ impl Preview {
         let mut p = Self::blank(key, name, false);
         let cancel = p.cancel.clone();
         let theme = syntax_theme.to_string();
-        p.rx = Some(in_background(Some(p.cancel.clone()), move |tx| decode_file(&n, &path, &theme, max_texture, &cancel, &|early| drop(tx.send(early)))));
+        p.load(true, move |tx| decode_file(&n, &path, &theme, max_texture, &cancel, &|early| drop(tx.send(early))));
         p
     }
 
@@ -433,7 +475,7 @@ impl Preview {
         let theme = syntax_theme.to_string();
         let n = name.clone();
         let mut p = Self::blank(key, name, true);
-        p.rx = Some(in_background(Some(p.cancel.clone()), move |_| match crate::table::load_path(&path) {
+        p.load(true, move |_| match crate::table::load_path(&path) {
             Ok(data) => {
                 let source = crate::table::source_language(&n).map(|lang| {
                     use std::io::Read;
@@ -454,15 +496,17 @@ impl Preview {
                 }
                 text_instead(e, &head, &n, &theme)
             }
-        }));
+        });
         p
     }
 
-    /// A text summary produced in the background (folders, archives).
-    pub fn text_async(key: String, name: String, f: impl FnOnce() -> String + Send + 'static) -> Self {
+    /// A text summary produced in the background (folders, archives). `f` is given the
+    /// flag that is set once the preview is gone, and should stop early then.
+    pub fn text_async(key: String, name: String, f: impl FnOnce(&crate::media::Cancel) -> String + Send + 'static) -> Self {
         let mut p = Self::blank(key, name, true);
+        let cancel = p.cancel.clone();
         // Summaries take little memory, and may wait long on a slow disk: no turn needed.
-        p.rx = Some(in_background(None, move |_| Loaded::Info(f())));
+        p.load(false, move |_| Loaded::Info(f(&cancel)));
         p
     }
 
@@ -527,6 +571,8 @@ impl Preview {
     fn poll(&mut self, ctx: &egui::Context) {
         use std::sync::mpsc::TryRecvError;
         let Some(rx) = &self.rx else { return };
+        // Set before looking, so a result sent after this look wakes the UI.
+        self.wake.get_or_init(|| ctx.clone());
         match rx.try_recv() {
             Ok(mut l) => {
                 if let Loaded::Image { rgba, w, h, premultiplied, more_frames, first_delay, .. } = &mut l {
@@ -608,7 +654,15 @@ impl Preview {
                 parts.extend(data.info.iter().cloned());
                 vec![(parts.join(" · "), weak)]
             }
-            Some(Loaded::Hex { total, .. }) => vec![(format!("{} · {}", t("Binary"), human_size(*total as u64)), weak)],
+            Some(Loaded::Hex { total, more, .. }) => {
+                let size = match self.size {
+                    Some(s) => human_size(s),
+                    // Only the start was read, and the size is not known: at least this much.
+                    None if *more => format!("≥ {}", human_size(*total as u64)),
+                    None => human_size(*total as u64),
+                };
+                vec![(format!("{} · {size}", t("Binary")), weak)]
+            }
             _ => vec![],
         };
         header_row(ui, theme, &self.name, &facts, |ui| match &self.loaded {
@@ -644,13 +698,21 @@ impl Preview {
         });
         ui.separator();
         let Some(loaded) = &self.loaded else {
+            // Most files load at once: the spinner waits a moment, so they don't flash it.
+            let waited = self.born.elapsed();
+            if waited < SPINNER_DELAY {
+                ui.ctx().request_repaint_after(SPINNER_DELAY - waited);
+                return;
+            }
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(t("Loading…"));
             });
             return;
         };
-        match loaded {
+        // Scroll positions belong to this file: another file starts at the top.
+        let key = self.key.clone();
+        ui.push_id(("preview-body", key), |ui| match loaded {
             // Rendered by their own views above.
             Loaded::Pdf(_) | Loaded::Notebook(_) | Loaded::Model(_) | Loaded::Geo(_) | Loaded::Json(_) => {}
             Loaded::Locked => {
@@ -778,7 +840,7 @@ impl Preview {
                     ui.label(egui::RichText::new(s).monospace().size(12.0));
                 });
             }
-        }
+        });
     }
 }
 
@@ -1907,7 +1969,7 @@ fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, ca
                 let total = bytes.len();
                 let mut b = bytes;
                 b.truncate(16 * 1024);
-                Loaded::Hex { bytes: b, total }
+                Loaded::Hex { bytes: b, total, more: false }
             }
         }
     }

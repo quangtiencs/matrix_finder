@@ -438,12 +438,15 @@ fn to_zip_time(t: SystemTime) -> Option<zip::DateTime> {
 }
 
 fn tar_reader(path: &Path, fmt: ArchiveFormat) -> Res<tar::Archive<Box<dyn Read>>> {
-    let f = BufReader::new(File::open(path).map_err(es)?);
-    let r: Box<dyn Read> = match fmt {
+    tar_reader_of(BufReader::new(File::open(path).map_err(es)?), fmt)
+}
+
+fn tar_reader_of<'a>(f: impl std::io::BufRead + 'a, fmt: ArchiveFormat) -> Res<tar::Archive<Box<dyn Read + 'a>>> {
+    let r: Box<dyn Read + 'a> = match fmt {
         ArchiveFormat::Tar => Box::new(f),
         ArchiveFormat::TarGz => Box::new(flate2::read::MultiGzDecoder::new(f)),
         ArchiveFormat::TarXz => Box::new(xz2::read::XzDecoder::new_multi_decoder(f)),
-        ArchiveFormat::TarZst => Box::new(zstd::stream::read::Decoder::new(f).map_err(es)?),
+        ArchiveFormat::TarZst => Box::new(zstd::stream::read::Decoder::with_buffer(f).map_err(es)?),
         ArchiveFormat::TarBz2 => Box::new(bzip2::read::MultiBzDecoder::new(f)),
         _ => return Err("not a tar archive".into()),
     };
@@ -463,12 +466,39 @@ fn single_reader(path: &Path, fmt: ArchiveFormat) -> Res<Box<dyn Read>> {
 
 /// List every entry of an archive.
 pub fn list(path: &Path) -> Res<Vec<ArchEntry>> {
+    list_until(path, usize::MAX, &|| false).map(|(all, _)| all)
+}
+
+/// A reader that fails once `stop` says so, to end a long read part way.
+struct Stoppable<'a, R> {
+    r: R,
+    stop: &'a dyn Fn() -> bool,
+}
+
+impl<R: Read> Read for Stoppable<'_, R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if (self.stop)() {
+            return Err(std::io::Error::other("stopped"));
+        }
+        self.r.read(buf)
+    }
+}
+
+/// Like `list`, but ends after `max` entries or once `stop` says so (checked between
+/// entries, and while a compressed tar is read through). True when it was cut short.
+pub fn list_until(path: &Path, max: usize, stop: &dyn Fn() -> bool) -> Res<(Vec<ArchEntry>, bool)> {
     let fmt = ArchiveFormat::detect(path).ok_or("Unknown archive format")?;
     let mut out = Vec::new();
+    let mut cut = false;
+    let full = |out: &Vec<ArchEntry>| out.len() >= max || stop();
     match fmt {
         ArchiveFormat::Zip => {
             let mut z = zip::ZipArchive::new(BufReader::new(File::open(path).map_err(es)?)).map_err(es)?;
             for i in 0..z.len() {
+                if full(&out) {
+                    cut = true;
+                    break;
+                }
                 let f = z.by_index_raw(i).map_err(es)?;
                 let Some(name) = f.enclosed_name() else { continue };
                 out.push(ArchEntry {
@@ -486,6 +516,10 @@ pub fn list(path: &Path) -> Res<Vec<ArchEntry>> {
             }
             .map_err(sevenz_err)?;
             for f in &a.files {
+                if full(&out) {
+                    cut = true;
+                    break;
+                }
                 out.push(ArchEntry {
                     path: norm(f.name()),
                     is_dir: f.is_directory(),
@@ -502,6 +536,10 @@ pub fn list(path: &Path) -> Res<Vec<ArchEntry>> {
             let password = password_for(path);
             let arch = rar_archive(path, &password).open_for_listing().map_err(rar_err)?;
             for e in arch {
+                if full(&out) {
+                    cut = true;
+                    break;
+                }
                 let e = e.map_err(rar_err)?;
                 out.push(ArchEntry {
                     path: norm(&e.filename.to_string_lossy()),
@@ -512,9 +550,22 @@ pub fn list(path: &Path) -> Res<Vec<ArchEntry>> {
             }
         }
         ArchiveFormat::Tar | ArchiveFormat::TarGz | ArchiveFormat::TarXz | ArchiveFormat::TarZst | ArchiveFormat::TarBz2 => {
-            let mut a = tar_reader(path, fmt)?;
+            // The whole stream is read through: stop part way when asked.
+            let f = BufReader::new(Stoppable { r: File::open(path).map_err(es)?, stop });
+            let mut a = tar_reader_of(f, fmt)?;
             for e in a.entries().map_err(es)? {
-                let e = e.map_err(es)?;
+                if full(&out) {
+                    cut = true;
+                    break;
+                }
+                let e = match e {
+                    Ok(e) => e,
+                    Err(_) if stop() => {
+                        cut = true;
+                        break;
+                    }
+                    Err(e) => return Err(es(e)),
+                };
                 let p = e.path().map_err(es)?.to_string_lossy().to_string();
                 let h = e.header();
                 out.push(ArchEntry {
@@ -536,7 +587,7 @@ pub fn list(path: &Path) -> Res<Vec<ArchEntry>> {
         }
     }
     out.retain(|e| !e.path.is_empty());
-    Ok(out)
+    Ok((out, cut))
 }
 
 /// Direct children of `inner` (implicit directories are synthesised).
@@ -1439,6 +1490,25 @@ mod tests {
             let all = dir.join("all");
             extract(&dest, &all, &[], "", Conflict::Overwrite, &Progress::default()).unwrap();
             assert!(all.join("src/a.txt").exists(), "{fmt:?}");
+            let _ = std::fs::remove_dir_all(&dir);
+        }
+    }
+
+    /// A summary can end a listing part way: after some entries, or when told to stop
+    /// (a compressed tar is otherwise read through to its end).
+    #[test]
+    fn listing_stops_when_asked() {
+        for fmt in [ArchiveFormat::Zip, ArchiveFormat::TarGz, ArchiveFormat::TarZst] {
+            let dir = tmpdir(&format!("stop-{}", fmt.extension()));
+            let src = sample(&dir);
+            let dest = dir.join(format!("out.{}", fmt.extension()));
+            create(&[src], None, &dest, fmt, 6, &[], &Progress::default()).unwrap();
+            let (all, cut) = list_until(&dest, usize::MAX, &|| false).unwrap();
+            assert!(!cut && all.len() >= 4, "{fmt:?}: {all:?}");
+            let (some, cut) = list_until(&dest, 2, &|| false).unwrap();
+            assert!(cut && some.len() == 2, "{fmt:?}: {some:?}");
+            let (none, cut) = list_until(&dest, usize::MAX, &|| true).unwrap();
+            assert!(cut && none.is_empty(), "{fmt:?}: {none:?}");
             let _ = std::fs::remove_dir_all(&dir);
         }
     }

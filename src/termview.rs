@@ -166,6 +166,8 @@ pub struct TermSession {
     cell: egui::Vec2,
     last_drawn: u64,
     scroll_acc: f32,
+    /// Pinch zoom not yet turned into a text size step.
+    pinch: f32,
     /// Selection drag in progress.
     selecting: bool,
     /// Mouse button held while reporting to the program.
@@ -176,6 +178,9 @@ pub struct TermSession {
     report_dragging: bool,
     last_report_cell: Option<(usize, usize)>,
     skip_text: bool,
+    /// Text an input method is composing (Telex, pinyin, kana…): drawn at the cursor,
+    /// sent only once it is committed.
+    preedit: String,
     /// Whether the program was last told the terminal has focus (focus reports, mode 1004).
     reported_focus: Option<bool>,
     /// Link under the right-click menu.
@@ -272,6 +277,8 @@ impl TermSession {
             cell: vec2(8.0, 16.0),
             last_drawn: 0,
             scroll_acc: 0.0,
+            pinch: 1.0,
+            preedit: String::new(),
             selecting: false,
             report_button: None,
             report_press: None,
@@ -370,8 +377,8 @@ impl TermSession {
     }
 
     /// Make the shell change to `dir`: clear what is typed on the prompt line, then
-    /// run the shell's own `cd`. False (nothing sent) when the shell has exited or a
-    /// full-screen program (vim, less, …) has the terminal.
+    /// run the shell's own `cd`. False (nothing sent) when the shell has exited or
+    /// another program (ssh, python, vim, …) has the terminal.
     pub fn cd(&mut self, dir: &Path) -> bool {
         let d = dir.to_string_lossy();
         let line = match self.shell_name().to_lowercase().as_str() {
@@ -418,10 +425,10 @@ impl TermSession {
     }
 
     /// Clear what is typed on the prompt line, type `line` and press Enter. False
-    /// (nothing sent) when the shell has exited or a full-screen program (vim,
-    /// less, …) has the terminal.
+    /// (nothing sent) unless the shell waits at its prompt: the keys would go to
+    /// whatever program runs in front of it (ssh, python, vim, …).
     fn run_line(&mut self, line: &str) -> bool {
-        if self.exited.is_some() || self.term.lock().mode().contains(TermMode::ALT_SCREEN) {
+        if !self.is_idle() {
             return false;
         }
         // Typed into the shell, a control character in a path (a folder can be named
@@ -605,6 +612,9 @@ impl TermSession {
             });
         }
         self.report_focus(focused && ui.input(|i| i.focused));
+        if !focused {
+            self.preedit.clear();
+        }
 
         // Cell metrics and grid size.
         let size = o.font_size.clamp(6.0, 48.0);
@@ -799,6 +809,26 @@ impl TermSession {
             }
         }
 
+        // Input methods (Vietnamese Telex, Chinese, Japanese…): the text being composed
+        // shows at the cursor, underlined, and the input method's window opens next to it.
+        if focused && self.exited.is_none() {
+            let at = if offset == 0 && crow >= 0 && (crow as usize) < self.lines {
+                pos2(origin.x + ccol.min(self.cols - 1) as f32 * cw, origin.y + crow as f32 * chh)
+            } else {
+                origin
+            };
+            let mut ime_rect = Rect::from_min_size(at, vec2(cw, chh));
+            if !self.preedit.is_empty() {
+                let width = ui.fonts(|f| f.layout_no_wrap(self.preedit.clone(), font.clone(), pal.fg).size().x).max(cw);
+                ime_rect = Rect::from_min_size(at, vec2(width, chh));
+                painter.rect_filled(ime_rect, 0.0, pal.bg);
+                self.paint_text(&painter, at, &self.preedit, &font, pal.fg, Flags::UNDERLINE, width);
+                painter.rect_filled(Rect::from_min_size(pos2(ime_rect.right(), at.y), vec2(2.0, chh)), 0.0, pal.cursor);
+            }
+            let to_global = ui.ctx().layer_transform_to_global(ui.layer_id()).unwrap_or_default();
+            ui.ctx().output_mut(|out| out.ime = Some(egui::output::IMEOutput { rect: to_global * ime_rect, cursor_rect: to_global * ime_rect }));
+        }
+
         // Scrollback position indicator.
         if offset > 0 && history > 0 {
             let total = (history + self.lines) as f32;
@@ -838,11 +868,15 @@ impl TermSession {
             painter.galley(r.min + vec2(12.0, 6.0), g, th.text);
         }
 
-        // Right-click menu.
+        // Right-click menu. A program that reads the mouse (vim, htop, tmux…) gets the
+        // right click instead; Shift+right-click still opens the menu.
+        let program_mouse = self.exited.is_none() && self.term.lock().mode().intersects(TermMode::MOUSE_MODE) && !ui.input(|i| i.modifiers.shift);
         if resp.secondary_clicked() {
             self.menu_link = hover_link.as_ref().map(|l| l.url.clone());
         }
-        resp.context_menu(|ui| self.context_menu(ui, o, &mut out));
+        if !(program_mouse && resp.secondary_clicked()) {
+            resp.context_menu(|ui| self.context_menu(ui, o, &mut out));
+        }
         ui.advance_cursor_after_rect(rect);
         out
     }
@@ -990,16 +1024,28 @@ impl TermSession {
         for e in events {
             match e {
                 egui::Event::Text(t) => {
-                    if std::mem::take(&mut self.skip_text) {
+                    // While an input method composes, the keys are its own.
+                    if std::mem::take(&mut self.skip_text) || !self.preedit.is_empty() {
                         continue;
                     }
                     self.write(t.into_bytes());
                     typed = true;
                 }
-                egui::Event::Ime(egui::ImeEvent::Commit(t)) => {
-                    self.write(t.into_bytes());
+                egui::Event::Ime(egui::ImeEvent::Preedit(t)) => {
+                    self.preedit = t;
                     typed = true;
                 }
+                egui::Event::Ime(egui::ImeEvent::Commit(t)) => {
+                    self.preedit.clear();
+                    // An Enter that ends a composition is not sent as a line.
+                    if !t.is_empty() && t != "\n" && t != "\r" {
+                        self.write(t.into_bytes());
+                        typed = true;
+                    }
+                }
+                egui::Event::Ime(egui::ImeEvent::Disabled) => self.preedit.clear(),
+                // Keys the input method also handles while it composes (like egui's text edit).
+                egui::Event::Key { repeat: true, .. } | egui::Event::Key { key: Key::Backspace | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, .. } if !self.preedit.is_empty() => {}
                 egui::Event::Copy => {
                     // Cmd+C / Ctrl+Shift+C copy. Plain Ctrl+C copies too while text is
                     // selected (and clears the selection), otherwise it interrupts.
@@ -1109,9 +1155,20 @@ impl TermSession {
         let offset = self.term.lock().grid().display_offset();
         let reporting = mode.intersects(TermMode::MOUSE_MODE) && !mods.shift;
 
-        // Ctrl+wheel (pinch) changes the font size.
+        // Pinch (and Ctrl+wheel) scales the text with the gesture, in half points.
         if hovered && zoom != 1.0 {
-            out.font_delta += if zoom > 1.0 { 1.0 } else { -1.0 };
+            let sizes = crate::fonts::TERM_SIZES;
+            let (lo, hi) = (sizes.start().min(o.font_size), sizes.end().max(o.font_size));
+            self.pinch *= zoom;
+            let want = ((o.font_size * self.pinch * 2.0).round() / 2.0).clamp(lo, hi);
+            if want != o.font_size {
+                out.font_delta += want - o.font_size;
+                // Keep what is left over for the next step.
+                self.pinch = o.font_size * self.pinch / want;
+            } else if want == lo || want == hi {
+                // Past the smallest or largest size, nothing builds up.
+                self.pinch = 1.0;
+            }
             return;
         }
 
