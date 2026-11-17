@@ -1568,7 +1568,9 @@ fn key_char(k: Key) -> Option<u8> {
 fn kitty_key_bytes(key: Key, m: Modifiers, mode: TermMode, mac: bool, event: KeyEvent) -> Option<(Vec<u8>, bool)> {
     let all = mode.contains(TermMode::REPORT_ALL_KEYS_AS_ESC);
     let events = mode.contains(TermMode::REPORT_EVENT_TYPES);
-    if event != KeyEvent::Press && !events {
+    // Without event types a held key repeats as presses; only releases are left out.
+    let event = if event == KeyEvent::Repeat && !events { KeyEvent::Press } else { event };
+    if event == KeyEvent::Release && !events {
         return None;
     }
     let text_key = key_char(key);
@@ -1980,6 +1982,11 @@ mod tests {
         assert_eq!(release(Key::Escape, Modifiers::NONE, flags), None);
         assert_eq!(release(Key::Escape, Modifiers::NONE, ev), Some("\x1b[27;1:3u".into()));
         assert_eq!(release(Key::Enter, Modifiers::NONE, ev), None);
+        // A held key repeats as presses unless event types are reported.
+        let repeat = |key, m, mode| kitty_key_bytes(key, m, mode, false, KeyEvent::Repeat).map(|(b, _)| String::from_utf8(b).unwrap());
+        assert_eq!(repeat(Key::ArrowLeft, Modifiers::NONE, flags), Some("\x1b[D".into()));
+        assert_eq!(repeat(Key::Backspace, Modifiers::NONE, flags), Some("\x7f".into()));
+        assert_eq!(repeat(Key::ArrowLeft, Modifiers::NONE, ev), Some("\x1b[1;1:2D".into()));
         // macOS Option composes text.
         assert_eq!(kitty_key_bytes(Key::E, Modifiers::ALT, flags, true, KeyEvent::Press), None);
     }
