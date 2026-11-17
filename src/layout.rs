@@ -210,6 +210,13 @@ impl Layout {
         let pos = l.iter().position(|&i| i == current).unwrap_or(0);
         l[(pos + 1) % l.len()]
     }
+
+    /// Pane before `current` in reading order (for Shift+Tab).
+    pub fn prev_before(&self, current: usize) -> usize {
+        let l = self.leaves();
+        let pos = l.iter().position(|&i| i == current).unwrap_or(0);
+        l[(pos + l.len() - 1) % l.len()]
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +278,8 @@ mod tests {
         assert_eq!(l.leaves(), vec![2, 0, 1]);
         assert_eq!(l.next_after(2), 0);
         assert_eq!(l.next_after(1), 2);
+        assert_eq!(l.prev_before(2), 1);
+        assert_eq!(l.prev_before(0), 2);
     }
 
     #[test]

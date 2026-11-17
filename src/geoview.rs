@@ -1233,7 +1233,8 @@ impl GeoView {
         });
         ui.separator();
         if let (true, Some((lines, bg))) = (self.show_source, &self.source) {
-            crate::preview::code_view(ui, lines, *bg, false, th);
+            // Its scroll position belongs to this file.
+            ui.push_id(("source", key), |ui| crate::preview::code_view(ui, lines, *bg, false, th));
             return;
         }
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());

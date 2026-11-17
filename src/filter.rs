@@ -89,13 +89,13 @@ impl Filter {
             .or_else(|| s.strip_prefix("WHERE "))
             .unwrap_or(s);
         if looks_like_sql(s) {
-            let tokens = tokenize(s)?;
-            let mut p = Parser { t: tokens, i: 0 };
-            let e = p.or()?;
-            if p.i < p.t.len() {
-                return Err(format!("Unexpected '{}'", p.t[p.i].text()));
+            match parse_sql(s) {
+                Ok(e) => return Ok(Filter::Expr(e)),
+                // Only words so far ("not" on the way to "notebook", "name in" for "name index"):
+                // plain text, not an error.
+                Err(_) if plain_words(s) => {}
+                Err(e) => return Err(e),
             }
-            return Ok(Filter::Expr(e));
         }
         // Extension list: every token starts with '.'
         let parts: Vec<&str> = s
@@ -118,7 +118,7 @@ impl Filter {
             }
             return Ok(expr.map(Filter::Expr).unwrap_or(Filter::All));
         }
-        Ok(Filter::Substring(s.to_lowercase()))
+        Ok(Filter::Substring(fold(s)))
     }
 
     /// Whether `e` passes, from what the listing knows: `source` never matches here.
@@ -131,7 +131,7 @@ impl Filter {
     pub fn matches_at(&self, e: &Entry, path: Option<&Path>, stop: &AtomicBool) -> bool {
         match self {
             Filter::All => true,
-            Filter::Substring(s) => e.name.to_lowercase().contains(s),
+            Filter::Substring(s) => fold(&e.name).contains(s),
             Filter::Exts(exts) => !e.is_dir && exts.iter().any(|x| *x == e.ext),
             Filter::Expr(x) => eval(x, e, path, stop),
         }
@@ -151,6 +151,43 @@ impl Filter {
 
     pub fn is_all(&self) -> bool {
         matches!(self, Filter::All)
+    }
+}
+
+/// Text that reads as words being typed rather than SQL: no operators or quotes, and no
+/// keyword written in capitals (`name LIKE` is SQL in the making, `name like` may be a name).
+fn plain_words(s: &str) -> bool {
+    s.chars().all(|c| c.is_alphanumeric() || c.is_whitespace() || matches!(c, '-' | '_' | '.'))
+        && !s.split_whitespace().any(|w| matches!(w, "LIKE" | "ILIKE" | "GLOB" | "IN" | "AND" | "OR" | "NOT" | "REGEXP" | "RLIKE"))
+}
+
+fn parse_sql(s: &str) -> Result<Expr, String> {
+    let tokens = tokenize(s)?;
+    let mut p = Parser { t: tokens, i: 0 };
+    let e = p.or()?;
+    if p.i < p.t.len() {
+        return Err(format!("Unexpected '{}'", p.t[p.i].text()));
+    }
+    Ok(e)
+}
+
+/// Lower case in one Unicode form (NFC), so that a name stored decomposed (macOS,
+/// zip files: "e" + combining accents) matches what is typed.
+pub fn fold(s: &str) -> String {
+    if s.is_ascii() {
+        s.to_ascii_lowercase()
+    } else {
+        nfc(s).to_lowercase()
+    }
+}
+
+/// `s` in composed form (NFC).
+pub fn nfc(s: &str) -> std::borrow::Cow<'_, str> {
+    use unicode_normalization::UnicodeNormalization;
+    if s.is_ascii() || unicode_normalization::is_nfc(s) {
+        std::borrow::Cow::Borrowed(s)
+    } else {
+        std::borrow::Cow::Owned(s.nfc().collect())
     }
 }
 
@@ -412,7 +449,7 @@ impl Parser {
                 Some(t) => return Err(format!("Expected a pattern, found '{}'", t.text())),
                 None => return Err("Expected a pattern".into()),
             };
-            let re = regex::RegexBuilder::new(&pattern)
+            let re = regex::RegexBuilder::new(&nfc(&pattern))
                 .case_insensitive(!case_sensitive)
                 .size_limit(MAX_REGEX)
                 .build()
@@ -479,7 +516,7 @@ impl Parser {
             Field::Size => Value::Num(parse_size(&raw).ok_or(format!("Bad size '{raw}' (e.g. 10MB)"))?),
             Field::Age => Value::Num(parse_age(&raw).ok_or(format!("Bad age '{raw}' (e.g. 7d, 12h)"))?),
             Field::Modified => Value::Num(parse_date(&raw).ok_or(format!("Bad date '{raw}' (YYYY-MM-DD)"))?),
-            _ => Value::Str(raw.to_lowercase()),
+            _ => Value::Str(fold(&raw)),
         })
     }
 }
@@ -590,7 +627,7 @@ fn eval(x: &Expr, e: &Entry, path: Option<&Path>, stop: &AtomicBool) -> bool {
         Expr::Regex { field, re, negate } => match field {
             Field::Source => source_matches(e, path, stop, |l| re.is_match(l), *negate),
             Field::Ext => re.is_match(&e.ext) != *negate,
-            _ => re.is_match(&e.name) != *negate,
+            _ => re.is_match(&nfc(&e.name)) != *negate,
         },
         Expr::Cmp { field: Field::Source, op, values } => {
             let Some(Value::Str(pattern)) = values.first() else { return false };
@@ -598,7 +635,7 @@ fn eval(x: &Expr, e: &Entry, path: Option<&Path>, stop: &AtomicBool) -> bool {
         }
         Expr::Cmp { field, op, values } => {
             let text: Option<String> = match field {
-                Field::Name => Some(e.name.to_lowercase()),
+                Field::Name => Some(fold(&e.name)),
                 Field::Ext => Some(e.ext.clone()),
                 Field::Type => Some(if e.is_dir { "dir".into() } else { "file".into() }),
                 Field::Hidden => Some(e.hidden.to_string()),
@@ -702,6 +739,32 @@ mod tests {
         assert!(like("50%off", "50\\%%"));
         assert!(like("anything", "%"));
         assert!(like("abcabd", "%ab_"));
+    }
+
+    #[test]
+    fn typing_words_is_plain_text() {
+        // On the way to "notebook" and "name index": no error, a plain search.
+        for s in ["not", "Not ", "name in", "name and"] {
+            assert!(matches!(Filter::parse(s), Ok(Filter::Substring(_))), "{s}");
+        }
+        let f = Filter::parse("not").unwrap();
+        assert!(f.matches(&file("notebook.ipynb", 1)) && !f.matches(&file("main.rs", 1)));
+        // Real SQL mistakes still show.
+        assert!(Filter::parse("size > ").is_err());
+        assert!(Filter::parse("name = ").is_err() && Filter::parse("NOT").is_err());
+        assert!(matches!(Filter::parse("NOT name LIKE '.%'"), Ok(Filter::Expr(_))));
+    }
+
+    #[test]
+    fn decomposed_names_match() {
+        use unicode_normalization::UnicodeNormalization;
+        // A name as macOS and zip files often store it: letters + combining accents.
+        let nfd: String = "Báo cáo Đà Nẵng.pdf".nfd().collect();
+        let e = file(&nfd, 1);
+        assert!(Filter::parse("nẵng").unwrap().matches(&e));
+        assert!(Filter::parse("báo cáo").unwrap().matches(&e));
+        assert!(Filter::parse("name LIKE '%đà%'").unwrap().matches(&e));
+        assert!(Filter::parse("name REGEXP 'nẵng'").unwrap().matches(&e));
     }
 
     #[test]

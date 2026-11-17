@@ -99,6 +99,9 @@ pub enum Action {
     Backup,
     Settings,
     Help,
+    ZoomIn,
+    ZoomOut,
+    ZoomReset,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -210,6 +213,9 @@ const DEFS: &[Def] = &[
     def(A::Backup, "backup", G::App, false, &["Ctrl+B"], &["Ctrl+B"], &["Cmd+B"]),
     def(A::Settings, "settings", G::App, true, &["Ctrl+Comma", "Ctrl+Shift+Comma"], &["Ctrl+Comma", "Ctrl+Shift+Comma"], &["Cmd+Comma"]),
     def(A::Help, "help", G::App, true, &["F1", "Ctrl+Shift+Slash"], &["F1", "Ctrl+Shift+Slash"], &["F1", "Cmd+Shift+Slash"]),
+    def(A::ZoomIn, "zoom_in", G::App, true, &["Ctrl+Equals", "Ctrl+Plus", "Ctrl+Shift+Equals"], &["Ctrl+Equals", "Ctrl+Plus", "Ctrl+Shift+Equals"], &["Cmd+Equals", "Cmd+Plus", "Cmd+Shift+Equals"]),
+    def(A::ZoomOut, "zoom_out", G::App, true, &["Ctrl+Minus", "Ctrl+Shift+Minus"], &["Ctrl+Minus", "Ctrl+Shift+Minus"], &["Cmd+Minus"]),
+    def(A::ZoomReset, "zoom_reset", G::App, true, &["Ctrl+0", "Ctrl+Shift+0"], &["Ctrl+0", "Ctrl+Shift+0"], &["Cmd+0"]),
 ];
 
 fn def_of(action: Action) -> &'static Def {
@@ -296,6 +302,9 @@ impl Action {
             A::Backup => t("Backup…"),
             A::Settings => t("Settings…"),
             A::Help => t("Keyboard shortcuts"),
+            A::ZoomIn => t("Zoom in"),
+            A::ZoomOut => t("Zoom out"),
+            A::ZoomReset => t("Actual size"),
         }
     }
 }

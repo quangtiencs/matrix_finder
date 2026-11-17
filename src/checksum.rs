@@ -313,12 +313,21 @@ impl Row {
     }
 }
 
+/// What the hashing thread reports.
+enum Msg {
+    /// The files found under the chosen ones, listed in the background.
+    Rows(Vec<(String, PathBuf, u64)>),
+    /// Row `i` was hashed.
+    Hashed(usize, Result<String, String>),
+}
+
 struct Worker {
-    rx: Receiver<(usize, Result<String, String>)>,
+    rx: Receiver<Msg>,
     cancel: Arc<AtomicBool>,
     bytes: Arc<AtomicU64>,
     current: Arc<Mutex<String>>,
-    total: u64,
+    /// Bytes to hash; known once the files are listed.
+    total: Arc<AtomicU64>,
     started: Instant,
 }
 
@@ -337,10 +346,16 @@ pub struct ChecksumUi {
     worker: Option<Worker>,
     elapsed: f32,
     note: Option<(String, bool)>,
+    /// Files and folders still to be listed into `rows` (by the worker, as walking big
+    /// folders takes a while).
+    sources: Vec<PathBuf>,
+    /// The last run was cancelled before every row was hashed.
+    cancelled: bool,
 }
 
-/// Files under `paths` (folders are walked), as (relative name, path, size).
-fn collect(base: &Path, paths: &[PathBuf]) -> Vec<(String, PathBuf, u64)> {
+/// Files under `paths` (folders are walked), as (relative name, path, size). Stops early
+/// once `cancel` is set.
+fn collect(base: &Path, paths: &[PathBuf], cancel: &AtomicBool) -> Vec<(String, PathBuf, u64)> {
     let mut out = Vec::new();
     let rel = |p: &Path| -> String {
         let r = p.strip_prefix(base).unwrap_or(p);
@@ -351,6 +366,7 @@ fn collect(base: &Path, paths: &[PathBuf]) -> Vec<(String, PathBuf, u64)> {
             let mut files: Vec<_> = walkdir::WalkDir::new(p)
                 .follow_links(false)
                 .into_iter()
+                .take_while(|_| !cancel.load(Ordering::Relaxed))
                 .flatten()
                 .filter(|e| e.file_type().is_file())
                 .map(|e| {
@@ -382,10 +398,9 @@ impl ChecksumUi {
         self.stop();
         let last = LAST_ALGO.lock().ok().and_then(|a| *a);
         let algo = self.algo.or(last).unwrap_or(Algo::Sha256);
-        self.rows = collect(&base, &paths)
-            .into_iter()
-            .map(|(name, path, size)| Row { name, path, size, algo, expected: None, state: State::Pending })
-            .collect();
+        // Listed by the worker: folders can hold a great many files.
+        self.rows.clear();
+        self.sources = paths;
         self.base = base;
         self.list_file = None;
         self.algo = Some(algo);
@@ -427,6 +442,7 @@ impl ChecksumUi {
             })
             .collect();
         self.base = base;
+        self.sources.clear();
         self.list_file = Some(file);
         self.algo = None;
         self.compare.clear();
@@ -459,24 +475,47 @@ impl ChecksumUi {
         }
     }
 
-    /// Hash every pending row in a background thread.
+    /// Hash every pending row in a background thread (listing the files first if needed).
     fn run(&mut self, ctx: &egui::Context) {
         self.stop();
-        let jobs: Vec<(usize, PathBuf, Algo)> =
-            self.rows.iter().enumerate().filter(|(_, r)| r.state == State::Pending).map(|(i, r)| (i, r.path.clone(), r.algo)).collect();
-        if jobs.is_empty() {
+        self.cancelled = false;
+        let algo = self.algo.unwrap_or(Algo::Sha256);
+        let listing = (!self.sources.is_empty()).then(|| (self.base.clone(), self.sources.clone()));
+        let jobs: Vec<(usize, PathBuf, Algo, String)> = self
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| r.state == State::Pending)
+            .map(|(i, r)| (i, r.path.clone(), r.algo, r.name.clone()))
+            .collect();
+        if jobs.is_empty() && listing.is_none() {
             return;
         }
-        let total = jobs.iter().map(|(i, ..)| self.rows[*i].size).sum();
+        let total = Arc::new(AtomicU64::new(jobs.iter().map(|(i, ..)| self.rows[*i].size).sum()));
         let (tx, rx) = channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let bytes = Arc::new(AtomicU64::new(0));
         let current = Arc::new(Mutex::new(String::new()));
-        let names: Vec<String> = jobs.iter().map(|(i, ..)| self.rows[*i].name.clone()).collect();
-        let (c2, b2, cur2, ctx2) = (cancel.clone(), bytes.clone(), current.clone(), ctx.clone());
+        let (c2, b2, cur2, t2, ctx2) = (cancel.clone(), bytes.clone(), current.clone(), total.clone(), ctx.clone());
         std::thread::spawn(move || {
+            let jobs = match listing {
+                Some((base, paths)) => {
+                    let found = collect(&base, &paths, &c2);
+                    if c2.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    t2.store(found.iter().map(|f| f.2).sum(), Ordering::Relaxed);
+                    let jobs = found.iter().enumerate().map(|(i, (name, path, _))| (i, path.clone(), algo, name.clone())).collect();
+                    if tx.send(Msg::Rows(found)).is_err() {
+                        return;
+                    }
+                    ctx2.request_repaint();
+                    jobs
+                }
+                None => jobs,
+            };
             let mut last = Instant::now();
-            for ((i, path, algo), name) in jobs.into_iter().zip(names) {
+            for (i, path, algo, name) in jobs {
                 if c2.load(Ordering::Relaxed) {
                     return;
                 }
@@ -493,7 +532,7 @@ impl ChecksumUi {
                         !c2.load(Ordering::Relaxed)
                     })
                 });
-                if c2.load(Ordering::Relaxed) || tx.send((i, res)).is_err() {
+                if c2.load(Ordering::Relaxed) || tx.send(Msg::Hashed(i, res)).is_err() {
                     return;
                 }
                 ctx2.request_repaint();
@@ -507,7 +546,12 @@ impl ChecksumUi {
         let mut finished = false;
         loop {
             match w.rx.try_recv() {
-                Ok((i, res)) => {
+                Ok(Msg::Rows(found)) => {
+                    let algo = self.algo.unwrap_or(Algo::Sha256);
+                    self.rows = found.into_iter().map(|(name, path, size)| Row { name, path, size, algo, expected: None, state: State::Pending }).collect();
+                    self.sources.clear();
+                }
+                Ok(Msg::Hashed(i, res)) => {
                     if let Some(r) = self.rows.get_mut(i) {
                         r.state = match res {
                             Ok(h) => State::Done(h),
@@ -524,8 +568,15 @@ impl ChecksumUi {
         }
         if finished {
             self.elapsed = w.started.elapsed().as_secs_f32();
+            // Stopped before the end: what was not hashed says so, nothing claims success.
+            self.cancelled = w.cancel.load(Ordering::Relaxed) && (!self.sources.is_empty() || self.rows.iter().any(|r| r.state == State::Pending));
             self.worker = None;
         }
+    }
+
+    /// Rows not hashed (yet, or at all after a cancel).
+    fn unchecked(&self) -> usize {
+        self.rows.iter().filter(|r| r.state == State::Pending).count()
     }
 
     fn done_list(&self) -> Vec<(String, String)> {
@@ -626,6 +677,8 @@ impl ChecksumUi {
                             Some(e) => match self.rows.iter().find(|r| r.state == State::Done(e.clone())) {
                                 Some(r) => (format!("✔ {} {}", t("Matches"), r.name), ok_color(th)),
                                 None if self.worker.is_some() => (t("Calculating…"), th.weak),
+                                // Files that were never hashed may still match.
+                                None if self.cancelled => (t("Not all files were checked"), th.weak),
                                 None => (format!("✘ {}", t("No file matches this checksum")), th.danger),
                             },
                         };
@@ -637,15 +690,17 @@ impl ChecksumUi {
                 // Progress.
                 if let Some(w) = &self.worker {
                     let done = w.bytes.load(Ordering::Relaxed);
-                    let frac = if w.total > 0 { done as f32 / w.total as f32 } else { 0.0 };
+                    let total = w.total.load(Ordering::Relaxed);
+                    let frac = if total > 0 { done as f32 / total as f32 } else { 0.0 };
                     let secs = w.started.elapsed().as_secs_f32().max(0.001);
                     let cur = w.current.lock().map(|c| c.clone()).unwrap_or_default();
+                    let text = if self.sources.is_empty() {
+                        format!("{} / {} · {}/s · {cur}", human_size(done), human_size(total), human_size((done as f32 / secs) as u64))
+                    } else {
+                        t("Scanning…")
+                    };
                     ui.horizontal(|ui| {
-                        ui.add(
-                            egui::ProgressBar::new(frac.min(1.0))
-                                .desired_width(ui.available_width() - 90.0)
-                                .text(format!("{} / {} · {}/s · {cur}", human_size(done), human_size(w.total), human_size((done as f32 / secs) as u64))),
-                        );
+                        ui.add(egui::ProgressBar::new(frac.min(1.0)).desired_width(ui.available_width() - 90.0).text(text));
                         if ui.button(t("Cancel")).clicked() {
                             w.cancel.store(true, Ordering::Relaxed);
                         }
@@ -690,6 +745,7 @@ impl ChecksumUi {
                             });
                         })
                         .body(|body| {
+                            let running = self.worker.is_some();
                             body.rows(22.0, self.rows.len(), |mut row| {
                                 let r = &self.rows[row.index()];
                                 let good = r.verdict().or_else(|| match (&match_hash, &r.state) {
@@ -700,7 +756,7 @@ impl ChecksumUi {
                                     let (sym, c) = match (&r.state, good) {
                                         (_, Some(true)) => ("✔", ok_color(th)),
                                         (_, Some(false)) => ("✘", th.danger),
-                                        (State::Pending, _) => ("…", th.weak),
+                                        (State::Pending, _) if running => ("…", th.weak),
                                         (State::Error(_) | State::Missing, _) => ("⚠", th.danger),
                                         _ => ("", th.weak),
                                     };
@@ -728,8 +784,11 @@ impl ChecksumUi {
                                             copy = Some(h.clone());
                                         }
                                     }
-                                    State::Pending => {
+                                    State::Pending if running => {
                                         ui.label(RichText::new(t("Calculating…")).color(th.weak));
+                                    }
+                                    State::Pending => {
+                                        ui.label(RichText::new(t("Not checked")).color(th.weak));
                                     }
                                     State::Missing => {
                                         ui.label(RichText::new(t("File not found")).color(th.danger));
@@ -753,23 +812,33 @@ impl ChecksumUi {
                         let ok = self.rows.iter().filter(|r| r.verdict() == Some(true)).count();
                         let bad = self.rows.iter().filter(|r| matches!(r.state, State::Done(_) | State::Error(_)) && r.verdict() == Some(false)).count();
                         let missing = self.rows.iter().filter(|r| r.state == State::Missing).count();
-                        let text = format!("{ok} {} · {bad} {} · {missing} {}", t("OK"), t("failed"), t("missing"));
-                        let color = if bad + missing > 0 { th.danger } else if self.worker.is_none() { ok_color(th) } else { th.weak };
+                        let mut text = format!("{ok} {} · {bad} {} · {missing} {}", t("OK"), t("failed"), t("missing"));
+                        let unchecked = self.unchecked();
+                        if self.worker.is_none() && unchecked > 0 {
+                            text.push_str(&format!(" · {unchecked} {}", t("not checked")));
+                        }
+                        // Green only when every file was checked and matched.
+                        let color = if bad + missing > 0 { th.danger } else if self.worker.is_none() && unchecked == 0 { ok_color(th) } else { th.weak };
                         ui.label(RichText::new(text).strong().color(color));
                     } else if let Some((n, err)) = &self.note {
                         ui.label(RichText::new(n).color(if *err { th.danger } else { th.weak }));
+                    } else if self.worker.is_none() && self.cancelled {
+                        let n = self.rows.len();
+                        let text = t("Cancelled after {done} of {total} files").replace("{done}", &(n - self.unchecked()).to_string()).replace("{total}", &n.to_string());
+                        ui.label(RichText::new(text).color(th.weak));
                     } else if self.worker.is_none() && !self.rows.is_empty() {
                         ui.label(RichText::new(format!("{} {:.1} s", t("Done in"), self.elapsed)).color(th.weak));
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let list = self.done_list();
+                        // Not built every frame: only when it is copied.
+                        let any_done = self.rows.iter().any(|r| matches!(r.state, State::Done(_)));
                         let idle = self.worker.is_none();
                         if !verify {
                             let algo = self.algo.unwrap_or(Algo::Sha256);
                             let b = egui::Button::new(RichText::new(t("Save checksum file…")).strong().color(th.on_accent()))
-                                .fill(if idle && !list.is_empty() { th.accent } else { th.surface })
+                                .fill(if idle && any_done { th.accent } else { th.surface })
                                 .min_size(egui::vec2(0.0, 30.0));
-                            if ui.add_enabled(idle && !list.is_empty(), b).clicked() {
+                            if ui.add_enabled(idle && any_done, b).clicked() {
                                 let dlg = rfd::FileDialog::new().set_directory(&self.base).set_file_name(self.default_list_name(algo));
                                 if let Some(p) = dlg.save_file() {
                                     // Names are relative to the folder the list is saved in.
@@ -792,8 +861,8 @@ impl ChecksumUi {
                                 }
                             }
                         }
-                        if ui.add_enabled(!list.is_empty(), egui::Button::new(t("Copy all")).min_size(egui::vec2(0.0, 30.0))).clicked() {
-                            ui.ctx().copy_text(format_list(self.algo.unwrap_or(Algo::Sha256), &list));
+                        if ui.add_enabled(any_done, egui::Button::new(t("Copy all")).min_size(egui::vec2(0.0, 30.0))).clicked() {
+                            ui.ctx().copy_text(format_list(self.algo.unwrap_or(Algo::Sha256), &self.done_list()));
                             self.note = Some((t("Checksums copied"), false));
                         }
                         if idle && ui.add(egui::Button::new(t("Recalculate")).min_size(egui::vec2(0.0, 30.0))).clicked() {
@@ -915,7 +984,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("sub")).unwrap();
         std::fs::write(dir.join("a.txt"), b"hello world").unwrap();
         std::fs::write(dir.join("sub/b.txt"), b"other").unwrap();
-        let rows = collect(&dir, &[dir.join("a.txt"), dir.join("sub")]);
+        let rows = collect(&dir, &[dir.join("a.txt"), dir.join("sub")], &AtomicBool::new(false));
         let names: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
         assert_eq!(names, ["a.txt", "sub/b.txt"]);
         let f = std::fs::File::open(dir.join("a.txt")).unwrap();
@@ -943,6 +1012,43 @@ mod tests {
         }
         assert!(!tool.reads_under(&dir), "done");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Folders are listed by the worker, not on the UI thread.
+    #[test]
+    fn folders_are_listed_in_the_background() {
+        let dir = std::env::temp_dir().join(format!("mf-checksum-list-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        std::fs::write(dir.join("sub/a.txt"), "a").unwrap();
+        std::fs::write(dir.join("sub/b.txt"), "b").unwrap();
+        let mut tool = ChecksumUi::default();
+        tool.start_files(&egui::Context::default(), dir.clone(), vec![dir.join("sub")]);
+        let start = Instant::now();
+        while tool.worker.is_some() && start.elapsed() < std::time::Duration::from_secs(5) {
+            tool.poll();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let names: Vec<&str> = tool.rows.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["sub/a.txt", "sub/b.txt"]);
+        assert!(tool.rows.iter().all(|r| matches!(r.state, State::Done(_))));
+        assert!(!tool.cancelled && tool.sources.is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// A cancelled run leaves its unhashed rows "not checked", and does not count as done.
+    #[test]
+    fn a_cancelled_run_is_not_done() {
+        let row = |state| Row { name: "x".into(), path: PathBuf::from("x"), size: 1, algo: Algo::Sha256, expected: None, state };
+        let mut tool = ChecksumUi::default();
+        tool.rows = vec![row(State::Done("ab".into())), row(State::Pending)];
+        let (tx, rx) = channel();
+        drop(tx);
+        let cancel = Arc::new(AtomicBool::new(true));
+        tool.worker = Some(Worker { rx, cancel, bytes: Default::default(), current: Default::default(), total: Default::default(), started: Instant::now() });
+        tool.poll();
+        assert!(tool.worker.is_none());
+        assert!(tool.cancelled);
+        assert_eq!(tool.unchecked(), 1);
     }
 
     /// Closing the tab drops the tool: the hashing stops with it.

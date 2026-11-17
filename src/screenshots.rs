@@ -1415,6 +1415,29 @@ sys.stdout.write("[<u[?1049l")
     wait_until(&mut h, 2.0, |_| read().len() >= start + 6);
     assert_eq!(&read()[start..], b"\x1b[O\x1b[I");
 
+    // A right click goes to the program, and opens no menu of the app's own.
+    let start = read().len();
+    right_click(&mut h, pos2(W * 0.5, H * 0.5));
+    wait_until(&mut h, 2.0, |_| read()[start..].ends_with(b"m"));
+    assert!(String::from_utf8_lossy(&read()[start..]).contains("\x1b[<2;"), "right click: {:?}", String::from_utf8_lossy(&read()[start..]));
+    assert!(h.query_by_label(&t("Select all")).is_none(), "the app's menu opened");
+
+    // An input method (Telex here): what it composes is only drawn, with the input
+    // method's window placed at the cursor; what it commits is typed.
+    let start = read().len();
+    for e in [Event::Ime(egui::ImeEvent::Enabled), Event::Ime(egui::ImeEvent::Preedit("vie".into())), Event::Text("x".into()), Event::Ime(egui::ImeEvent::Preedit("việ".into()))] {
+        push(&mut h, e);
+        settle(&mut h, 1);
+    }
+    let ime = h.output().platform_output.ime.expect("IME allowed in the terminal");
+    assert!(ime.rect.width() > 0.0 && ime.rect.width() < W / 2.0, "{ime:?}");
+    for e in [Event::Ime(egui::ImeEvent::Disabled), Event::Ime(egui::ImeEvent::Commit("việt".into())), Event::Ime(egui::ImeEvent::Disabled)] {
+        push(&mut h, e);
+    }
+    settle(&mut h, 2);
+    wait_until(&mut h, 2.0, |_| read().len() > start);
+    assert_eq!(String::from_utf8_lossy(&read()[start..]), "việt");
+
     // Ctrl+Q, as a kitty key, ends it; then the shell gets plain keys again.
     push(&mut h, Event::Key { key: egui::Key::Q, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::CTRL });
     wait_until(&mut h, 3.0, |app| !mode(app).contains(TermMode::ALT_SCREEN));
@@ -2451,7 +2474,7 @@ fn transfers_open_in_a_tab() {
 
     // Show: the destination opens in a new files tab, and Transfers stays as it was.
     let home = h.state().panes[h.state().active].tab().loc.clone();
-    h.state_mut().history.push(FinishedJob { title: "Copied".into(), ok: true, msg: String::new(), bytes: 1, secs: 1.0, dest: Some(docs.clone()), at: "12:00".into() });
+    h.state_mut().history.push(FinishedJob { title: "Copied".into(), ok: true, cancelled: false, msg: String::new(), bytes: 1, items: false, secs: 1.0, dest: Some(docs.clone()), at: "12:00".into() });
     settle(&mut h, 2);
     h.get_by_label(&t("Show")).click();
     settle(&mut h, 3);
@@ -4304,4 +4327,124 @@ fn quick_filter_ticks_several_kinds() {
     assert!(h.state().panes[0].tab().quick.is_none());
     assert!(!menu_open(&h));
     assert_eq!(shown(&h), ["sub", "a.jpg", "b.mp4", "c.mp3", "d.txt"]);
+}
+
+/// Enter in a dialog confirms only from its text field or with nothing focused: on Cancel
+/// it cancels, on a checkbox it only ticks. Esc closes; a click outside throws away a
+/// confirmation, never a form. A command from the palette acts on the file the cursor was on.
+#[test]
+#[ignore]
+fn dialog_keys_follow_the_focused_widget() {
+    let d = demo_env();
+    let dir = d.home.join("dialog-keys");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("keep.txt"), b"keep").unwrap();
+    std::fs::write(dir.join("other.md"), b"other").unwrap();
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.confirm_delete = true;
+    cfg.use_trash = true;
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().shot_pane(0, &dir, Some("keep.txt"));
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let cursor = |h: &Harness<'static, App>| h.state().panes[0].tab().cursor_entry().map(|e| e.name.clone());
+    assert_eq!(cursor(&h).as_deref(), Some("keep.txt"));
+
+    // Delete, then Enter on Cancel: nothing is deleted.
+    h.state_mut().run_cmd(Cmd::Delete);
+    settle(&mut h, 2);
+    assert!(matches!(h.state().dialog, Some(Dialog::Delete { .. })));
+    h.get_by_label(&t("Cancel")).focus();
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    assert!(h.state().dialog.is_none(), "Enter on Cancel cancels");
+    settle(&mut h, 4);
+    assert!(h.state().jobs.is_empty() && dir.join("keep.txt").exists());
+
+    // Enter and Space on the trash checkbox tick it, and confirm nothing.
+    h.state_mut().run_cmd(Cmd::Delete);
+    settle(&mut h, 2);
+    h.get_by_label(&t("Move to trash (recycle bin)")).focus();
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    assert!(matches!(h.state().dialog, Some(Dialog::Delete { trash: false, .. })), "unticked, still asking");
+    key_press(&mut h, Key::Space, None, Modifiers::NONE);
+    assert!(matches!(h.state().dialog, Some(Dialog::Delete { trash: true, .. })));
+    // A click outside closes a confirmation.
+    let corner = pos2(6.0, H - 6.0);
+    move_to(&mut h, corner);
+    button(&mut h, corner, PointerButton::Primary, true, Modifiers::NONE);
+    button(&mut h, corner, PointerButton::Primary, false, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    settle(&mut h, 4);
+    assert!(h.state().jobs.is_empty() && dir.join("keep.txt").exists());
+
+    // A click outside keeps a typed name; Enter in the field creates the folder where
+    // it was asked for, even when the window went to another folder meanwhile.
+    h.state_mut().run_cmd(Cmd::NewFolder);
+    settle(&mut h, 3);
+    push(&mut h, Event::Text("made".into()));
+    settle(&mut h, 2);
+    button(&mut h, corner, PointerButton::Primary, true, Modifiers::NONE);
+    button(&mut h, corner, PointerButton::Primary, false, Modifiers::NONE);
+    assert!(matches!(&h.state().dialog, Some(Dialog::NewItem { name, .. }) if name == "made"), "the form stays");
+    let app = h.state_mut();
+    app.panes[0].tab_mut().navigate(Location::Local(d.demo.clone()), &lc!(app));
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    assert!(dir.join("made").is_dir() && !d.demo.join("made").exists());
+    h.state_mut().shot_pane(0, &dir, Some("keep.txt"));
+    settle(&mut h, 3);
+
+    // Esc closes any dialog.
+    h.state_mut().run_cmd(Cmd::Rename);
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+
+    // The palette's search filters the folder while it is open; Esc, or a command chosen
+    // there, puts the cursor back on its file.
+    assert_eq!(cursor(&h).as_deref(), Some("keep.txt"));
+    h.state_mut().palette.open_with("other");
+    settle(&mut h, 3);
+    assert_ne!(cursor(&h).as_deref(), Some("keep.txt"), "hidden by the filter");
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert!(!h.state().palette.open);
+    assert_eq!(cursor(&h).as_deref(), Some("keep.txt"));
+    h.state_mut().palette.open_with("other");
+    settle(&mut h, 3);
+    h.state_mut().restore_pal_filter();
+    h.state_mut().palette.open = false;
+    h.state_mut().run_cmd(Cmd::Rename);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Rename { old, .. }) if old == "keep.txt"));
+    h.state_mut().dialog = None;
+    settle(&mut h, 2);
+
+    // Shift+Tab goes back to the window before.
+    let app = h.state_mut();
+    app.shot_pane(1, &dir, None);
+    app.split_pane(1, SplitDir::Down, false);
+    app.shot_focus(0);
+    settle(&mut h, 3);
+    let leaves = h.state().layout.leaves();
+    key_press(&mut h, Key::Tab, None, Modifiers::SHIFT);
+    assert_eq!(h.state().active, *leaves.last().unwrap());
+    key_press(&mut h, Key::Tab, None, Modifiers::NONE);
+    assert_eq!(h.state().active, leaves[0]);
+
+    // Another window closing leaves the focus where it is.
+    let focused = h.state().panes[leaves[0]].tab().uid;
+    let last = *leaves.last().unwrap();
+    h.state_mut().close_pane(last);
+    settle(&mut h, 2);
+    assert_eq!(h.state().panes[h.state().active].tab().uid, focused);
+
+    // A file window's keys are not offered (nor run) in Settings.
+    h.state_mut().open_settings(SettingsPage::Appearance);
+    settle(&mut h, 3);
+    assert!(h.query_by_label(&t("New folder")).is_none());
+    h.state_mut().run_cmd(Cmd::NewFolder);
+    assert!(h.state().dialog.is_none());
 }

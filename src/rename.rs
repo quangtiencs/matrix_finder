@@ -191,11 +191,25 @@ fn expand_token(token: &str, stem: &str, ext: &str, counter: &str, item: &Item, 
     })
 }
 
+/// Split a search result's name ("sub/dir/x.txt", its path below the folder) into its
+/// folder part ("sub/dir/", with the separator) and its own name ("x.txt").
+pub fn split_dir(name: &str) -> (&str, &str) {
+    match name.rfind(|c: char| c == '/' || (cfg!(windows) && c == '\\')) {
+        Some(i) => (&name[..i + 1], &name[i + 1..]),
+        None => ("", name),
+    }
+}
+
 /// Compute the new names. `Err` for an invalid regex (same for every item).
+/// An item found in a subfolder (`sub/x`) is renamed there: only its own name changes,
+/// and `[P]` is that subfolder.
 pub fn compute(items: &[Item], rules: &Rules, parent: &str) -> Result<Vec<String>, String> {
+    use crate::filter::nfc;
+    // Names may be stored decomposed (macOS, zip files): find what is typed (composed).
+    let find = nfc(&rules.find);
     let re = if rules.regex && !rules.find.is_empty() {
         Some(
-            regex::RegexBuilder::new(&rules.find)
+            regex::RegexBuilder::new(&find)
                 .case_insensitive(!rules.case_sensitive)
                 .build()
                 .map_err(|e| e.to_string())?,
@@ -205,7 +219,12 @@ pub fn compute(items: &[Item], rules: &Rules, parent: &str) -> Result<Vec<String
     };
     let mut out = Vec::with_capacity(items.len());
     for (i, item) in items.iter().enumerate() {
-        let (stem, ext) = split_name(&item.name, item.is_dir);
+        let (dir, own) = split_dir(&item.name);
+        let parent = match split_dir(dir.trim_end_matches(['/', '\\'])) {
+            (_, p) if !dir.is_empty() => p,
+            _ => parent,
+        };
+        let (stem, ext) = split_name(own, item.is_dir);
         let n = rules.counter_start + rules.counter_step * i as i64;
         let counter = format!("{:0width$}", n, width = rules.counter_digits);
         let mut new_stem = expand(&rules.name_mask, stem, ext, &counter, item, parent);
@@ -213,11 +232,16 @@ pub fn compute(items: &[Item], rules: &Rules, parent: &str) -> Result<Vec<String
 
         // Find & replace on the stem (the extension is controlled by its mask).
         if !rules.find.is_empty() {
-            new_stem = match &re {
-                Some(re) => re.replace_all(&new_stem, rules.replace.as_str()).to_string(),
-                None if rules.case_sensitive => new_stem.replace(&rules.find, &rules.replace),
-                None => replace_ci(&new_stem, &rules.find, &rules.replace),
+            let composed = nfc(&new_stem);
+            let replaced = match &re {
+                Some(re) => re.replace_all(&composed, rules.replace.as_str()).to_string(),
+                None if rules.case_sensitive => composed.replace(find.as_ref(), &rules.replace),
+                None => replace_ci(&composed, &find, &rules.replace),
             };
+            // Unchanged when nothing was found (not even its Unicode form).
+            if replaced != composed {
+                new_stem = replaced;
+            }
         }
         if rules.strip_diacritics {
             new_stem = strip_diacritics(&new_stem);
@@ -254,7 +278,7 @@ pub fn compute(items: &[Item], rules: &Rules, parent: &str) -> Result<Vec<String
             new_stem = collapse_runs(&mapped, sep).trim_matches(sep).to_string();
         }
         let new_ext = new_ext.trim().trim_start_matches('.').to_string();
-        out.push(if new_ext.is_empty() { new_stem } else { format!("{new_stem}.{new_ext}") });
+        out.push(if new_ext.is_empty() { format!("{dir}{new_stem}") } else { format!("{dir}{new_stem}.{new_ext}") });
     }
     Ok(out)
 }
@@ -333,7 +357,10 @@ pub fn validate(old: &[String], new: &[String], existing: &HashSet<String>, case
             if o == n {
                 return Status::Unchanged;
             }
-            if let Some(why) = invalid_name(n) {
+            // An item in a subfolder stays there: only its own name may change.
+            let (dir, _) = split_dir(o);
+            let Some(own) = n.strip_prefix(dir) else { return Status::Error("invalid character".into()) };
+            if let Some(why) = invalid_name(own) {
                 return Status::Error(why.into());
             }
             if counts.get(&key(n)).copied().unwrap_or(0) > 1 {
@@ -350,25 +377,35 @@ pub fn validate(old: &[String], new: &[String], existing: &HashSet<String>, case
 }
 
 /// Apply renames with `rename(from, to)`, going through temporary names so
-/// that swaps and chains work. Returns the pairs actually applied (for undo).
-pub fn apply(pairs: &[(String, String)], mut rename: impl FnMut(&str, &str) -> Res<()>) -> Res<Vec<(String, String)>> {
+/// that swaps and chains work. A target that `exists` by then (made since the plan was
+/// checked) is never overwritten: that item keeps its name and an error says so.
+/// Returns the pairs actually applied (for undo) and the errors.
+pub fn apply(pairs: &[(String, String)], mut rename: impl FnMut(&str, &str) -> Res<()>, mut exists: impl FnMut(&str) -> bool) -> (Vec<(String, String)>, Vec<String>) {
     let pairs: Vec<&(String, String)> = pairs.iter().filter(|(a, b)| a != b).collect();
     let stamp = std::process::id();
     let mut staged: Vec<(String, String, String)> = Vec::new(); // (orig, temp, target)
     for (i, (from, to)) in pairs.iter().enumerate() {
-        let tmp = format!(".matrix_finder-rename-{stamp}-{i}.tmp");
+        // The temporary name sits next to the item (in its subfolder).
+        let tmp = format!("{}.matrix_finder-rename-{stamp}-{i}.tmp", split_dir(from).0);
         if let Err(e) = rename(from, &tmp) {
             // Roll back the ones already staged.
             for (orig, t, _) in staged.iter().rev() {
                 let _ = rename(t, orig);
             }
-            return Err(format!("{from}: {e}"));
+            return (vec![], vec![format!("{from}: {e}")]);
         }
         staged.push((from.clone(), tmp, to.clone()));
     }
     let mut done = Vec::new();
     let mut errors = Vec::new();
     for (orig, tmp, target) in &staged {
+        // Every item of the batch has its temporary name now: what is still there is
+        // another file. (A change of letter case only is the same file: moved away too.)
+        if exists(target) {
+            let _ = rename(tmp, orig);
+            errors.push(format!("{orig} → {target}: {}", t("Already exists")));
+            continue;
+        }
         match rename(tmp, target) {
             Ok(()) => done.push((orig.clone(), target.clone())),
             Err(e) => {
@@ -377,11 +414,7 @@ pub fn apply(pairs: &[(String, String)], mut rename: impl FnMut(&str, &str) -> R
             }
         }
     }
-    if errors.is_empty() {
-        Ok(done)
-    } else {
-        Err(errors.join("\n"))
-    }
+    (done, errors)
 }
 
 #[cfg(test)]
@@ -459,15 +492,56 @@ mod tests {
         std::fs::write(dir.join("b"), "B").unwrap();
         let pairs = vec![("a".to_string(), "b".to_string()), ("b".to_string(), "a".to_string())];
         let d = dir.clone();
-        let done = apply(&pairs, |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string())).unwrap();
+        let exists = |n: &str| d.join(n).symlink_metadata().is_ok();
+        let (done, errors) = apply(&pairs, |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string()), exists);
+        assert!(errors.is_empty());
         assert_eq!(done.len(), 2);
         assert_eq!(std::fs::read_to_string(dir.join("a")).unwrap(), "B");
         assert_eq!(std::fs::read_to_string(dir.join("b")).unwrap(), "A");
         // Undo
         let undo: Vec<(String, String)> = done.iter().map(|(a, b)| (b.clone(), a.clone())).collect();
-        apply(&undo, |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string())).unwrap();
+        let (_, errors) = apply(&undo, |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string()), exists);
+        assert!(errors.is_empty());
         assert_eq!(std::fs::read_to_string(dir.join("a")).unwrap(), "A");
+        // A file outside the batch is never overwritten; the others still go.
+        std::fs::write(dir.join("c"), "C").unwrap();
+        let pairs = vec![("a".to_string(), "c".to_string()), ("b".to_string(), "d".to_string())];
+        let (done, errors) = apply(&pairs, |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string()), exists);
+        assert_eq!(done, vec![("b".to_string(), "d".to_string())]);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(std::fs::read_to_string(dir.join("a")).unwrap(), "A");
+        assert_eq!(std::fs::read_to_string(dir.join("c")).unwrap(), "C");
+        // Only the letter case changes: the same file, allowed.
+        let (done, errors) = apply(&[("a".to_string(), "A".to_string())], |f, t| std::fs::rename(d.join(f), d.join(t)).map_err(|e| e.to_string()), exists);
+        assert!(errors.is_empty() && done.len() == 1);
+        assert_eq!(std::fs::read_to_string(dir.join("A")).unwrap(), "A");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn search_results_in_subfolders() {
+        let r = Rules { name_mask: "[P]_[N]".into(), ..Default::default() };
+        let out = compute(&items(&["sub/deep/a.txt", "b.txt"]), &r, "top").unwrap();
+        assert_eq!(out, vec!["sub/deep/deep_a.txt", "top_b.txt"]);
+        let old: Vec<String> = vec!["sub/a.txt".into()];
+        let existing: HashSet<String> = ["sub/a.txt", "sub/b.txt", "c.txt"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(validate(&old, &["sub/c.txt".into()], &existing, false)[0], Status::Ok);
+        assert_eq!(validate(&old, &["sub/b.txt".into()], &existing, false)[0], Status::Error("already exists".into()));
+        // A name with a slash of its own would move it.
+        let r = Rules { find: "a".into(), replace: "x/y".into(), ..Default::default() };
+        let new = compute(&items(&["sub/a.txt"]), &r, "").unwrap();
+        assert!(matches!(validate(&old, &new, &existing, false)[0], Status::Error(_)));
+    }
+
+    #[test]
+    fn find_matches_decomposed_names() {
+        use unicode_normalization::UnicodeNormalization;
+        let nfd: String = "Bản nháp.txt".nfd().collect();
+        let r = Rules { find: "bản nháp".into(), replace: "final".into(), ..Default::default() };
+        assert_eq!(compute(&items(&[&nfd]), &r, "").unwrap(), vec!["final.txt"]);
+        // Nothing found: the name is left exactly as it is.
+        let r = Rules { find: "zzz".into(), replace: "q".into(), ..Default::default() };
+        assert_eq!(compute(&items(&[&nfd]), &r, "").unwrap(), vec![nfd.clone()]);
     }
 }
 

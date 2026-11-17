@@ -1,6 +1,7 @@
 //! Background jobs (copy / move / delete / pack / unpack / backup) with progress.
+use crate::i18n::t;
 use crate::remote::SharedRemote;
-use crate::util::{es, join_slash, unique_path, Res};
+use crate::util::{es, human_size, join_slash, unique_path, Res};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -15,12 +16,41 @@ pub struct Progress {
     cancel: AtomicBool,
     paused: AtomicBool,
     queued: AtomicBool,
+    /// Progress counts items (deleted files and folders), not bytes.
+    items: AtomicBool,
 }
 
 impl Progress {
     pub fn add(&self, n: u64) {
         self.done.fetch_add(n, Ordering::Relaxed);
         self.wait_if_paused();
+    }
+    /// Count progress without pausing here: for work that holds a remote connection,
+    /// which must not sleep with it locked (it pauses between files instead).
+    pub fn add_unpaused(&self, n: u64) {
+        self.done.fetch_add(n, Ordering::Relaxed);
+    }
+    /// From now on, progress counts items instead of bytes.
+    pub fn count_items(&self) {
+        self.items.store(true, Ordering::Relaxed);
+    }
+    pub fn counts_items(&self) -> bool {
+        self.items.load(Ordering::Relaxed)
+    }
+    /// How much is done: "12 MB / 40 MB", or "1 / 3 items" for a job that counts items.
+    pub fn amount_text(&self) -> String {
+        let (done, total) = (self.done(), self.total());
+        if self.counts_items() {
+            if total > 0 {
+                t("{done} / {total} items").replace("{done}", &done.to_string()).replace("{total}", &total.to_string())
+            } else {
+                format!("{done} {}", t("items"))
+            }
+        } else if total > 0 {
+            format!("{} / {}", human_size(done), human_size(total))
+        } else {
+            human_size(done)
+        }
     }
     /// Blocks the worker while the job is paused (every operation reports
     /// progress regularly, so this pauses copies, archives and transfers alike).
@@ -82,7 +112,7 @@ impl Progress {
     pub fn check(&self) -> Res<()> {
         self.wait_if_paused();
         if self.cancelled() {
-            Err("Cancelled".into())
+            Err(t("Cancelled"))
         } else {
             Ok(())
         }
@@ -90,8 +120,16 @@ impl Progress {
 }
 
 /// How far along these jobs are together, by bytes. `None` until one of them knows its size.
+/// Jobs that count items (deletes) cannot be weighed against bytes: they only count
+/// while no job with a size in bytes runs, and then by their items.
 pub fn overall_fraction(jobs: &[&Progress]) -> Option<f32> {
-    let (done, total) = jobs.iter().fold((0u64, 0u64), |(d, t), p| if p.total() > 0 { (d + p.done().min(p.total()), t + p.total()) } else { (d, t) });
+    let sum = |items: bool| {
+        jobs.iter().filter(|p| p.counts_items() == items && p.total() > 0).fold((0u64, 0u64), |(d, n), p| (d + p.done().min(p.total()), n + p.total()))
+    };
+    let (done, total) = match sum(false) {
+        (_, 0) => sum(true),
+        bytes => bytes,
+    };
     (total > 0).then(|| (done as f64 / total as f64) as f32)
 }
 
@@ -116,7 +154,7 @@ impl Job {
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
             if p.cancelled() {
-                let _ = tx.send(Err("Cancelled".into()));
+                let _ = tx.send(Err(t("Cancelled")));
                 return;
             }
             let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&p)))
@@ -294,13 +332,27 @@ fn local_child(dir: &Path, name: &str) -> Res<PathBuf> {
     let mut c = Path::new(name).components();
     match (c.next(), c.next()) {
         (Some(std::path::Component::Normal(n)), None) if n == std::ffi::OsStr::new(name) => Ok(dir.join(n)),
-        _ => Err(format!("Refusing an unsafe file name from the server: {name:?}")),
+        _ => Err(format!("{}: {name:?}", t("Refusing an unsafe file name from the server"))),
     }
+}
+
+/// A name like `name` that `taken` does not have, the way `unique_path` makes one:
+/// `report.pdf` becomes `report (1).pdf`, then `report (2).pdf`.
+fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(name) {
+        return name.to_string();
+    }
+    let p = Path::new(name);
+    let stem = p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| name.to_string());
+    let ext = p.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    (1..).map(|n| format!("{stem} ({n}){ext}")).find(|c| !taken(c)).unwrap_or_default()
 }
 
 /// Download a remote file or folder; with `mv`, delete each remote file once it is downloaded.
 /// Returns false when something was skipped, and then keeps the remote folders holding it.
-fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool, policy: Conflict, mv: bool, p: &Progress) -> Res<bool> {
+/// A pause takes effect between files: the connection stays locked during a file, and
+/// nothing may sleep while holding it.
+fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool, size: u64, policy: Conflict, mv: bool, p: &Progress) -> Res<bool> {
     p.check()?;
     if is_dir {
         std::fs::create_dir_all(lpath).map_err(es)?;
@@ -310,7 +362,7 @@ fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool
         let mut complete = true;
         for e in list {
             let child = local_child(lpath, &e.name)?;
-            complete &= download_recursive(fs, &join_slash(rpath, &e.name), &child, e.is_dir, policy, mv && !link, p)?;
+            complete &= download_recursive(fs, &join_slash(rpath, &e.name), &child, e.is_dir, e.size, policy, mv && !link, p)?;
         }
         if mv && complete {
             let mut g = fs.lock().map_err(es)?;
@@ -322,13 +374,17 @@ fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool
         }
         Ok(complete)
     } else {
-        let Some(target) = resolve_local(lpath, policy) else { return Ok(false) };
+        let Some(target) = resolve_local(lpath, policy) else {
+            // Skipped, but done: the bar still reaches the end.
+            p.add(size);
+            return Ok(false);
+        };
         p.set_current(rpath);
         // Into a temporary file first, so a failed download keeps an existing `target`.
         let tmp = temp_sibling(&target);
         let mut g = fs.lock().map_err(es)?;
         let r = g
-            .download(rpath, &tmp, &|n| p.add(n), p.cancel_flag())
+            .download(rpath, &tmp, &|n| p.add_unpaused(n), p.cancel_flag())
             .and_then(|_| {
                 // An overwritten file keeps its permissions, as it would if written in place.
                 if let Ok(meta) = std::fs::metadata(&target) {
@@ -349,6 +405,7 @@ fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool
 
 /// Upload a local file or folder; with `mv`, delete each local file once it is uploaded.
 /// Returns false when something was skipped, and then keeps the local folders holding it.
+/// Like downloads, it pauses between files.
 fn upload_recursive(fs: &SharedRemote, lpath: &Path, rpath: &str, existing: Option<&HashSet<String>>, policy: Conflict, mv: bool, p: &Progress) -> Res<bool> {
     p.check()?;
     let name = lpath.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
@@ -381,14 +438,24 @@ fn upload_recursive(fs: &SharedRemote, lpath: &Path, rpath: &str, existing: Opti
         let mut target = rpath.to_string();
         if exists {
             match policy {
-                Conflict::Skip => return Ok(false),
+                Conflict::Skip => {
+                    // Skipped, but done: the bar still reaches the end.
+                    p.add(std::fs::metadata(lpath).map(|m| m.len()).unwrap_or(0));
+                    return Ok(false);
+                }
                 Conflict::Overwrite => {}
-                Conflict::Rename => target = format!("{rpath}.copy"),
+                Conflict::Rename => {
+                    let free = unique_name(&name, |n| existing.is_some_and(|s| s.contains(n)));
+                    target = match rpath.rsplit_once('/') {
+                        Some((dir, _)) => format!("{dir}/{free}"),
+                        None => free,
+                    };
+                }
             }
         }
         p.set_current(&lpath.to_string_lossy());
         let mut g = fs.lock().map_err(es)?;
-        g.upload(lpath, &target, &|n| p.add(n), p.cancel_flag())?;
+        g.upload(lpath, &target, &|n| p.add_unpaused(n), p.cancel_flag())?;
         drop(g);
         if mv {
             std::fs::remove_file(lpath).map_err(es)?;
@@ -397,16 +464,20 @@ fn upload_recursive(fs: &SharedRemote, lpath: &Path, rpath: &str, existing: Opti
     }
 }
 
-fn remote_size(fs: &SharedRemote, path: &str, is_dir: bool, size: u64) -> u64 {
+/// Size of a remote file or folder; stops (with a partial sum) once the job is cancelled.
+fn remote_size(fs: &SharedRemote, path: &str, is_dir: bool, size: u64, p: &Progress) -> u64 {
     if !is_dir {
         return size;
+    }
+    if p.cancelled() {
+        return 0;
     }
     let list = match fs.lock() {
         Ok(mut g) => g.list(path).unwrap_or_default(),
         Err(_) => return 0,
     };
     list.iter()
-        .map(|e| remote_size(fs, &join_slash(path, &e.name), e.is_dir, e.size))
+        .map(|e| remote_size(fs, &join_slash(path, &e.name), e.is_dir, e.size, p))
         .sum()
 }
 
@@ -417,7 +488,7 @@ pub fn transfer(src: Endpoint, items: Vec<Item>, dst: Endpoint, mv: bool, policy
     let mut complete = true;
     match (&src, &dst) {
         (Endpoint::Local(sdir), Endpoint::Local(ddir)) => {
-            p.set_current("Calculating…");
+            p.set_current(&t("Calculating…"));
             if !mv {
                 p.set_total(items.iter().map(|i| if i.is_dir { local_size(&sdir.join(&i.name)) } else { i.size }).sum());
             }
@@ -435,7 +506,7 @@ pub fn transfer(src: Endpoint, items: Vec<Item>, dst: Endpoint, mv: bool, policy
                     continue;
                 }
                 if it.is_dir && (ddir.starts_with(&s) || real_entry(&s).is_some_and(|rs| real_ddir.starts_with(rs))) {
-                    return Err(format!("Cannot copy '{}' into itself", it.name));
+                    return Err(t("Cannot copy “{name}” into itself").replace("{name}", &it.name));
                 }
                 if mv {
                     let target = if d.exists() && !it.is_dir {
@@ -461,15 +532,15 @@ pub fn transfer(src: Endpoint, items: Vec<Item>, dst: Endpoint, mv: bool, policy
             }
         }
         (Endpoint::Remote(fs, _, rdir), Endpoint::Local(ddir)) => {
-            p.set_current("Calculating…");
-            p.set_total(items.iter().map(|i| remote_size(fs, &join_slash(rdir, &i.name), i.is_dir, i.size)).sum());
+            p.set_current(&t("Calculating…"));
+            p.set_total(items.iter().map(|i| remote_size(fs, &join_slash(rdir, &i.name), i.is_dir, i.size, p)).sum());
             for it in &items {
                 let rp = join_slash(rdir, &it.name);
-                complete &= download_recursive(fs, &rp, &local_child(ddir, &it.name)?, it.is_dir, policy, mv, p)?;
+                complete &= download_recursive(fs, &rp, &local_child(ddir, &it.name)?, it.is_dir, it.size, policy, mv, p)?;
             }
         }
         (Endpoint::Local(sdir), Endpoint::Remote(fs, _, rdir)) => {
-            p.set_current("Calculating…");
+            p.set_current(&t("Calculating…"));
             p.set_total(items.iter().map(|i| if i.is_dir { local_size(&sdir.join(&i.name)) } else { i.size }).sum());
             let existing: HashSet<String> = fs.lock().map_err(es)?.list(rdir)?.into_iter().map(|e| e.name).collect();
             for it in &items {
@@ -485,28 +556,28 @@ pub fn transfer(src: Endpoint, items: Vec<Item>, dst: Endpoint, mv: bool, policy
         }
         (Endpoint::Archive(file, inner), Endpoint::Local(ddir)) => {
             if mv {
-                return Err("Cannot move out of an archive (archives are read-only). Use copy.".into());
+                return Err(t("Cannot move out of an archive (archives are read-only). Use copy."));
             }
             let sel: Vec<String> = items.iter().map(|i| join_slash(inner, &i.name)).collect();
             crate::archive::extract(file, ddir, &sel, inner, policy, p)?;
         }
         (_, Endpoint::Archive(..)) => {
-            return Err("Archives are read-only here. Use Pack (Alt+F5) to create a new archive.".into());
+            return Err(t("Archives are read-only here. Use Compress to create a new archive."));
         }
-        _ => return Err("This transfer combination is not supported (copy via a local folder).".into()),
+        _ => return Err(t("This transfer combination is not supported (copy via a local folder).")),
     }
-    let verb = if mv { "Moved" } else { "Copied" };
-    Ok(if complete {
-        format!("{verb} {count} item(s)")
-    } else if mv {
-        format!("{verb} {count} item(s); skipped files were left in place")
-    } else {
-        format!("{verb} {count} item(s); some files were skipped")
-    })
+    let msg = match (mv, complete) {
+        (false, true) => t("Copied {n} item(s)"),
+        (true, true) => t("Moved {n} item(s)"),
+        (false, false) => t("Copied {n} item(s); some files were skipped"),
+        (true, false) => t("Moved {n} item(s); skipped files were left in place"),
+    };
+    Ok(msg.replace("{n}", &count.to_string()))
 }
 
 pub fn delete(src: Endpoint, items: Vec<Item>, to_trash: bool, p: &Progress) -> Res<String> {
     let count = items.len();
+    p.count_items();
     match src {
         Endpoint::Local(dir) => {
             let paths: Vec<PathBuf> = items.iter().map(|i| dir.join(&i.name)).collect();
@@ -535,12 +606,14 @@ pub fn delete(src: Endpoint, items: Vec<Item>, to_trash: bool, p: &Progress) -> 
                 p.set_current(&path);
                 let mut g = fs.lock().map_err(es)?;
                 crate::remote::remove_recursive(&mut **g, &path, it.is_dir)?;
+                // Not paused while the connection is locked.
+                drop(g);
                 p.add(1);
             }
         }
-        Endpoint::Archive(..) => return Err("Archives are read-only".into()),
+        Endpoint::Archive(..) => return Err(t("Archives are read-only")),
     }
-    Ok(format!("Deleted {count} item(s)"))
+    Ok(t("Deleted {n} item(s)").replace("{n}", &count.to_string()))
 }
 
 #[cfg(test)]
@@ -581,6 +654,90 @@ mod tests {
         // A job that reports more than it expected does not push it past the end.
         big.add(900);
         assert_eq!(overall_fraction(&[&small, &big]), Some(1.0));
+        // Items are not weighed against bytes, but count when nothing has a size in bytes.
+        let deleting = Progress::default();
+        deleting.count_items();
+        deleting.set_total(4);
+        deleting.add(1);
+        assert_eq!(overall_fraction(&[&small, &deleting]), Some(1.0));
+        assert_eq!(overall_fraction(&[&deleting, &unsized_job]), Some(0.25));
+    }
+
+    #[test]
+    fn deletes_count_items_not_bytes() {
+        let b = tmp("delete-items");
+        write(&b.join("a.txt"), "a");
+        write(&b.join("d/b.txt"), "b");
+        let p = Progress::default();
+        let msg = delete(local(&b), vec![file("a.txt"), dir("d")], false, &p).unwrap();
+        assert_eq!(msg, "Deleted 2 item(s)");
+        assert!(p.counts_items());
+        assert_eq!(p.amount_text(), "2 / 2 items");
+        let bytes = Progress::default();
+        bytes.set_total(2048);
+        assert!(!bytes.amount_text().contains("items"));
+    }
+
+    #[test]
+    fn unique_names_keep_the_extension() {
+        let taken = ["report.pdf", "report (1).pdf", ".bashrc", "notes"];
+        let free = |n: &str| unique_name(n, |c| taken.contains(&c));
+        assert_eq!(free("other.pdf"), "other.pdf");
+        assert_eq!(free("report.pdf"), "report (2).pdf");
+        assert_eq!(free(".bashrc"), ".bashrc (1)");
+        assert_eq!(free("notes"), "notes (1)");
+    }
+
+    #[test]
+    fn upload_keep_both_picks_a_free_name() {
+        let b = tmp("up-rename");
+        let (r, l) = (b.join("remote"), b.join("local"));
+        write(&l.join("a.txt"), "new");
+        write(&r.join("a.txt"), "old");
+        write(&r.join("a (1).txt"), "older");
+        transfer(local(&l), vec![file("a.txt")], remote(DiskRemote::default(), &r), false, Conflict::Rename, &Progress::default()).unwrap();
+        assert_eq!(read(&r.join("a.txt")), "old");
+        assert_eq!(read(&r.join("a (1).txt")), "older");
+        assert_eq!(read(&r.join("a (2).txt")), "new");
+    }
+
+    #[test]
+    fn skipped_remote_files_still_fill_the_bar() {
+        let b = tmp("skip-progress");
+        let (r, l) = (b.join("remote"), b.join("local"));
+        write(&l.join("a.txt"), "local");
+        write(&r.join("a.txt"), "remote");
+        let p = Progress::default();
+        transfer(local(&l), vec![Item { name: "a.txt".into(), is_dir: false, size: 5 }], remote(DiskRemote::default(), &r), false, Conflict::Skip, &p).unwrap();
+        assert_eq!((p.done(), p.total()), (5, 5));
+        let p = Progress::default();
+        transfer(remote(DiskRemote::default(), &r), vec![Item { name: "a.txt".into(), is_dir: false, size: 6 }], local(&l), false, Conflict::Skip, &p).unwrap();
+        assert_eq!((p.done(), p.total()), (6, 6));
+        assert_eq!(read(&l.join("a.txt")), "local");
+    }
+
+    /// A paused remote transfer does not sleep while it holds the connection.
+    #[test]
+    fn remote_progress_does_not_pause_mid_file() {
+        let p = Progress::default();
+        p.pause();
+        let t0 = std::time::Instant::now();
+        p.add_unpaused(10);
+        assert_eq!(p.done(), 10);
+        assert!(t0.elapsed() < std::time::Duration::from_millis(50));
+    }
+
+    #[test]
+    fn the_ui_never_waits_for_a_busy_connection() {
+        let b = tmp("busy");
+        let Endpoint::Remote(fs, ..) = remote(DiskRemote::default(), &b) else { unreachable!() };
+        let held = fs.lock().unwrap();
+        assert_eq!(crate::remote::try_use(&fs).err(), Some(crate::remote::busy_text()));
+        let t0 = std::time::Instant::now();
+        assert!(crate::remote::use_soon(&fs, std::time::Duration::from_secs(5), &|| true).is_err(), "gives up once cancelled");
+        assert!(t0.elapsed() < std::time::Duration::from_secs(1));
+        drop(held);
+        assert!(crate::remote::try_use(&fs).is_ok());
     }
 
     #[test]
@@ -615,7 +772,7 @@ mod tests {
         let job = Job::spawn("q", true, |_| Ok("ran".into()));
         job.progress.cancel();
         std::thread::sleep(std::time::Duration::from_millis(250));
-        assert_eq!(job.poll(), Some(Err("Cancelled".to_string())));
+        assert_eq!(job.poll(), Some(Err(t("Cancelled"))));
     }
 
     #[test]
@@ -744,7 +901,7 @@ mod tests {
         fn upload(&mut self, local: &Path, remote: &str, _: crate::remote::ProgressFn, _: &AtomicBool) -> Res<()> {
             std::fs::copy(local, remote).map(|_| ()).map_err(es)
         }
-        fn read_head(&mut self, _: &str, _: usize) -> Res<Vec<u8>> {
+        fn read_head(&mut self, _: &str, _: usize, _: &AtomicBool) -> Res<Vec<u8>> {
             Ok(vec![])
         }
         fn mkdir(&mut self, path: &str) -> Res<()> {

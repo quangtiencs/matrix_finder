@@ -1,11 +1,12 @@
 //! Remote file systems: FTP (suppaftp) and SFTP (libssh2).
 use crate::config::{ConnectionProfile, Protocol};
+use crate::i18n::t;
 use crate::util::{es, join_slash, Res};
 use crate::vfs::Entry;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
 /// Called with the number of bytes transferred since the previous call.
@@ -16,7 +17,8 @@ pub trait RemoteFs: Send {
     fn list(&mut self, path: &str) -> Res<Vec<Entry>>;
     fn download(&mut self, remote: &str, local: &Path, progress: ProgressFn, cancel: &AtomicBool) -> Res<()>;
     fn upload(&mut self, local: &Path, remote: &str, progress: ProgressFn, cancel: &AtomicBool) -> Res<()>;
-    fn read_head(&mut self, remote: &str, max: usize) -> Res<Vec<u8>>;
+    /// The first `max` bytes of a file; stops early once `cancel` is set.
+    fn read_head(&mut self, remote: &str, max: usize, cancel: &AtomicBool) -> Res<Vec<u8>>;
     fn mkdir(&mut self, path: &str) -> Res<()>;
     fn remove_file(&mut self, path: &str) -> Res<()>;
     fn remove_dir(&mut self, path: &str) -> Res<()>;
@@ -29,6 +31,64 @@ pub trait RemoteFs: Send {
 }
 
 pub type SharedRemote = Arc<Mutex<Box<dyn RemoteFs>>>;
+
+/// Shown when a connection is in use by a transfer and the UI cannot wait for it.
+pub fn busy_text() -> String {
+    t("The connection is busy with a transfer; try again when it finishes")
+}
+
+/// The connection, if nothing else is using it. The UI thread uses this instead of
+/// `lock()`: a transfer holds the connection for a whole file, and waiting for it
+/// would freeze the window.
+pub fn try_use(fs: &SharedRemote) -> Res<MutexGuard<'_, Box<dyn RemoteFs>>> {
+    match fs.try_lock() {
+        Ok(g) => Ok(g),
+        Err(TryLockError::WouldBlock) => Err(busy_text()),
+        Err(TryLockError::Poisoned(e)) => Err(e.to_string()),
+    }
+}
+
+/// Like `try_use`, but waits up to `patience` for a short operation (a listing) to finish,
+/// and gives up early once `cancel` is set. For background threads that must not wait for
+/// a whole transfer.
+pub fn use_soon<'a>(fs: &'a SharedRemote, patience: Duration, cancel: &dyn Fn() -> bool) -> Res<MutexGuard<'a, Box<dyn RemoteFs>>> {
+    let start = std::time::Instant::now();
+    loop {
+        match fs.try_lock() {
+            Ok(g) => return Ok(g),
+            Err(TryLockError::Poisoned(e)) => return Err(e.to_string()),
+            Err(TryLockError::WouldBlock) => {
+                if cancel() {
+                    return Err(t("Cancelled"));
+                }
+                if start.elapsed() >= patience {
+                    return Err(busy_text());
+                }
+                std::thread::sleep(Duration::from_millis(40));
+            }
+        }
+    }
+}
+
+/// Read up to `max` bytes, checking `cancel` between blocks.
+fn read_limited(r: &mut dyn Read, max: usize, cancel: &AtomicBool) -> Res<Vec<u8>> {
+    let mut buf = Vec::new();
+    let mut block = vec![0u8; 64 * 1024];
+    while buf.len() < max {
+        if cancel.load(Ordering::Relaxed) {
+            return Err(t("Cancelled"));
+        }
+        let want = block.len().min(max - buf.len());
+        let n = match r.read(&mut block[..want]) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(es(e)),
+        };
+        buf.extend_from_slice(&block[..n]);
+    }
+    Ok(buf)
+}
 
 #[derive(Debug)]
 pub enum ConnectError {
@@ -97,7 +157,7 @@ fn copy_stream(
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         if cancel.load(Ordering::Relaxed) {
-            return Err("Cancelled".into());
+            return Err(t("Cancelled"));
         }
         let n = r.read(&mut buf).map_err(es)?;
         if n == 0 {
@@ -172,19 +232,16 @@ impl RemoteFs for FtpFs {
         res.and(fin)
     }
 
-    fn read_head(&mut self, remote: &str, max: usize) -> Res<Vec<u8>> {
-        let stream = self.ftp.retr_as_stream(remote).map_err(es)?;
-        let mut buf = Vec::new();
-        let mut limited = stream.take(max as u64);
-        limited.read_to_end(&mut buf).map_err(es)?;
-        let stream = limited.into_inner();
-        if buf.len() >= max {
+    fn read_head(&mut self, remote: &str, max: usize, cancel: &AtomicBool) -> Res<Vec<u8>> {
+        let mut stream = self.ftp.retr_as_stream(remote).map_err(es)?;
+        let r = read_limited(&mut stream, max, cancel);
+        if r.as_ref().map_or(true, |buf| buf.len() >= max) {
             // Stop the transfer early; ignore errors from the aborted stream.
             let _ = self.ftp.abort(stream);
         } else {
             let _ = self.ftp.finalize_retr_stream(stream);
         }
-        Ok(buf)
+        r
     }
 
     fn mkdir(&mut self, path: &str) -> Res<()> {
@@ -356,11 +413,9 @@ impl RemoteFs for SftpFs {
         copy_stream(&mut inp, &mut w, progress, cancel)
     }
 
-    fn read_head(&mut self, remote: &str, max: usize) -> Res<Vec<u8>> {
-        let r = self.sftp.open(Path::new(remote)).map_err(es)?;
-        let mut buf = Vec::new();
-        r.take(max as u64).read_to_end(&mut buf).map_err(es)?;
-        Ok(buf)
+    fn read_head(&mut self, remote: &str, max: usize, cancel: &AtomicBool) -> Res<Vec<u8>> {
+        let mut r = self.sftp.open(Path::new(remote)).map_err(es)?;
+        read_limited(&mut r, max, cancel)
     }
 
     fn mkdir(&mut self, path: &str) -> Res<()> {
@@ -421,7 +476,7 @@ mod live_tests {
         fs.upload(&local, &join_slash(&dir, "a.txt"), &|_| {}, &cancel).unwrap();
         let names: Vec<String> = fs.list(&dir).unwrap().into_iter().map(|e| e.name).collect();
         assert_eq!(names, vec!["a.txt"]);
-        assert_eq!(fs.read_head(&join_slash(&dir, "a.txt"), 5).unwrap(), b"hello");
+        assert_eq!(fs.read_head(&join_slash(&dir, "a.txt"), 5, &cancel).unwrap(), b"hello");
         fs.rename(&join_slash(&dir, "a.txt"), &join_slash(&dir, "b.txt")).unwrap();
         let back = local.with_extension("back");
         fs.download(&join_slash(&dir, "b.txt"), &back, &|_| {}, &cancel).unwrap();
