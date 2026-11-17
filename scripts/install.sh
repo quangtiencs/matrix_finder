@@ -311,7 +311,7 @@ check_mac_tools() {
 # Links a tiny program with `cc`, which is what rustc links with. Catches a linker
 # that is older than the SDK beside it (a half-finished Command Line Tools update:
 # "tapi error: malformed file ... unknown architecture") before a long build. When
-# an older SDK in the same folder works, the build uses that one instead.
+# an older SDK in the same folder works, the build uses that one instead, silently.
 link_test() {
     local dir out
     dir=$(mktemp -d)
@@ -327,12 +327,9 @@ check_mac_linker() {
     link_test 2>/dev/null && return 0
     local dev cc_path ldv current sdks s d
     dev=$(xcode-select -p)
-    cc_path=$(command -v cc)
-    ldv=$(ld -v 2>&1 | sed -n 's/.*PROJECT:\([^ ]*\).*/\1/p' | head -1 || true)
     current=$(cd -P "${SDKROOT:-$(xcrun --show-sdk-path 2>/dev/null || echo /nonexistent)}" 2>/dev/null && pwd || true)
-    warn "the C compiler cannot link a test program with the macOS SDK${current:+ ${current##*/}}:"
-    link_test || true
     # Another SDK of the same tools, newest first (real folders, not the MacOSX.sdk links).
+    # One that links is used quietly: only a machine where nothing links gets an error.
     for d in "$dev/SDKs" "$dev/Platforms/MacOSX.platform/Developer/SDKs"; do
         [ -d "$d" ] || continue
         sdks=$(cd "$d" && for s in MacOSX[0-9]*.sdk; do if [ -d "$s" ] && [ ! -L "$s" ]; then echo "$s"; fi; done |
@@ -341,12 +338,14 @@ check_mac_linker() {
             [ "$d/MacOSX$s.sdk" = "$current" ] && continue
             if SDKROOT="$d/MacOSX$s.sdk" link_test 2>/dev/null; then
                 export SDKROOT="$d/MacOSX$s.sdk"
-                warn "building with the older SDK MacOSX$s.sdk, which works"
-                warn "to fix the tools for good, update the Command Line Tools (System Settings > General > Software Update)"
                 return 0
             fi
         done
     done
+    cc_path=$(command -v cc)
+    ldv=$(ld -v 2>&1 | sed -n 's/.*PROJECT:\([^ ]*\).*/\1/p' | head -1 || true)
+    warn "the C compiler cannot link a test program with the macOS SDK${current:+ ${current##*/}}:"
+    link_test || true
     printf '\n' >&2
     if [ "$cc_path" != /usr/bin/cc ]; then
         warn "cc is $cc_path, not Apple's /usr/bin/cc: take it off PATH (e.g. conda deactivate) and try again"
