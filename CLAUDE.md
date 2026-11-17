@@ -4,6 +4,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Matrix Finder is a cross-platform dual-panel file manager in Rust, built on egui/eframe 0.31 (Rust 1.85+, a C/C++ compiler is needed for unrar and libssh2). It is one binary crate; there is no workspace and no library target.
 
+## Principles (non-negotiable)
+
+These come before features, convenience and speed. A change that breaks one of them is a bug, however useful it is.
+
+1. **Users' files are never damaged.**
+   - Browsing and Quick View are strictly read-only. A preview never writes, renames, locks, touches or "repairs" the file it shows, nor creates anything next to it. Open files read-only (e.g. SQLite with `SQLITE_OPEN_READ_ONLY` and `immutable`), and do the same for external tools such as FFmpeg, ImageMagick and git.
+   - Code that changes files (copy, move, delete, rename, batch rename, extract, compress, upload/download, settings, backup restore) needs a review of three things before it ships:
+     - **logic**: conflicts, overwrites, symlinks, case-insensitive disks, a target inside its source;
+     - **UI**: what the user is shown and asked before anything is lost (no stray Enter or click can confirm a destructive action);
+     - **interruption**: the app crashing, being killed or losing power halfway. At every point the original data must still exist intact, in the source or the finished target. Write to a temporary file and rename it into place; move across disks as copy, verify, then delete.
+   - When in doubt, keep both, skip, or ask. Never overwrite silently.
+2. **No telemetry.** The app sends nothing about its user, their files or how they use it: no analytics, crash reports, usage pings or identifiers. The network is used only for what the user explicitly asks for (a server connection, opening a link) and for the update check, which is off by default and only reads the latest release from GitHub.
+3. **Security vulnerabilities are fixed.** Every Critical and High CVE/RustSec advisory in the app or its dependencies (Rust crates and bundled C libraries such as libssh2, OpenSSL and unrar) is reviewed and fixed before a release, by upgrading, patching, or removing the dependency. Medium and lower ones are reviewed and fixed when they are reachable from the app. Check with `cargo audit` before tagging (`cargo install cargo-audit`). An advisory may be ignored in `.cargo/audit.toml` only when no fixed version is reachable and the vulnerable code cannot be fed untrusted input; each entry states why and what removes it (currently: quick-xml 0.30 from egui 0.31's Linux accessibility stack, removed by upgrading egui).
+
 ## Commands
 
 ```bash
