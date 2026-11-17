@@ -850,7 +850,7 @@ fn kml(bytes: &[u8], format: &'static str) -> Res<GeoData> {
 fn kmz(bytes: &[u8]) -> Res<GeoData> {
     use std::io::Read;
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("KMZ: {e}"))?;
-    let name = zip.file_names().filter(|n| n.to_lowercase().ends_with(".kml")).min_by_key(|n| (*n != "doc.kml", n.len())).map(str::to_string).ok_or("KMZ: no KML document inside")?;
+    let name = zip.file_names().flatten().filter(|n| n.to_lowercase().ends_with(".kml")).min_by_key(|n| (*n != "doc.kml", n.len())).map(|n| n.into_owned()).ok_or("KMZ: no KML document inside")?;
     let mut kml_bytes = Vec::new();
     zip.by_name(&name).map_err(|e| e.to_string())?.take(crate::preview::MAX_IMAGE as u64).read_to_end(&mut kml_bytes).map_err(|e| e.to_string())?;
     kml(&kml_bytes, "KMZ")
@@ -932,7 +932,7 @@ const GPKG_MAX_ROWS: usize = 2_000_000;
 /// vertex limit; a query that takes too long is cut short.
 pub fn geopackage(path: &std::path::Path) -> Res<GeoData> {
     use rusqlite::{Connection, OpenFlags};
-    let conn = Connection::open_with_flags(crate::scidata::sqlite_uri(path), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(|e| e.to_string())?;
+    let mut conn = Connection::open_with_flags(crate::scidata::sqlite_uri(path), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(|e| e.to_string())?;
     conn.pragma_update(None, "trusted_schema", "OFF").map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     conn.progress_handler(10_000, Some(move || started.elapsed() > std::time::Duration::from_secs(5))).map_err(|e| e.to_string())?;

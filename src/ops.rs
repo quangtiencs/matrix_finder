@@ -1,7 +1,8 @@
 //! Background jobs (copy / move / delete / pack / unpack / backup) with progress.
 use crate::i18n::t;
 use crate::remote::SharedRemote;
-use crate::util::{es, human_size, join_slash, unique_path, Res};
+use crate::safefs::{self, TempFile, Written};
+use crate::util::{es, human_size, join_slash, Res};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -210,31 +211,31 @@ fn local_size(p: &Path) -> u64 {
         .sum()
 }
 
-/// Copy one file through a temporary file next to `dst`, so an existing `dst` is only
-/// replaced once the new copy is complete: a cancel, full disk or read error keeps it.
-fn copy_file_progress(src: &Path, dst: &Path, p: &Progress) -> Res<()> {
-    let tmp = temp_sibling(dst);
-    let r = copy_file_inner(src, &tmp, p).and_then(|_| std::fs::rename(&tmp, dst).map_err(es));
-    if r.is_err() {
-        // Never leave a half-written file behind.
-        let _ = std::fs::remove_file(&tmp);
+/// Shown when a copy does not match its source, and a move therefore keeps the source.
+fn not_verified(name: &str) -> String {
+    format!("{}: {name}", t("The copy could not be verified, so the original was kept"))
+}
+
+/// Copy one file through a hidden temporary file next to `dst`, which is synced and only
+/// then moved into place by `policy`: a cancel, full disk, read error or crash keeps an
+/// existing `dst`. With `verify` (a move), the source must not have changed size while it
+/// was copied. Returns where the copy went, or `None` when it was skipped.
+fn copy_file_progress(src: &Path, dst: &Path, policy: Conflict, verify: bool, written: &mut Written, p: &Progress) -> Res<Option<PathBuf>> {
+    let mut tmp = TempFile::beside(dst).map_err(es)?;
+    let copied = copy_file_inner(src, tmp.file(), p)?;
+    let complete = tmp.file().metadata().map_err(es)?.len() == copied;
+    if !complete || (verify && std::fs::metadata(src).map_err(es)?.len() != copied) {
+        return Err(not_verified(&src.to_string_lossy()));
     }
-    r
+    tmp.commit(dst, policy, Some(written)).map_err(es)
 }
 
-/// A hidden, unused name in `dst`'s folder for writing `dst` before it is renamed into place.
-fn temp_sibling(dst: &Path) -> PathBuf {
-    static N: AtomicU64 = AtomicU64::new(0);
-    let n = N.fetch_add(1, Ordering::Relaxed);
-    // Not derived from `dst`'s name, which may already be as long as names can get.
-    dst.with_file_name(format!(".matrix_finder-{}-{n}.part", std::process::id()))
-}
-
-fn copy_file_inner(src: &Path, dst: &Path, p: &Progress) -> Res<()> {
+/// Copy `src` into `w`, with its permissions and modification time. Returns the bytes copied.
+fn copy_file_inner(src: &Path, w: &mut std::fs::File, p: &Progress) -> Res<u64> {
     use std::io::{Read, Write};
     let mut r = std::fs::File::open(src).map_err(es)?;
-    let mut w = std::fs::File::create(dst).map_err(es)?;
     let mut buf = vec![0u8; 256 * 1024];
+    let mut copied = 0u64;
     loop {
         p.check()?;
         let n = r.read(&mut buf).map_err(es)?;
@@ -242,15 +243,16 @@ fn copy_file_inner(src: &Path, dst: &Path, p: &Progress) -> Res<()> {
             break;
         }
         w.write_all(&buf[..n]).map_err(es)?;
+        copied += n as u64;
         p.add(n as u64);
     }
-    if let Ok(meta) = std::fs::metadata(src) {
-        let _ = std::fs::set_permissions(dst, meta.permissions());
+    if let Ok(meta) = r.metadata() {
+        let _ = w.set_permissions(meta.permissions());
         if let Ok(m) = meta.modified() {
             let _ = w.set_modified(m);
         }
     }
-    Ok(())
+    Ok(copied)
 }
 
 /// `p` with its folder resolved through symlinks, but not `p` itself.
@@ -263,67 +265,74 @@ fn same_entry(a: &Path, b: &Path) -> bool {
     a == b || matches!((real_entry(a), real_entry(b)), (Some(x), Some(y)) if x == y)
 }
 
-/// Copy `src` to `dst`, or with `mv` move it: each file's source is deleted once that file
-/// has been copied. Returns false when something was skipped (by the conflict policy, or
-/// because it already is the destination); its source, and the folders holding it, are kept.
-fn copy_local_recursive(src: &Path, dst: &Path, policy: Conflict, mv: bool, p: &Progress) -> Res<bool> {
+/// Sources a move deletes once its whole item is copied and verified: (path, is a folder),
+/// each folder after what was in it.
+type Gone<T> = Vec<(T, bool)>;
+
+/// Delete the sources of a finished local move.
+fn delete_local_sources(gone: Gone<PathBuf>) -> Res<()> {
+    for (path, is_dir) in gone {
+        if is_dir {
+            std::fs::remove_dir(&path).map_err(es)?;
+        } else {
+            std::fs::remove_file(&path).map_err(es)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copy `src` to `dst`. For a move, `gone` collects the sources to delete once the whole
+/// item is done (a file renamed on the same disk moves at once). Returns false when
+/// something was skipped (by the conflict policy, or because it already is the
+/// destination); its source, and the folders holding it, are kept.
+fn copy_local_recursive(src: &Path, dst: &Path, policy: Conflict, mut gone: Option<&mut Gone<PathBuf>>, written: &mut Written, p: &Progress) -> Res<bool> {
     p.check()?;
     let meta = std::fs::symlink_metadata(src).map_err(es)?;
     if meta.is_dir() {
         std::fs::create_dir_all(dst).map_err(es)?;
         let mut complete = true;
         for e in std::fs::read_dir(src).map_err(es)?.flatten() {
-            complete &= copy_local_recursive(&e.path(), &dst.join(e.file_name()), policy, mv, p)?;
+            complete &= copy_local_recursive(&e.path(), &dst.join(e.file_name()), policy, gone.as_deref_mut(), written, p)?;
         }
-        if mv && complete {
-            std::fs::remove_dir(src).map_err(es)?;
+        if let Some(g) = gone.filter(|_| complete) {
+            g.push((src.to_path_buf(), true));
         }
-        Ok(complete)
-    } else {
-        let dst = match resolve_local(dst, policy) {
-            Some(d) => d,
-            None => {
-                p.add(meta.len());
-                return Ok(false);
-            }
-        };
-        if std::fs::symlink_metadata(&dst).is_ok() && same_entry(src, &dst) {
-            p.add(meta.len());
+        return Ok(complete);
+    }
+    // Skipped, but done: the bar still reaches the end.
+    if policy == Conflict::Skip && safefs::exists(dst) || safefs::exists(dst) && same_entry(src, dst) {
+        p.add(meta.len());
+        return Ok(false);
+    }
+    p.set_current(&src.to_string_lossy());
+    #[cfg(unix)]
+    if meta.file_type().is_symlink() {
+        // Made under a temporary name, then moved over: an existing `dst` is only replaced by a finished link.
+        let target = std::fs::read_link(src).map_err(es)?;
+        let tmp = TempFile::name_beside(dst);
+        std::os::unix::fs::symlink(target, tmp.path()).map_err(es)?;
+        if tmp.commit(dst, policy, Some(written)).map_err(es)?.is_none() {
             return Ok(false);
         }
-        p.set_current(&src.to_string_lossy());
-        #[cfg(unix)]
-        if meta.file_type().is_symlink() {
-            let target = std::fs::read_link(src).map_err(es)?;
-            let _ = std::fs::remove_file(&dst);
-            std::os::unix::fs::symlink(target, &dst).map_err(es)?;
-            if mv {
-                std::fs::remove_file(src).map_err(es)?;
-            }
-            return Ok(true);
+        if let Some(g) = gone {
+            g.push((src.to_path_buf(), false));
         }
-        if mv && std::fs::rename(src, &dst).is_ok() {
+        return Ok(true);
+    }
+    if gone.is_some() {
+        // On the same disk a rename moves it whole (never over another file, unless the policy says so).
+        if let Ok(placed) = safefs::place(src, dst, policy, Some(written)) {
             p.add(meta.len());
-            return Ok(true);
+            return Ok(placed.is_some());
         }
-        copy_file_progress(src, &dst, p)?;
-        if mv {
-            std::fs::remove_file(src).map_err(es)?;
-        }
-        Ok(true)
     }
-}
-
-/// Apply the conflict policy to a local target. `None` = skip.
-fn resolve_local(dst: &Path, policy: Conflict) -> Option<PathBuf> {
-    if !dst.exists() {
-        return Some(dst.to_path_buf());
+    if copy_file_progress(src, dst, policy, gone.is_some(), written, p)?.is_none() {
+        return Ok(false);
     }
-    match policy {
-        Conflict::Overwrite => Some(dst.to_path_buf()),
-        Conflict::Skip => None,
-        Conflict::Rename => Some(unique_path(dst)),
+    if let Some(g) = gone {
+        g.push((src.to_path_buf(), false));
     }
+    Ok(true)
 }
 
 /// `dir/name` when `name` is one plain file name. Names come from the server, and one
@@ -338,7 +347,7 @@ fn local_child(dir: &Path, name: &str) -> Res<PathBuf> {
 
 /// A name like `name` that `taken` does not have, the way `unique_path` makes one:
 /// `report.pdf` becomes `report (1).pdf`, then `report (2).pdf`.
-fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
+fn unique_name(name: &str, mut taken: impl FnMut(&str) -> bool) -> String {
     if !taken(name) {
         return name.to_string();
     }
@@ -348,117 +357,189 @@ fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
     (1..).map(|n| format!("{stem} ({n}){ext}")).find(|c| !taken(c)).unwrap_or_default()
 }
 
-/// Download a remote file or folder; with `mv`, delete each remote file once it is downloaded.
-/// Returns false when something was skipped, and then keeps the remote folders holding it.
-/// A pause takes effect between files: the connection stays locked during a file, and
-/// nothing may sleep while holding it.
-fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool, size: u64, policy: Conflict, mv: bool, p: &Progress) -> Res<bool> {
+/// Move the finished remote file or folder `from` to `dir/name` by the conflict policy,
+/// deciding on a fresh look at the folder. Returns the path it got, or `None` when skipped
+/// (`from` is then left for the caller). Overwrite first renames the old file to a hidden
+/// name and deletes it only once the new one is in place, so one of them always exists.
+/// An upload (`upload`) takes the permissions of the file it replaces. (FTP servers often
+/// replace on rename: a file that appears between the check and the rename can still be
+/// replaced there.)
+fn remote_place(g: &mut dyn crate::remote::RemoteFs, from: &str, dir: &str, name: &str, policy: Conflict, upload: bool) -> Res<Option<String>> {
+    for _ in 0..3 {
+        let target = join_slash(dir, name);
+        let free = if !g.exists(&target)? {
+            target
+        } else {
+            match policy {
+                Conflict::Skip => return Ok(None),
+                Conflict::Rename => {
+                    let mut probe = Ok(());
+                    let free = unique_name(name, |n| match g.exists(&join_slash(dir, n)) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            probe = Err(e);
+                            false
+                        }
+                    });
+                    probe?;
+                    join_slash(dir, &free)
+                }
+                Conflict::Overwrite => {
+                    // A folder is never replaced by a file.
+                    if g.list(dir)?.iter().any(|e| e.name == name && e.is_dir) {
+                        return Ok(None);
+                    }
+                    let old = join_slash(dir, &safefs::temp_name(name, "old"));
+                    if upload {
+                        g.copy_mode(&target, from);
+                    }
+                    g.rename(&target, &old)?;
+                    if let Err(e) = g.rename(from, &target) {
+                        return Err(match g.rename(&old, &target) {
+                            Ok(()) => e,
+                            Err(_) => format!("{e} ({}: {old})", t("it is now named")),
+                        });
+                    }
+                    // Should this fail, the old file stays under its hidden name.
+                    let _ = g.remove_file(&old);
+                    return Ok(Some(target));
+                }
+            }
+        };
+        match g.rename(from, &free) {
+            Ok(()) => return Ok(Some(free)),
+            // Taken meanwhile: decide again.
+            Err(_) if g.exists(&free)? => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(format!("{}: {name}", t("Already exists")))
+}
+
+/// Download a remote file or folder. For a move, `gone` collects the remote sources to
+/// delete once the whole item is downloaded and verified. Returns false when something was
+/// skipped, and then keeps the remote folders holding it. A pause takes effect between
+/// files: the connection stays locked during a file, and nothing may sleep while holding it.
+#[allow(clippy::too_many_arguments)]
+fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool, size: u64, policy: Conflict, mut gone: Option<&mut Gone<String>>, written: &mut Written, p: &Progress) -> Res<bool> {
     p.check()?;
     if is_dir {
         std::fs::create_dir_all(lpath).map_err(es)?;
         // A link to a folder: download what it points to, but delete only the link.
-        let link = mv && fs.lock().map_err(es)?.is_symlink(rpath)?;
+        let link = gone.is_some() && fs.lock().map_err(es)?.is_symlink(rpath)?;
         let list = fs.lock().map_err(es)?.list(rpath)?;
         let mut complete = true;
         for e in list {
             let child = local_child(lpath, &e.name)?;
-            complete &= download_recursive(fs, &join_slash(rpath, &e.name), &child, e.is_dir, e.size, policy, mv && !link, p)?;
+            let inner = if link { None } else { gone.as_deref_mut() };
+            complete &= download_recursive(fs, &join_slash(rpath, &e.name), &child, e.is_dir, e.size, policy, inner, written, p)?;
         }
-        if mv && complete {
-            let mut g = fs.lock().map_err(es)?;
-            if link {
-                g.remove_file(rpath)?;
-            } else {
-                g.remove_dir(rpath)?;
-            }
+        if let Some(g) = gone.filter(|_| complete) {
+            // A link goes as a file.
+            g.push((rpath.to_string(), !link));
         }
         Ok(complete)
     } else {
-        let Some(target) = resolve_local(lpath, policy) else {
+        if policy == Conflict::Skip && safefs::exists(lpath) {
             // Skipped, but done: the bar still reaches the end.
             p.add(size);
             return Ok(false);
-        };
-        p.set_current(rpath);
-        // Into a temporary file first, so a failed download keeps an existing `target`.
-        let tmp = temp_sibling(&target);
-        let mut g = fs.lock().map_err(es)?;
-        let r = g
-            .download(rpath, &tmp, &|n| p.add_unpaused(n), p.cancel_flag())
-            .and_then(|_| {
-                // An overwritten file keeps its permissions, as it would if written in place.
-                if let Ok(meta) = std::fs::metadata(&target) {
-                    let _ = std::fs::set_permissions(&tmp, meta.permissions());
-                }
-                std::fs::rename(&tmp, &target).map_err(es)
-            });
-        if r.is_err() {
-            let _ = std::fs::remove_file(&tmp);
         }
-        r?;
-        if mv {
-            g.remove_file(rpath)?;
+        p.set_current(rpath);
+        // Into a temporary file first, so a failed download keeps an existing file.
+        let tmp = TempFile::name_beside(lpath);
+        let mut g = fs.lock().map_err(es)?;
+        g.download(rpath, tmp.path(), &|n| p.add_unpaused(n), p.cancel_flag())?;
+        // Before a move deletes the remote file, the copy must have its size.
+        let mut verified = true;
+        if gone.is_some() {
+            let got = std::fs::metadata(tmp.path()).map_err(es)?.len();
+            match g.file_size(rpath)? {
+                Some(n) if n != got => return Err(not_verified(rpath)),
+                Some(_) => {}
+                None => verified = false,
+            }
+        }
+        drop(g);
+        if policy == Conflict::Overwrite {
+            // An overwritten file keeps its permissions, as it would if written in place.
+            if let Ok(meta) = std::fs::metadata(lpath) {
+                let _ = std::fs::set_permissions(tmp.path(), meta.permissions());
+            }
+        }
+        if tmp.commit(lpath, policy, Some(written)).map_err(es)?.is_none() || !verified {
+            return Ok(false);
+        }
+        if let Some(g) = gone {
+            g.push((rpath.to_string(), false));
         }
         Ok(true)
     }
 }
 
-/// Upload a local file or folder; with `mv`, delete each local file once it is uploaded.
-/// Returns false when something was skipped, and then keeps the local folders holding it.
-/// Like downloads, it pauses between files.
-fn upload_recursive(fs: &SharedRemote, lpath: &Path, rpath: &str, existing: Option<&HashSet<String>>, policy: Conflict, mv: bool, p: &Progress) -> Res<bool> {
+/// Upload a local file or folder. For a move, `gone` collects the local sources to delete
+/// once the whole item is uploaded and verified. Returns false when something was skipped,
+/// and then keeps the local folders holding it. Like downloads, it pauses between files.
+#[allow(clippy::too_many_arguments)]
+fn upload_recursive(fs: &SharedRemote, lpath: &Path, rdir: &str, name: &str, existing: Option<&HashSet<String>>, policy: Conflict, mut gone: Option<&mut Gone<PathBuf>>, p: &Progress) -> Res<bool> {
     p.check()?;
-    let name = lpath.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-    let exists = existing.is_some_and(|s| s.contains(&name));
+    let rpath = join_slash(rdir, name);
+    let exists = existing.is_some_and(|s| s.contains(name));
     if lpath.is_dir() {
         // A link to a folder: upload what it points to, but delete only the link.
-        let link = mv && std::fs::symlink_metadata(lpath).map_err(es)?.file_type().is_symlink();
+        let link = std::fs::symlink_metadata(lpath).map_err(es)?.file_type().is_symlink();
         if !exists {
-            fs.lock().map_err(es)?.mkdir(rpath)?;
+            fs.lock().map_err(es)?.mkdir(&rpath)?;
         }
         let children: HashSet<String> = if exists {
-            fs.lock().map_err(es)?.list(rpath)?.into_iter().map(|e| e.name).collect()
+            fs.lock().map_err(es)?.list(&rpath)?.into_iter().map(|e| e.name).collect()
         } else {
             HashSet::new()
         };
         let mut complete = true;
         for e in std::fs::read_dir(lpath).map_err(es)?.flatten() {
             let n = e.file_name().to_string_lossy().to_string();
-            complete &= upload_recursive(fs, &e.path(), &join_slash(rpath, &n), Some(&children), policy, mv && !link, p)?;
+            let inner = if link { None } else { gone.as_deref_mut() };
+            complete &= upload_recursive(fs, &e.path(), &rpath, &n, Some(&children), policy, inner, p)?;
         }
-        if mv && complete {
-            if link {
-                std::fs::remove_file(lpath).map_err(es)?;
-            } else {
-                std::fs::remove_dir(lpath).map_err(es)?;
-            }
+        if let Some(g) = gone.filter(|_| complete) {
+            g.push((lpath.to_path_buf(), !link));
         }
         Ok(complete)
     } else {
-        let mut target = rpath.to_string();
-        if exists {
-            match policy {
-                Conflict::Skip => {
-                    // Skipped, but done: the bar still reaches the end.
-                    p.add(std::fs::metadata(lpath).map(|m| m.len()).unwrap_or(0));
-                    return Ok(false);
-                }
-                Conflict::Overwrite => {}
-                Conflict::Rename => {
-                    let free = unique_name(&name, |n| existing.is_some_and(|s| s.contains(n)));
-                    target = match rpath.rsplit_once('/') {
-                        Some((dir, _)) => format!("{dir}/{free}"),
-                        None => free,
-                    };
-                }
-            }
+        let len = std::fs::metadata(lpath).map(|m| m.len()).unwrap_or(0);
+        if exists && policy == Conflict::Skip {
+            // Skipped, but done: the bar still reaches the end.
+            p.add(len);
+            return Ok(false);
         }
         p.set_current(&lpath.to_string_lossy());
+        // Under a hidden temporary name, checked, then renamed into place: an existing
+        // file is never truncated, and a cancelled upload leaves nothing under the real name.
+        let tmp = join_slash(rdir, &safefs::temp_name(name, "part"));
         let mut g = fs.lock().map_err(es)?;
-        g.upload(lpath, &target, &|n| p.add_unpaused(n), p.cancel_flag())?;
+        let uploaded = g.upload(lpath, &tmp, &|n| p.add_unpaused(n), p.cancel_flag()).and_then(|_| match g.file_size(&tmp)? {
+            Some(n) if n != len => Err(not_verified(&lpath.to_string_lossy())),
+            known => Ok(known.is_some()),
+        });
+        let placed = uploaded.and_then(|verified| Ok((verified, remote_place(&mut **g, &tmp, rdir, name, policy, true)?)));
+        let (verified, placed) = match placed {
+            Ok((v, Some(_))) => (v, true),
+            r => {
+                let _ = g.remove_file(&tmp);
+                r?;
+                (false, false)
+            }
+        };
         drop(g);
-        if mv {
-            std::fs::remove_file(lpath).map_err(es)?;
+        if !placed {
+            return Ok(false);
+        }
+        match gone {
+            Some(g) if verified => g.push((lpath.to_path_buf(), false)),
+            // The server did not say the size: the local file stays.
+            Some(_) => return Ok(false),
+            None => {}
         }
         Ok(true)
     }
@@ -486,6 +567,8 @@ pub fn transfer(src: Endpoint, items: Vec<Item>, dst: Endpoint, mv: bool, policy
     let count = items.len();
     // False once anything was skipped (moves then keep those sources).
     let mut complete = true;
+    // What this job wrote: it never overwrites its own files.
+    let mut written = Written::default();
     match (&src, &dst) {
         (Endpoint::Local(sdir), Endpoint::Local(ddir)) => {
             p.set_current(&t("Calculating…"));
@@ -502,32 +585,26 @@ pub fn transfer(src: Endpoint, items: Vec<Item>, dst: Endpoint, mv: bool, policy
                         continue;
                     }
                     // Copy onto itself: always create a renamed copy.
-                    copy_local_recursive(&s, &unique_path(&d), Conflict::Rename, false, p)?;
+                    copy_local_recursive(&s, &safefs::unique_path(&d), Conflict::Rename, None, &mut written, p)?;
                     continue;
                 }
                 if it.is_dir && (ddir.starts_with(&s) || real_entry(&s).is_some_and(|rs| real_ddir.starts_with(rs))) {
                     return Err(t("Cannot copy “{name}” into itself").replace("{name}", &it.name));
                 }
                 if mv {
-                    let target = if d.exists() && !it.is_dir {
-                        match resolve_local(&d, policy) {
-                            Some(t) => t,
-                            None => {
-                                complete = false;
-                                continue;
-                            }
-                        }
-                    } else {
-                        d.clone()
-                    };
-                    if !target.exists() && std::fs::rename(&s, &target).is_ok() {
+                    // On the same disk, into a free name: one rename moves it all.
+                    if safefs::rename_noreplace(&s, &d).is_ok() {
+                        written.insert(&d);
+                        safefs::sync_dir(ddir);
                         continue;
                     }
-                    // Cross-device or merge: copy, deleting each source file once copied.
+                    // Another disk, or a merge: copy everything, then delete the sources.
                     p.add_total(if it.is_dir { local_size(&s) } else { it.size });
-                    complete &= copy_local_recursive(&s, &target, policy, true, p)?;
+                    let mut gone = Vec::new();
+                    complete &= copy_local_recursive(&s, &d, policy, Some(&mut gone), &mut written, p)?;
+                    delete_local_sources(gone)?;
                 } else {
-                    complete &= copy_local_recursive(&s, &d, policy, false, p)?;
+                    complete &= copy_local_recursive(&s, &d, policy, None, &mut written, p)?;
                 }
             }
         }
@@ -536,7 +613,18 @@ pub fn transfer(src: Endpoint, items: Vec<Item>, dst: Endpoint, mv: bool, policy
             p.set_total(items.iter().map(|i| remote_size(fs, &join_slash(rdir, &i.name), i.is_dir, i.size, p)).sum());
             for it in &items {
                 let rp = join_slash(rdir, &it.name);
-                complete &= download_recursive(fs, &rp, &local_child(ddir, &it.name)?, it.is_dir, it.size, policy, mv, p)?;
+                let mut gone = Vec::new();
+                complete &= download_recursive(fs, &rp, &local_child(ddir, &it.name)?, it.is_dir, it.size, policy, mv.then_some(&mut gone), &mut written, p)?;
+                if !gone.is_empty() {
+                    let mut g = fs.lock().map_err(es)?;
+                    for (path, is_dir) in gone {
+                        if is_dir {
+                            g.remove_dir(&path)?;
+                        } else {
+                            g.remove_file(&path)?;
+                        }
+                    }
+                }
             }
         }
         (Endpoint::Local(sdir), Endpoint::Remote(fs, _, rdir)) => {
@@ -545,13 +633,23 @@ pub fn transfer(src: Endpoint, items: Vec<Item>, dst: Endpoint, mv: bool, policy
             let existing: HashSet<String> = fs.lock().map_err(es)?.list(rdir)?.into_iter().map(|e| e.name).collect();
             for it in &items {
                 let lp = sdir.join(&it.name);
-                complete &= upload_recursive(fs, &lp, &join_slash(rdir, &it.name), Some(&existing), policy, mv, p)?;
+                let mut gone = Vec::new();
+                complete &= upload_recursive(fs, &lp, rdir, &it.name, Some(&existing), policy, mv.then_some(&mut gone), p)?;
+                delete_local_sources(gone)?;
             }
         }
         (Endpoint::Remote(fs, a, sdir), Endpoint::Remote(_, b, ddir)) if a == b && mv => {
             let mut g = fs.lock().map_err(es)?;
             for it in &items {
-                g.rename(&join_slash(sdir, &it.name), &join_slash(ddir, &it.name))?;
+                p.check()?;
+                let from = join_slash(sdir, &it.name);
+                if sdir.trim_end_matches('/') == ddir.trim_end_matches('/') {
+                    continue;
+                }
+                if it.is_dir && (ddir == &from || ddir.starts_with(&format!("{}/", from.trim_end_matches('/')))) {
+                    return Err(t("Cannot copy “{name}” into itself").replace("{name}", &it.name));
+                }
+                complete &= remote_place(&mut **g, &from, ddir, &it.name, policy, false)?.is_some();
             }
         }
         (Endpoint::Archive(file, inner), Endpoint::Local(ddir)) => {
@@ -872,6 +970,9 @@ mod tests {
         /// Extra names to list in every folder, as a malicious server would.
         inject: Option<String>,
         fail_downloads: bool,
+        /// Fail uploads after writing part of the file.
+        fail_uploads: bool,
+        rename_replaces: bool,
     }
 
     impl crate::remote::RemoteFs for DiskRemote {
@@ -882,7 +983,8 @@ mod tests {
             let mut out = vec![];
             for e in std::fs::read_dir(path).map_err(es)?.flatten() {
                 let is_dir = e.path().is_dir();
-                let mut en = crate::vfs::Entry::new(e.file_name().to_string_lossy().to_string(), is_dir, 0, None);
+                let size = if is_dir { 0 } else { e.metadata().map_err(es)?.len() };
+                let mut en = crate::vfs::Entry::new(e.file_name().to_string_lossy().to_string(), is_dir, size, None);
                 en.is_link = e.path().symlink_metadata().map_err(es)?.file_type().is_symlink();
                 out.push(en);
             }
@@ -899,6 +1001,10 @@ mod tests {
             std::fs::copy(remote, local).map(|_| ()).map_err(es)
         }
         fn upload(&mut self, local: &Path, remote: &str, _: crate::remote::ProgressFn, _: &AtomicBool) -> Res<()> {
+            if self.fail_uploads {
+                std::fs::write(remote, "partial").map_err(es)?;
+                return Err("connection lost".into());
+            }
             std::fs::copy(local, remote).map(|_| ()).map_err(es)
         }
         fn read_head(&mut self, _: &str, _: usize, _: &AtomicBool) -> Res<Vec<u8>> {
@@ -914,7 +1020,14 @@ mod tests {
             std::fs::remove_dir(path).map_err(es)
         }
         fn rename(&mut self, from: &str, to: &str) -> Res<()> {
-            std::fs::rename(from, to).map_err(es)
+            // Like an FTP server: an existing file is replaced.
+            if self.rename_replaces {
+                return std::fs::rename(from, to).map_err(es);
+            }
+            safefs::rename_noreplace(Path::new(from), Path::new(to)).map_err(es)
+        }
+        fn create_file(&mut self, path: &str) -> Res<()> {
+            std::fs::OpenOptions::new().write(true).create_new(true).open(path).map(|_| ()).map_err(es)
         }
         fn is_symlink(&mut self, path: &str) -> Res<bool> {
             Ok(std::fs::symlink_metadata(path).map_err(es)?.file_type().is_symlink())
@@ -963,12 +1076,12 @@ mod tests {
         write(&dst, "precious");
         write(&b.join("src.txt"), "new");
         // The source cannot be opened.
-        assert!(copy_file_progress(&b.join("missing"), &dst, &Progress::default()).is_err());
+        assert!(copy_file_progress(&b.join("missing"), &dst, Conflict::Overwrite, false, &mut Written::default(), &Progress::default()).is_err());
         assert_eq!(read(&dst), "precious");
         // Cancelled.
         let p = Progress::default();
         p.cancel();
-        assert!(copy_file_progress(&b.join("src.txt"), &dst, &p).is_err());
+        assert!(copy_file_progress(&b.join("src.txt"), &dst, Conflict::Overwrite, false, &mut Written::default(), &p).is_err());
         assert_eq!(read(&dst), "precious");
         // And no temporary files are left over.
         assert_eq!(std::fs::read_dir(&b).unwrap().count(), 2);
@@ -1013,6 +1126,112 @@ mod tests {
         std::os::unix::fs::symlink(b.join("a/d"), b.join("b/d")).unwrap();
         transfer(local(&b.join("a")), vec![dir("d")], local(&b.join("b")), true, Conflict::Overwrite, &Progress::default()).unwrap();
         assert_eq!(read(&b.join("a/d/f.txt")), "only copy");
+    }
+
+    /// Names in a folder, temporary files included.
+    fn listing(d: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    /// `README` and `readme` from a disk that tells them apart, moved with Overwrite to one
+    /// that may not: the second never replaces the first, whose source is already gone.
+    #[test]
+    fn a_move_never_overwrites_a_file_it_wrote_itself() {
+        let b = tmp("case-move");
+        write(&b.join("one/README"), "one");
+        write(&b.join("two/README"), "two");
+        std::fs::create_dir_all(b.join("dst")).unwrap();
+        let mut written = Written::default();
+        let mut gone = Vec::new();
+        let p = Progress::default();
+        assert!(copy_local_recursive(&b.join("one/README"), &b.join("dst/README"), Conflict::Overwrite, Some(&mut gone), &mut written, &p).unwrap());
+        assert!(copy_local_recursive(&b.join("two/README"), &b.join("dst/readme"), Conflict::Overwrite, Some(&mut gone), &mut written, &p).unwrap());
+        delete_local_sources(gone).unwrap();
+        let mut got: Vec<String> = listing(&b.join("dst")).iter().map(|n| read(&b.join("dst").join(n))).collect();
+        got.sort();
+        assert_eq!(got, ["one", "two"]);
+    }
+
+    #[test]
+    fn a_move_onto_a_taken_name_follows_the_policy() {
+        let b = tmp("move-policy");
+        write(&b.join("a/f.txt"), "new");
+        write(&b.join("b/f.txt"), "old");
+        transfer(local(&b.join("a")), vec![file("f.txt")], local(&b.join("b")), true, Conflict::Skip, &Progress::default()).unwrap();
+        assert_eq!((read(&b.join("a/f.txt")), read(&b.join("b/f.txt"))), ("new".into(), "old".into()));
+        transfer(local(&b.join("a")), vec![file("f.txt")], local(&b.join("b")), true, Conflict::Rename, &Progress::default()).unwrap();
+        assert_eq!(listing(&b.join("b")), ["f (1).txt", "f.txt"]);
+        assert_eq!(read(&b.join("b/f (1).txt")), "new");
+        assert!(listing(&b.join("a")).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_are_replaced_whole_and_dangling_ones_count_as_taken() {
+        let b = tmp("links");
+        std::fs::create_dir_all(b.join("a")).unwrap();
+        std::os::unix::fs::symlink("target.txt", b.join("a/l")).unwrap();
+        write(&b.join("b/l"), "old file");
+        std::os::unix::fs::symlink(b.join("nowhere"), b.join("b/dangling")).unwrap();
+        write(&b.join("a/dangling"), "data");
+        transfer(local(&b.join("a")), vec![file("l")], local(&b.join("b")), false, Conflict::Overwrite, &Progress::default()).unwrap();
+        assert_eq!(std::fs::read_link(b.join("b/l")).unwrap(), Path::new("target.txt"));
+        // Skip: a dangling link is something there too.
+        transfer(local(&b.join("a")), vec![file("dangling")], local(&b.join("b")), false, Conflict::Skip, &Progress::default()).unwrap();
+        assert!(std::fs::symlink_metadata(b.join("b/dangling")).unwrap().file_type().is_symlink());
+        transfer(local(&b.join("a")), vec![file("dangling")], local(&b.join("b")), false, Conflict::Rename, &Progress::default()).unwrap();
+        assert_eq!(read(&b.join("b/dangling (1)")), "data");
+        assert_eq!(listing(&b.join("b")), ["dangling", "dangling (1)", "l"]);
+    }
+
+    #[test]
+    fn a_failed_upload_keeps_the_remote_file_and_leaves_no_part() {
+        let b = tmp("failed-upload");
+        let (r, l) = (b.join("remote"), b.join("local"));
+        write(&l.join("a.txt"), "new");
+        write(&l.join("b.txt"), "new b");
+        write(&r.join("a.txt"), "precious");
+        let fs = || DiskRemote { fail_uploads: true, ..Default::default() };
+        assert!(transfer(local(&l), vec![file("a.txt")], remote(fs(), &r), true, Conflict::Overwrite, &Progress::default()).is_err());
+        assert!(transfer(local(&l), vec![file("b.txt")], remote(fs(), &r), true, Conflict::Overwrite, &Progress::default()).is_err());
+        assert_eq!(listing(&r), ["a.txt"], "no partial file under any name");
+        assert_eq!(read(&r.join("a.txt")), "precious");
+        assert_eq!(listing(&l), ["a.txt", "b.txt"], "the sources of the moves stay");
+    }
+
+    #[test]
+    fn an_overwriting_upload_replaces_only_when_complete() {
+        for replaces in [false, true] {
+            let b = tmp(&format!("up-overwrite-{replaces}"));
+            let (r, l) = (b.join("remote"), b.join("local"));
+            write(&l.join("a.txt"), "new");
+            write(&r.join("a.txt"), "old");
+            let fs = DiskRemote { rename_replaces: replaces, ..Default::default() };
+            transfer(local(&l), vec![file("a.txt")], remote(fs, &r), true, Conflict::Overwrite, &Progress::default()).unwrap();
+            assert_eq!(listing(&r), ["a.txt"], "no temporary or old file left");
+            assert_eq!(read(&r.join("a.txt")), "new");
+            assert!(listing(&l).is_empty());
+        }
+    }
+
+    #[test]
+    fn a_move_on_one_server_follows_the_policy() {
+        let b = tmp("server-move");
+        let r = b.join("r");
+        let ep = |d: &str| remote(DiskRemote::default(), &r.join(d));
+        write(&r.join("src/a.txt"), "new");
+        write(&r.join("dst/a.txt"), "old");
+        transfer(ep("src"), vec![file("a.txt")], ep("dst"), true, Conflict::Skip, &Progress::default()).unwrap();
+        assert_eq!((read(&r.join("src/a.txt")), read(&r.join("dst/a.txt"))), ("new".into(), "old".into()));
+        transfer(ep("src"), vec![file("a.txt")], ep("dst"), true, Conflict::Rename, &Progress::default()).unwrap();
+        assert_eq!(listing(&r.join("dst")), ["a (1).txt", "a.txt"]);
+        write(&r.join("src/a.txt"), "newer");
+        transfer(ep("src"), vec![file("a.txt")], ep("dst"), true, Conflict::Overwrite, &Progress::default()).unwrap();
+        assert_eq!(listing(&r.join("dst")), ["a (1).txt", "a.txt"]);
+        assert_eq!(read(&r.join("dst/a.txt")), "newer");
+        assert!(listing(&r.join("src")).is_empty());
     }
 
     #[test]

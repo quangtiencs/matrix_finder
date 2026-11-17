@@ -484,6 +484,10 @@ pub struct Settings {
     pub instance_mode: InstanceMode,
     /// Tabs and tab groups of the active pane, restored at start.
     pub session: Option<SavedPane>,
+    /// Settings this version does not know (written by a newer one): kept as they are,
+    /// so that going back to an older version and forward again loses nothing.
+    #[serde(flatten)]
+    pub unknown: serde_json::Map<String, serde_json::Value>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -598,6 +602,7 @@ impl Default for Settings {
             integrated_titlebar: true,
             instance_mode: InstanceMode::NewTab,
             session: None,
+            unknown: Default::default(),
         }
     }
 }
@@ -635,13 +640,323 @@ pub fn lang_dir() -> PathBuf {
     config_dir().join("lang")
 }
 
+/// `settings.json.bak`: the version a save replaced.
+pub fn backup_file(path: &Path) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// `settings.json.<what>-<date and time>`, a name not taken yet.
+fn stamped_file(path: &Path, what: &str) -> PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".{what}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+    crate::safefs::unique_path(&path.with_file_name(name))
+}
+
+/// Read settings, keeping every value that can be read: a bad or unknown value (a hand
+/// edit, or a newer version's choice this one does not know) resets only that setting,
+/// or only that entry of a list, not the whole file. Returns the settings and the names
+/// of what was reset; `Err` when the text is not a settings file at all.
+pub fn parse_lenient(text: &str) -> Result<(Settings, Vec<String>), String> {
+    use serde_json::{Map, Value};
+    let v: Value = serde_json::from_str(text).map_err(es)?;
+    let Value::Object(file) = v else { return Err("not a settings file".into()) };
+    if let Ok(mut s) = serde_json::from_value::<Settings>(Value::Object(file.clone())) {
+        s.normalize();
+        return Ok((s, vec![]));
+    }
+    // Every setting has a default, so each one can be tried on its own.
+    let fits = |k: &str, v: Value| serde_json::from_value::<Settings>(Value::Object(Map::from_iter([(k.to_string(), v)]))).is_ok();
+    let mut good = Map::new();
+    let mut reset = Vec::new();
+    for (k, v) in file {
+        if fits(&k, v.clone()) {
+            good.insert(k, v);
+            continue;
+        }
+        match v {
+            Value::Array(items) => {
+                let n = items.len();
+                let kept: Vec<Value> = items.into_iter().filter(|i| fits(&k, Value::Array(vec![i.clone()]))).collect();
+                reset.push(format!("{k} ({} / {n})", n - kept.len()));
+                good.insert(k, Value::Array(kept));
+            }
+            Value::Object(entries) => {
+                let kept: Map<String, Value> = entries.into_iter().filter(|(ek, ev)| fits(&k, Value::Object(Map::from_iter([(ek.clone(), ev.clone())])))).collect();
+                reset.push(k.clone());
+                good.insert(k, Value::Object(kept));
+            }
+            _ => reset.push(k),
+        }
+    }
+    let mut s: Settings = serde_json::from_value(Value::Object(good)).map_err(es)?;
+    s.normalize();
+    Ok((s, reset))
+}
+
+/// What loading the settings ran into, told to the user at start.
+#[derive(Clone, Debug, PartialEq)]
+pub enum LoadNote {
+    /// Values this version cannot read were reset (`reset` names them); the file as it
+    /// was is kept at `copy`.
+    Repaired { reset: Vec<String>, copy: Option<PathBuf> },
+    /// The file could not be read at all. It was set aside at `moved` (never deleted);
+    /// `from_backup`: the previous version was loaded instead of the defaults; `read_only`:
+    /// it could not be set aside, so the settings are not saved over it.
+    Broken { error: String, moved: Option<PathBuf>, from_backup: bool, read_only: bool },
+    /// The settings file was missing; the previous version (`.bak`) was loaded.
+    FromBackup(PathBuf),
+}
+
+/// The settings file of this process. It remembers what it last read or wrote there, so
+/// that a save notices when another Matrix Finder (`--new-window` runs one) saved
+/// meanwhile, and keeps what that one added or changed instead of writing over it.
+pub struct Store {
+    path: PathBuf,
+    /// SHA-256 of the file as this process last read or wrote it.
+    seen: Option<[u8; 32]>,
+    /// The settings in it then (as `Settings` writes them): what both sides of a merge
+    /// started from.
+    base: serde_json::Value,
+    /// The file on disk loaded cleanly: a save keeps it as `.bak`.
+    disk_good: bool,
+    /// Saving is off: the file could not be read nor set aside.
+    read_only: Option<String>,
+    pub note: Option<LoadNote>,
+}
+
+impl Store {
+    /// Load the settings (see `open_at`).
+    pub fn open() -> (Settings, Store) {
+        migrate_old_config();
+        Self::open_at(&config_file())
+    }
+
+    /// Load the settings at `path`. Nothing is lost on the way: a value that cannot be read
+    /// is reset alone (the file is copied aside first); a file that cannot be read at all
+    /// is renamed `….broken-<date>` and the previous version (`.bak`) is loaded if there is
+    /// one, the defaults otherwise.
+    pub fn open_at(path: &Path) -> (Settings, Store) {
+        let mut store = Store { path: path.to_path_buf(), seen: None, base: serde_json::Value::Null, disk_good: false, read_only: None, note: None };
+        let broken = match std::fs::read(path) {
+            Ok(bytes) => match parse_lenient(&String::from_utf8_lossy(&bytes)) {
+                Ok((s, reset)) => {
+                    store.seen = Some(crate::util::sha256(&bytes));
+                    store.base = serde_json::to_value(&s).unwrap_or_default();
+                    store.disk_good = reset.is_empty();
+                    if !reset.is_empty() {
+                        let copy = stamped_file(path, "broken");
+                        let copy = crate::util::write_atomic(&copy, &bytes, true).is_ok().then_some(copy);
+                        store.note = Some(LoadNote::Repaired { reset, copy });
+                    }
+                    return (s, store);
+                }
+                Err(e) => {
+                    let moved = stamped_file(path, "broken");
+                    let moved = std::fs::rename(path, &moved).is_ok().then_some(moved);
+                    if moved.is_none() {
+                        store.read_only = Some(e.clone());
+                    }
+                    Some((e, moved))
+                }
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => {
+                store.read_only = Some(e.to_string());
+                Some((e.to_string(), None))
+            }
+        };
+        let bak = backup_file(path);
+        let from_backup = if store.read_only.is_none() { std::fs::read_to_string(&bak).ok().and_then(|t| parse_lenient(&t).ok()) } else { None };
+        store.note = match &broken {
+            Some((error, moved)) => Some(LoadNote::Broken { error: error.clone(), moved: moved.clone(), from_backup: from_backup.is_some(), read_only: store.read_only.is_some() }),
+            None if from_backup.is_some() => Some(LoadNote::FromBackup(bak)),
+            None => None,
+        };
+        let mut s = from_backup.map(|(s, _)| s).unwrap_or_default();
+        s.normalize();
+        // Nothing on disk to merge with: the first save writes these.
+        store.base = serde_json::to_value(&s).unwrap_or_default();
+        (s, store)
+    }
+
+    /// Where the settings are kept.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Save `s`, atomically and flushed to the disk. When another Matrix Finder saved
+    /// since this one last read or wrote the file, both are merged: what only that one
+    /// changed (connections, bookmarks, backup profiles, filters, preferences…) is kept,
+    /// and what both changed takes this one's value. Returns the merged settings when they
+    /// differ from `s`, to be used from now on. The version replaced, if it was good,
+    /// stays as `.bak`.
+    pub fn save(&mut self, s: &Settings) -> Res<Option<Settings>> {
+        if let Some(e) = &self.read_only {
+            return Err(format!("{} ({e})", self.path.display()));
+        }
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(es)?;
+            // Saved passwords are in it: only the user may look inside.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+        let mut mine = serde_json::to_value(s).map_err(es)?;
+        let mut merged = None;
+        let disk = std::fs::read(&self.path).ok();
+        let mut disk_good = self.disk_good;
+        if let Some(d) = disk.as_deref().filter(|d| Some(crate::util::sha256(d)) != self.seen) {
+            match parse_lenient(&String::from_utf8_lossy(d)) {
+                Ok((theirs, reset)) => {
+                    disk_good = reset.is_empty();
+                    let theirs = serde_json::to_value(&theirs).map_err(es)?;
+                    let m = merge_value("", Some(&self.base), &mine, &theirs);
+                    if m != mine {
+                        let mut m: Settings = serde_json::from_value(m).map_err(es)?;
+                        m.normalize();
+                        mine = serde_json::to_value(&m).map_err(es)?;
+                        merged = Some(m);
+                    }
+                }
+                Err(_) => {
+                    // Written by something else and unreadable: set aside, not overwritten.
+                    disk_good = false;
+                    crate::util::write_atomic(&stamped_file(&self.path, "broken"), d, true).map_err(es)?;
+                }
+            }
+        }
+        let json = serde_json::to_string_pretty(&mine).map_err(es)?;
+        if disk.as_deref() != Some(json.as_bytes()) {
+            if let (true, Some(d)) = (disk_good, &disk) {
+                let _ = crate::util::write_atomic(&backup_file(&self.path), d, true);
+            }
+            crate::util::write_private(&self.path, &json).map_err(es)?;
+        }
+        self.seen = Some(crate::util::sha256(json.as_bytes()));
+        self.base = mine;
+        self.disk_good = true;
+        Ok(merged)
+    }
+
+    /// Keep the settings `s` (with passwords) as `settings.json.before-import-<date>`
+    /// before an import replaces them; returns where.
+    pub fn backup_before_import(&self, s: &Settings) -> Res<PathBuf> {
+        let p = stamped_file(&self.path, "before-import");
+        s.export_to(&p, true)?;
+        Ok(p)
+    }
+}
+
+/// Lists whose items are told apart by a name (or a bookmark's path) in a merge.
+fn list_id(key: &str, item: &serde_json::Value) -> Option<String> {
+    let o = item.as_object()?;
+    let text = |k: &str| o.get(k).and_then(|v| v.as_str()).map(str::to_string);
+    match key {
+        "connections" | "backups" | "quick_filters" | "terminal_profiles" => text("name"),
+        "bookmarks" | "children" if o.get("folder") == Some(&serde_json::Value::Bool(true)) => text("name").map(|n| format!("folder:{n}")),
+        "bookmarks" | "children" => text("path").map(|p| format!("path:{p}")),
+        _ => None,
+    }
+}
+
+/// Settings that are maps, where a key removed on one side is removed in a merge.
+const MAP_SETTINGS: [&str; 2] = ["shortcuts", "default_apps"];
+
+/// Three-way merge of one setting: `base` is what this process last saw on disk, `mine`
+/// its value now and `theirs` the value another process saved meanwhile.
+fn merge_value(key: &str, base: Option<&serde_json::Value>, mine: &serde_json::Value, theirs: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    if mine == theirs || base == Some(theirs) {
+        return mine.clone();
+    }
+    if base == Some(mine) {
+        return theirs.clone();
+    }
+    // Both changed it.
+    match (mine, theirs) {
+        (Value::Object(m), Value::Object(t)) => Value::Object(merge_object(key, base.and_then(Value::as_object), m, t)),
+        (Value::Array(m), Value::Array(t)) if m.iter().chain(t).all(|i| list_id(key, i).is_some()) => Value::Array(merge_list(key, base.and_then(Value::as_array), m, t)),
+        _ => mine.clone(),
+    }
+}
+
+fn merge_object(key: &str, base: Option<&serde_json::Map<String, serde_json::Value>>, mine: &serde_json::Map<String, serde_json::Value>, theirs: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = mine.clone();
+    for (k, t) in theirs {
+        let b = base.and_then(|b| b.get(k));
+        match mine.get(k) {
+            Some(m) => {
+                out.insert(k.clone(), merge_value(k, b, m, t));
+            }
+            // Added there, or removed here but changed there: kept.
+            None if b != Some(t) => {
+                out.insert(k.clone(), t.clone());
+            }
+            None => {}
+        }
+    }
+    // A map entry removed there and not changed here is removed. (A setting missing
+    // there is only one that version does not know.)
+    if MAP_SETTINGS.contains(&key) {
+        for (k, m) in mine {
+            if !theirs.contains_key(k) && base.and_then(|b| b.get(k)) == Some(m) {
+                out.remove(k);
+            }
+        }
+    }
+    out
+}
+
+/// Merge a list of named items (see `list_id`): items added on either side are kept,
+/// one removed on one side and unchanged on the other is removed, and an item changed on
+/// both is merged field by field.
+fn merge_list(key: &str, base: Option<&Vec<serde_json::Value>>, mine: &[serde_json::Value], theirs: &[serde_json::Value]) -> Vec<serde_json::Value> {
+    let none = Vec::new();
+    let base = base.map_or(&none[..], |b| &b[..]);
+    let id = |v: &serde_json::Value| list_id(key, v);
+    let unique = |l: &[serde_json::Value]| {
+        let mut seen = std::collections::HashSet::new();
+        l.iter().all(|i| seen.insert(id(i)))
+    };
+    if !(unique(mine) && unique(theirs) && unique(base)) {
+        // Two items of one name: keep everything of this side, and add theirs that are new.
+        let mut out = mine.to_vec();
+        out.extend(theirs.iter().filter(|t| !mine.contains(t) && !base.contains(t)).cloned());
+        return out;
+    }
+    let find = |l: &'_ [serde_json::Value], k: &Option<String>| l.iter().find(|i| id(i) == *k).cloned();
+    let mut out = Vec::new();
+    for m in mine {
+        let k = id(m);
+        let b = find(base, &k);
+        match find(theirs, &k) {
+            Some(t) => out.push(merge_value(key, b.as_ref(), m, &t)),
+            // Removed there and unchanged here: removed.
+            None if b.as_ref() == Some(m) => {}
+            None => out.push(m.clone()),
+        }
+    }
+    for t in theirs {
+        let k = id(t);
+        if find(mine, &k).is_none() && find(base, &k).as_ref() != Some(t) {
+            // Added there, or removed here but changed there: kept.
+            out.push(t.clone());
+        }
+    }
+    out
+}
+
 impl Settings {
+    /// The settings as saved, without changing anything on disk (see `Store::open`).
     pub fn load() -> Self {
         migrate_old_config();
-        let mut s: Settings = std::fs::read_to_string(config_file())
-            .ok()
-            .and_then(|s| serde_json::from_str(&s).ok())
-            .unwrap_or_default();
+        let path = config_file();
+        let read = |p: &Path| std::fs::read_to_string(p).ok().and_then(|t| parse_lenient(&t).ok()).map(|(s, _)| s);
+        let mut s = read(&path).or_else(|| read(&backup_file(&path))).unwrap_or_default();
         s.normalize();
         s
     }
@@ -734,21 +1049,10 @@ impl Settings {
             session: keep.session,
             update_checked: keep.update_checked,
             update_skip: keep.update_skip,
+            unknown: keep.unknown,
             ..Settings::default()
         };
         self.normalize();
-    }
-
-    pub fn save(&self) -> Res<()> {
-        let dir = config_dir();
-        std::fs::create_dir_all(&dir).map_err(es)?;
-        // Saved passwords are in it: only the user may look inside.
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
-        }
-        self.export_to(&config_file(), true)
     }
 
     /// Write settings to `path`. Passwords are stripped unless `with_secrets`.
@@ -764,7 +1068,7 @@ impl Settings {
         if with_secrets {
             crate::util::write_private(path, &json).map_err(es)
         } else {
-            std::fs::write(path, json).map_err(es)
+            crate::util::write_atomic(path, json.as_bytes(), false).map_err(es)
         }
     }
 
@@ -779,6 +1083,178 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("matrix_finder-cfg-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn conn(name: &str) -> ConnectionProfile {
+        ConnectionProfile { name: name.into(), host: format!("{name}.example.com"), password: "pw".into(), ..Default::default() }
+    }
+
+    fn names(s: &Settings) -> Vec<&str> {
+        s.connections.iter().map(|c| c.name.as_str()).collect()
+    }
+
+    fn files_in(d: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    /// One unreadable value resets that value alone: saved connections survive a newer
+    /// version's setting, a hand edit gone wrong or an unknown kind of connection.
+    #[test]
+    fn bad_values_reset_alone() {
+        let text = r#"{"theme":"Dracula","terminal":"FutureTerminal","ui_scale":"big",
+            "connections":[{"name":"a","protocol":"Sftp","host":"h","port":22,"user":"u","password":"pw"},
+                           {"name":"b","protocol":"Scp","host":"h","port":22,"user":"u"}],
+            "shortcuts":{"copy":["F5"],"move":"F6"},
+            "from_the_future":{"x":1}}"#;
+        let (s, reset) = parse_lenient(text).unwrap();
+        assert_eq!(s.theme, "Dracula");
+        assert_eq!(s.terminal, Settings::default().terminal);
+        assert_eq!(s.ui_scale, 1.0);
+        assert_eq!(names(&s), ["a"]);
+        assert_eq!(s.connections[0].password, "pw");
+        assert_eq!(s.shortcuts.get("copy"), Some(&vec!["F5".to_string()]));
+        assert!(!s.shortcuts.contains_key("move"));
+        for k in ["terminal", "ui_scale", "connections (1 / 2)", "shortcuts"] {
+            assert!(reset.iter().any(|r| r == k), "{k} in {reset:?}");
+        }
+        // A setting of a newer version is kept as it is.
+        let back = serde_json::to_value(&s).unwrap();
+        assert_eq!(back["from_the_future"]["x"], 1);
+        assert!(parse_lenient("not json").is_err());
+        assert!(parse_lenient("[1]").is_err());
+        assert!(parse_lenient(r#"{"theme":"#).is_err());
+    }
+
+    #[test]
+    fn broken_file_is_set_aside_and_the_backup_loaded() {
+        let d = test_dir("broken");
+        let p = d.join("settings.json");
+        // First start: defaults, nothing to tell.
+        let (s, store) = Store::open_at(&p);
+        assert!(store.note.is_none());
+        assert_eq!(s.connections, vec![]);
+        // Saved twice: the first version stays as the backup.
+        let (mut s, mut store) = Store::open_at(&p);
+        s.connections.push(conn("one"));
+        store.save(&s).unwrap();
+        s.connections.push(conn("two"));
+        store.save(&s).unwrap();
+        assert_eq!(names(&Store::open_at(&backup_file(&p)).0), ["one"]);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
+            assert_eq!(std::fs::metadata(backup_file(&p)).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        // Half written by something: renamed aside, never deleted; the backup is loaded.
+        std::fs::write(&p, r#"{"connections":[{"name":"#).unwrap();
+        let (s, mut store) = Store::open_at(&p);
+        assert_eq!(names(&s), ["one"]);
+        let Some(LoadNote::Broken { moved: Some(moved), from_backup: true, read_only: false, .. }) = &store.note else { panic!("{:?}", store.note) };
+        assert_eq!(std::fs::read_to_string(moved).unwrap(), r#"{"connections":[{"name":"#);
+        assert!(!p.exists());
+        // Saving now writes the loaded settings (and keeps the backup).
+        store.save(&s).unwrap();
+        assert_eq!(names(&Store::open_at(&p).0), ["one"]);
+        // Missing file: the backup.
+        std::fs::remove_file(&p).unwrap();
+        let (s, store) = Store::open_at(&p);
+        assert_eq!(names(&s), ["one"]);
+        assert!(matches!(store.note, Some(LoadNote::FromBackup(_))));
+        // A bad value: the rest is kept, and the file as it was is copied aside.
+        std::fs::write(&p, r#"{"terminal":"FutureTerminal","connections":[{"name":"c","protocol":"Ftp","host":"h","port":21,"user":"u"}]}"#).unwrap();
+        let (s, store) = Store::open_at(&p);
+        assert_eq!(names(&s), ["c"]);
+        let Some(LoadNote::Repaired { reset, copy: Some(copy) }) = &store.note else { panic!("{:?}", store.note) };
+        assert_eq!(reset, &["terminal"]);
+        assert!(std::fs::read_to_string(copy).unwrap().contains("FutureTerminal"));
+        assert!(files_in(&d).iter().all(|f| !f.contains(".tmp-")), "no temporary files: {:?}", files_in(&d));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Two windows (processes) save the same file: neither loses what the other added.
+    #[test]
+    fn saves_of_two_processes_are_merged() {
+        let d = test_dir("merge");
+        let p = d.join("settings.json");
+        let (mut s, mut store) = Store::open_at(&p);
+        s.connections = vec![conn("old"), conn("gone")];
+        s.bookmarks = vec![Bookmark::new("Work", "/work")];
+        store.save(&s).unwrap();
+
+        let (mut a, mut sa) = Store::open_at(&p);
+        let (mut b, mut sb) = Store::open_at(&p);
+        // A adds a connection and a bookmark, removes one, edits another and changes the theme.
+        a.connections.push(conn("from-a"));
+        a.connections.retain(|c| c.name != "gone");
+        a.connections[0].password = "new".into();
+        a.bookmarks.push(Bookmark::new("A", "/a"));
+        a.theme = "Dracula".into();
+        assert!(sa.save(&a).unwrap().is_none(), "nothing to merge yet");
+        // B, still with the old file in mind, adds its own and changes another setting.
+        b.connections.push(conn("from-b"));
+        b.show_hidden = true;
+        b.default_apps.insert("txt".into(), "vim".into());
+        let merged = sb.save(&b).unwrap().expect("merged with A's save");
+        assert_eq!(names(&merged), ["old", "from-b", "from-a"]);
+        assert_eq!(merged.connections[0].password, "new", "A's edit kept");
+        assert_eq!(merged.theme, "Dracula");
+        assert!(merged.show_hidden);
+        assert_eq!(merged.bookmarks.len(), 2);
+        let on_disk = Store::open_at(&p).0;
+        assert_eq!(names(&on_disk), names(&merged));
+        assert_eq!(on_disk.default_apps.get("txt").map(String::as_str), Some("vim"));
+
+        // A saves again without knowing B's changes: they stay, and its own removal holds.
+        a.connections.retain(|c| c.name != "old");
+        let merged = sa.save(&a).unwrap().expect("merged with B's save");
+        assert_eq!(names(&merged), ["from-a", "from-b"]);
+        assert!(merged.show_hidden);
+        assert_eq!(merged.theme, "Dracula");
+
+        // Both changed the same setting: this process's value wins.
+        let (mut c1, mut s1) = Store::open_at(&p);
+        let (mut c2, mut s2) = Store::open_at(&p);
+        c1.theme = "One".into();
+        s1.save(&c1).unwrap();
+        c2.theme = "Two".into();
+        c2.connections.retain(|c| c.name != "from-b");
+        let m = s2.save(&c2).unwrap();
+        assert!(m.is_none(), "nothing of the other one's to keep");
+        let on_disk = Store::open_at(&p).0;
+        assert_eq!(on_disk.theme, "Two");
+        assert_eq!(names(&on_disk), ["from-a"]);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn merge_rules() {
+        use serde_json::json;
+        let base = json!({"connections": [{"name": "x", "host": "h"}], "shortcuts": {"a": ["F1"], "b": ["F2"]}});
+        // Removed here, changed there: kept, so nothing changed by the user disappears.
+        let mine = json!({"connections": [], "shortcuts": {"a": ["F1"], "b": ["F2"]}});
+        let theirs = json!({"connections": [{"name": "x", "host": "new"}], "shortcuts": {"a": ["F1"]}});
+        let m = merge_value("", Some(&base), &mine, &theirs);
+        assert_eq!(m["connections"], json!([{"name": "x", "host": "new"}]));
+        // A shortcut removed there is removed.
+        assert_eq!(m["shortcuts"], json!({"a": ["F1"]}));
+        // Same names twice: everything is kept.
+        let mine = json!({"connections": [{"name": "x", "host": "1"}, {"name": "x", "host": "2"}]});
+        let theirs = json!({"connections": [{"name": "y", "host": "3"}]});
+        let m = merge_value("", Some(&base), &mine, &theirs);
+        assert_eq!(m["connections"].as_array().unwrap().len(), 3);
+        // A setting the other version does not know is kept.
+        let m = merge_value("", Some(&json!({"a": 1, "new": 2})), &json!({"a": 2, "new": 2}), &json!({"a": 1}));
+        assert_eq!(m, json!({"a": 2, "new": 2}));
+    }
 
     #[test]
     fn reset_keeps_user_data() {

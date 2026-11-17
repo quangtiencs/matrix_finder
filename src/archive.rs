@@ -1,6 +1,7 @@
 //! Reading and writing archives: zip, 7z, rar (read; write via `rar` CLI),
 //! tar (+gz/xz/zst/bz2) and single-file gz/xz/zst/bz2 streams.
 use crate::ops::{Conflict, Progress};
+use crate::safefs::{self, TempFile};
 use crate::util::{es, Res};
 use crate::vfs::Entry;
 use globset::GlobSet;
@@ -695,16 +696,10 @@ impl<R: Read> Read for ProgressReader<'_, R> {
     }
 }
 
-/// Apply the conflict policy to an extracted file's path. `None` = skip the file.
+/// Skip a file that exists already when the policy says so (`None`), before it is unpacked.
+/// Where it finally goes is decided once it is complete (`safefs::place`).
 fn resolve_out(out: PathBuf, policy: Conflict) -> Option<PathBuf> {
-    if std::fs::symlink_metadata(&out).is_err() {
-        return Some(out);
-    }
-    match policy {
-        Conflict::Overwrite => Some(out),
-        Conflict::Skip => None,
-        Conflict::Rename => Some(crate::util::unique_path(&out)),
-    }
+    (policy != Conflict::Skip || !safefs::exists(&out)).then_some(out)
 }
 
 /// Fail unless the nearest existing folder above `out` really lies inside `real_dest`.
@@ -725,23 +720,26 @@ fn ensure_inside(real_dest: &Path, out: &Path) -> Res<()> {
     Ok(())
 }
 
-fn write_file_from(reader: &mut dyn Read, out: &Path, progress: &Progress) -> Res<()> {
+/// Unpack `reader` into a hidden temporary file next to `out`. Nothing at `out` changes
+/// until the caller commits it, so a cancel, a damaged archive or a crash keeps what is there.
+fn write_temp(reader: &mut dyn Read, out: &Path, progress: &Progress) -> Res<TempFile> {
+    write_temp_counted(reader, out, progress).map(|(tmp, _)| tmp)
+}
+
+/// `write_temp`, also returning how many bytes were written.
+fn write_temp_counted(reader: &mut dyn Read, out: &Path, progress: &Progress) -> Res<(TempFile, u64)> {
     if let Some(parent) = out.parent() {
         std::fs::create_dir_all(parent).map_err(es)?;
     }
-    let f = File::create(out).map_err(es)?;
-    let mut w = ProgressWriter {
-        inner: BufWriter::new(f),
-        progress,
+    let mut tmp = TempFile::beside(out).map_err(es)?;
+    let n = {
+        let mut w = ProgressWriter {
+            inner: BufWriter::new(tmp.file()),
+            progress,
+        };
+        std::io::copy(reader, &mut w).and_then(|n| w.flush().map(|_| n)).map_err(es)?
     };
-    let done = std::io::copy(reader, &mut w).and_then(|_| w.flush());
-    if let Err(e) = done {
-        // No half-written file under the real name.
-        drop(w);
-        let _ = std::fs::remove_file(out);
-        return Err(es(e));
-    }
-    Ok(())
+    Ok((tmp, n))
 }
 
 /// The macOS quarantine mark of a downloaded archive, given to what is extracted from
@@ -750,6 +748,7 @@ fn write_file_from(reader: &mut dyn Read, out: &Path, progress: &Progress) -> Re
 struct Quarantine(Option<Vec<u8>>);
 
 impl Quarantine {
+    #[cfg(target_os = "macos")]
     const NAME: &'static [u8] = b"com.apple.quarantine\0";
 
     #[cfg(target_os = "macos")]
@@ -830,13 +829,15 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                         progress.add(f.size());
                         continue;
                     };
-                    write_file_from(&mut f, &out, progress)?;
-                    quarantine.mark(&out);
+                    let tmp = write_temp(&mut f, &out, progress)?;
+                    quarantine.mark(tmp.path());
                     #[cfg(unix)]
                     if let Some(mode) = f.unix_mode() {
                         use std::os::unix::fs::PermissionsExt;
-                        let _ = std::fs::set_permissions(&out, std::fs::Permissions::from_mode(mode & 0o7777));
+                        // Never setuid, setgid or sticky bits from an archive.
+                        let _ = std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode & 0o777));
                     }
+                    tmp.commit(&out, policy, None).map_err(es)?;
                 }
             }
         }
@@ -869,11 +870,14 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                         quarantine.mark(&out);
                     } else if let Some(out) = resolve_out(out, policy) {
                         let mut whole = SevenzWhole { inner: reader, left: entry.size(), short: &short };
-                        if let Err(e) = write_file_from(&mut whole, &out, progress) {
+                        let placed = write_temp(&mut whole, &out, progress).and_then(|tmp| {
+                            quarantine.mark(tmp.path());
+                            tmp.commit(&out, policy, None).map_err(es)
+                        });
+                        if let Err(e) = placed {
                             err = Some(e);
                             return Ok(false);
                         }
-                        quarantine.mark(&out);
                     } else {
                         let skipped = std::io::copy(reader, &mut std::io::sink())?;
                         progress.add(skipped);
@@ -913,8 +917,19 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                         if let Some(p) = out.parent() {
                             std::fs::create_dir_all(p).map_err(es)?;
                         }
-                        let next = header.extract_to(&out).map_err(rar_err)?;
-                        quarantine.mark(&out);
+                        // Under a temporary name first; a failed entry is removed again with it.
+                        let tmp = TempFile::name_beside(&out);
+                        let next = header.extract_to(tmp.path()).map_err(rar_err)?;
+                        #[cfg(unix)]
+                        if let Some(m) = std::fs::symlink_metadata(tmp.path()).ok().filter(|m| m.is_file()) {
+                            use std::os::unix::fs::PermissionsExt;
+                            // Never setuid, setgid or sticky bits from an archive.
+                            if m.permissions().mode() & 0o7000 != 0 {
+                                let _ = std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(m.permissions().mode() & 0o777));
+                            }
+                        }
+                        quarantine.mark(tmp.path());
+                        tmp.commit(&out, policy, None).map_err(es)?;
                         progress.add(size);
                         next
                     }
@@ -935,34 +950,65 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
                 ensure_inside(&real_dest, &out)?;
                 let kind = e.header().entry_type();
                 let size = e.header().size().unwrap_or(0);
-                let out = if kind.is_dir() {
-                    out
-                } else {
-                    let Some(out) = resolve_out(out, policy) else {
-                        progress.add(size);
-                        continue;
-                    };
-                    out
-                };
+                if kind.is_pax_global_extensions() || kind.is_pax_local_extensions() || kind.is_gnu_longname() || kind.is_gnu_longlink() {
+                    continue;
+                }
                 progress.set_current(&name);
+                // Old archives mark a folder only by its trailing slash.
+                if kind.is_dir() || e.path_bytes().ends_with(b"/") {
+                    std::fs::create_dir_all(&out).map_err(es)?;
+                    e.unpack(&out).map_err(es)?;
+                    quarantine.mark(&out);
+                    continue;
+                }
+                let Some(out) = resolve_out(out, policy) else {
+                    progress.add(size);
+                    continue;
+                };
                 if let Some(p) = out.parent() {
                     std::fs::create_dir_all(p).map_err(es)?;
                 }
-                if kind.is_hard_link() {
+                // Every entry is made under a temporary name and then moved into place by the
+                // policy, so an existing file is only replaced by a complete one.
+                let tmp = if kind.is_hard_link() {
                     // `unpack` would link to the raw name, which can be any file on disk.
                     let link = e.link_name().map_err(es)?.ok_or("A hard link in the archive has no target")?;
                     let src = out_path(dest, &norm(&link.to_string_lossy()), strip)
                         .filter(|src| src.canonicalize().is_ok_and(|real| real.starts_with(&real_dest)))
                         .ok_or_else(|| format!("Refusing to extract '{name}': its hard link leads out of the destination folder"))?;
-                    if std::fs::symlink_metadata(&out).is_ok() {
-                        std::fs::remove_file(&out).map_err(es)?;
-                    }
-                    std::fs::hard_link(&src, &out).map_err(es)?;
+                    let tmp = TempFile::name_beside(&out);
+                    std::fs::hard_link(&src, tmp.path()).map_err(es)?;
+                    progress.add(size);
+                    tmp
+                } else if kind.is_symlink() || kind.is_gnu_sparse() {
+                    // tar makes these itself (and checks a sparse file's data).
+                    let tmp = TempFile::name_beside(&out);
+                    e.unpack(tmp.path()).map_err(es)?;
+                    progress.add(size);
+                    tmp
                 } else {
-                    e.unpack(&out).map_err(es)?;
-                }
-                quarantine.mark(&out);
-                progress.add(size);
+                    // A file (other kinds are written as files too, as tar does).
+                    let (mode, mtime) = (e.header().mode().unwrap_or(0o644), e.header().mtime().ok());
+                    let (mut tmp, n) = write_temp_counted(&mut e, &out, progress)?;
+                    // A cut-off archive just ends: the file must have all its bytes.
+                    if n != size {
+                        return Err(format!("{}: {name}", crate::i18n::t("The archive is damaged or incomplete")));
+                    }
+                    if let Some(secs) = mtime {
+                        let _ = tmp.file().set_modified(UNIX_EPOCH + std::time::Duration::from_secs(secs));
+                    }
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        // Never setuid, setgid or sticky bits from an archive.
+                        let _ = std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(mode & 0o777));
+                    }
+                    #[cfg(not(unix))]
+                    let _ = mode;
+                    tmp
+                };
+                quarantine.mark(tmp.path());
+                tmp.commit(&out, policy, None).map_err(es)?;
             }
         }
         ArchiveFormat::Gz | ArchiveFormat::Xz | ArchiveFormat::Zst | ArchiveFormat::Bz2 => {
@@ -971,10 +1017,10 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
             progress.set_current(&name);
             let out = dest.join(&name);
             // Never overwritten: `report.txt.gz` often sits beside its own `report.txt`.
-            if policy != Conflict::Skip || !out.exists() {
-                let out = crate::util::unique_path(&out);
-                write_file_from(&mut r, &out, progress)?;
-                quarantine.mark(&out);
+            if policy != Conflict::Skip || !safefs::exists(&out) {
+                let tmp = write_temp(&mut r, &out, progress)?;
+                quarantine.mark(tmp.path());
+                tmp.commit(&out, Conflict::Rename, None).map_err(es)?;
             }
         }
     }
@@ -995,12 +1041,22 @@ pub fn read_entry(path: &Path, inner: &str, max: usize) -> Res<Vec<u8>> {
     match fmt {
         ArchiveFormat::Zip => {
             let mut z = zip::ZipArchive::new(BufReader::new(File::open(path).map_err(es)?)).map_err(es)?;
-            let f = match password_for(path) {
+            let mut f = match password_for(path) {
                 Some(p) => z.by_name_decrypt(inner, p.as_bytes()),
                 None => z.by_name(inner),
             }
             .map_err(zip_err)?;
-            f.take(max as u64).read_to_end(&mut buf).map_err(es)?;
+            if !f.encrypted() {
+                f.take(max as u64).read_to_end(&mut buf).map_err(es)?;
+                return Ok(buf);
+            }
+            // Encrypted data is only proven by the authentication code (AES) or checksum
+            // (ZipCrypto) at its end, so it is read whole: a wrong password must not pass as data.
+            if f.size() > MAX_WHOLE_ENTRY {
+                return Err(entry_too_large());
+            }
+            (&mut f).take(max as u64).read_to_end(&mut buf).map_err(|_| wrong_password())?;
+            std::io::copy(&mut (&mut f).take(MAX_WHOLE_ENTRY + 1), &mut std::io::sink()).map_err(|_| wrong_password())?;
         }
         ArchiveFormat::SevenZ => {
             let mut r = sevenz_rust2::ArchiveReader::open(path, sevenz_password(path)).map_err(sevenz_err)?;
@@ -1134,7 +1190,9 @@ pub fn archive_file_name(name: &str, fmt: ArchiveFormat) -> String {
     }
 }
 
-/// Create an archive at `dest` from `sources`.
+/// Create an archive at `dest` from `sources`, and return where it is. It is written to a
+/// hidden temporary file and only renamed to `dest` once complete and synced; should the
+/// name have been taken meanwhile, it gets a free one (`name (1).zip`) instead.
 /// `extra` holds additional in-memory files (name, content), e.g. a backup manifest.
 pub fn create(
     sources: &[PathBuf],
@@ -1144,7 +1202,7 @@ pub fn create(
     level: u32,
     extra: &[(String, Vec<u8>)],
     progress: &Progress,
-) -> Res<()> {
+) -> Res<PathBuf> {
     let level = level.clamp(1, 9);
     if fmt == ArchiveFormat::Rar {
         return create_rar(sources, exclude.is_some(), dest, level, progress);
@@ -1153,32 +1211,29 @@ pub fn create(
     let items = collect_items(sources, exclude, Some(progress))?;
     progress.check()?;
     progress.set_total(items.iter().map(|i| i.size).sum::<u64>() + extra.iter().map(|e| e.1.len() as u64).sum::<u64>());
+    // Dropped on any error, which removes it: `dest` itself is never touched until the end.
+    let mut tmp = TempFile::beside(dest).map_err(es)?;
+    let f = tmp.file();
     let result = match fmt {
-        ArchiveFormat::Zip => create_zip(&items, extra, dest, level, progress),
-        ArchiveFormat::SevenZ => create_7z(&items, extra, dest, level, progress),
-        ArchiveFormat::Tar => File::create(dest)
-            .map_err(es)
-            .and_then(|f| write_tar(BufWriter::new(f), &items, extra, progress).map(|_| ())),
+        ArchiveFormat::Zip => create_zip(&items, extra, f, level, progress),
+        ArchiveFormat::SevenZ => create_7z(&items, extra, f, level, progress),
+        ArchiveFormat::Tar => write_tar(BufWriter::new(f), &items, extra, progress).and_then(flush),
         ArchiveFormat::TarGz => {
-            let f = BufWriter::new(File::create(dest).map_err(es)?);
-            let enc = flate2::write::GzEncoder::new(f, flate2::Compression::new(level));
-            write_tar(enc, &items, extra, progress)?.finish().map_err(es).map(|_| ())
+            let enc = flate2::write::GzEncoder::new(BufWriter::new(f), flate2::Compression::new(level));
+            write_tar(enc, &items, extra, progress)?.finish().map_err(es).and_then(flush)
         }
         ArchiveFormat::TarXz => {
-            let f = BufWriter::new(File::create(dest).map_err(es)?);
-            let enc = xz2::write::XzEncoder::new(f, level);
-            write_tar(enc, &items, extra, progress)?.finish().map_err(es).map(|_| ())
+            let enc = xz2::write::XzEncoder::new(BufWriter::new(f), level);
+            write_tar(enc, &items, extra, progress)?.finish().map_err(es).and_then(flush)
         }
         ArchiveFormat::TarZst => {
-            let f = BufWriter::new(File::create(dest).map_err(es)?);
-            let mut enc = zstd::stream::write::Encoder::new(f, zstd_level(level)).map_err(es)?;
+            let mut enc = zstd::stream::write::Encoder::new(BufWriter::new(f), zstd_level(level)).map_err(es)?;
             let _ = enc.multithread(num_threads());
-            write_tar(enc, &items, extra, progress)?.finish().map_err(es).map(|_| ())
+            write_tar(enc, &items, extra, progress)?.finish().map_err(es).and_then(flush)
         }
         ArchiveFormat::TarBz2 => {
-            let f = BufWriter::new(File::create(dest).map_err(es)?);
-            let enc = bzip2::write::BzEncoder::new(f, bzip2::Compression::new(level));
-            write_tar(enc, &items, extra, progress)?.finish().map_err(es).map(|_| ())
+            let enc = bzip2::write::BzEncoder::new(BufWriter::new(f), bzip2::Compression::new(level));
+            write_tar(enc, &items, extra, progress)?.finish().map_err(es).and_then(flush)
         }
         ArchiveFormat::Gz | ArchiveFormat::Xz | ArchiveFormat::Zst | ArchiveFormat::Bz2 => {
             let files: Vec<&Item> = items.iter().filter(|i| !i.is_dir).collect();
@@ -1189,14 +1244,18 @@ pub fn create(
                     fmt.extension()
                 ));
             }
-            create_single(&files[0].src, dest, fmt, level, progress)
+            create_single(&files[0].src, f, fmt, level, progress)
         }
         ArchiveFormat::Rar => unreachable!(),
     };
-    if result.is_err() {
-        let _ = std::fs::remove_file(dest);
-    }
-    result
+    result?;
+    // Never over a file that appeared meanwhile: that one is kept, and this gets a free name.
+    Ok(tmp.commit(dest, Conflict::Rename, None).map_err(es)?.unwrap_or_else(|| dest.to_path_buf()))
+}
+
+/// Write out what a buffered writer still holds (dropping it would hide a write error).
+fn flush<W: Write>(mut w: BufWriter<W>) -> Res<()> {
+    w.flush().map_err(es)
 }
 
 fn zstd_level(level: u32) -> i32 {
@@ -1208,10 +1267,9 @@ fn num_threads() -> u32 {
     std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1)
 }
 
-fn create_zip(items: &[Item], extra: &[(String, Vec<u8>)], dest: &Path, level: u32, progress: &Progress) -> Res<()> {
+fn create_zip(items: &[Item], extra: &[(String, Vec<u8>)], f: &mut File, level: u32, progress: &Progress) -> Res<()> {
     use zip::write::SimpleFileOptions;
-    let f = BufWriter::new(File::create(dest).map_err(es)?);
-    let mut z = zip::ZipWriter::new(f);
+    let mut z = zip::ZipWriter::new(BufWriter::new(f));
     let base = SimpleFileOptions::default()
         .compression_method(zip::CompressionMethod::Deflated)
         .compression_level(Some(level as i64));
@@ -1249,13 +1307,12 @@ fn create_zip(items: &[Item], extra: &[(String, Vec<u8>)], dest: &Path, level: u
         z.write_all(data).map_err(es)?;
         progress.add(data.len() as u64);
     }
-    z.finish().map_err(es)?;
-    Ok(())
+    flush(z.finish().map_err(es)?)
 }
 
-fn create_7z(items: &[Item], extra: &[(String, Vec<u8>)], dest: &Path, level: u32, progress: &Progress) -> Res<()> {
+fn create_7z(items: &[Item], extra: &[(String, Vec<u8>)], f: &mut File, level: u32, progress: &Progress) -> Res<()> {
     use sevenz_rust2::{encoder_options::Lzma2Options, ArchiveEntry, ArchiveWriter};
-    let mut w = ArchiveWriter::create(dest).map_err(es)?;
+    let mut w = ArchiveWriter::new(f).map_err(es)?;
     w.set_content_methods(vec![Lzma2Options::from_level(level).into()]);
     for it in items {
         progress.check()?;
@@ -1312,46 +1369,51 @@ fn write_tar<W: Write>(w: W, items: &[Item], extra: &[(String, Vec<u8>)], progre
     b.into_inner().map_err(es)
 }
 
-fn create_single(src: &Path, dest: &Path, fmt: ArchiveFormat, level: u32, progress: &Progress) -> Res<()> {
+fn create_single(src: &Path, out: &mut File, fmt: ArchiveFormat, level: u32, progress: &Progress) -> Res<()> {
     progress.set_current(&src.to_string_lossy());
     let mut r = ProgressReader {
         inner: BufReader::new(File::open(src).map_err(es)?),
         progress,
     };
-    let f = BufWriter::new(File::create(dest).map_err(es)?);
-    match fmt {
+    let f = BufWriter::new(out);
+    let f = match fmt {
         ArchiveFormat::Gz => {
             let mut e = flate2::write::GzEncoder::new(f, flate2::Compression::new(level));
             std::io::copy(&mut r, &mut e).map_err(es)?;
-            e.finish().map_err(es)?;
+            e.finish().map_err(es)?
         }
         ArchiveFormat::Xz => {
             let mut e = xz2::write::XzEncoder::new(f, level);
             std::io::copy(&mut r, &mut e).map_err(es)?;
-            e.finish().map_err(es)?;
+            e.finish().map_err(es)?
         }
         ArchiveFormat::Zst => {
             let mut e = zstd::stream::write::Encoder::new(f, zstd_level(level)).map_err(es)?;
             let _ = e.multithread(num_threads());
             std::io::copy(&mut r, &mut e).map_err(es)?;
-            e.finish().map_err(es)?;
+            e.finish().map_err(es)?
         }
         ArchiveFormat::Bz2 => {
             let mut e = bzip2::write::BzEncoder::new(f, bzip2::Compression::new(level));
             std::io::copy(&mut r, &mut e).map_err(es)?;
-            e.finish().map_err(es)?;
+            e.finish().map_err(es)?
         }
         _ => unreachable!(),
-    }
-    Ok(())
+    };
+    flush(f)
 }
 
-fn create_rar(sources: &[PathBuf], has_exclude: bool, dest: &Path, level: u32, progress: &Progress) -> Res<()> {
+fn create_rar(sources: &[PathBuf], has_exclude: bool, dest: &Path, level: u32, progress: &Progress) -> Res<PathBuf> {
     let rar = rar_cli().ok_or(
         "RAR is a proprietary format: creating .rar requires the `rar` command-line tool (WinRAR / rarlab) in PATH.",
     )?;
     let _ = has_exclude;
     progress.set_current("rar…");
+    // `rar a` adds to an archive that is there, so it writes a new one in a temporary
+    // folder (removed again with whatever is left in it), which is then moved into place.
+    let dir = TempFile::name_beside(dest);
+    std::fs::create_dir(dir.path()).map_err(es)?;
+    let inner = dir.path().join(dest.file_name().unwrap_or(std::ffi::OsStr::new("archive.rar")));
     let mut cmd = std::process::Command::new(rar);
     cmd.arg("a")
         .arg("-r")
@@ -1359,13 +1421,14 @@ fn create_rar(sources: &[PathBuf], has_exclude: bool, dest: &Path, level: u32, p
         .arg("-idq")
         .arg("-y")
         .arg(format!("-m{}", (level * 5 / 9).clamp(1, 5)))
-        .arg(dest);
+        .arg(&inner);
     for s in sources {
         cmd.arg(s);
     }
     let out = cmd.output().map_err(es)?;
     if out.status.success() {
-        Ok(())
+        safefs::sync_file(&File::open(&inner).map_err(es)?).map_err(es)?;
+        Ok(safefs::place(&inner, dest, Conflict::Rename, None).map_err(es)?.unwrap_or_else(|| dest.to_path_buf()))
     } else {
         Err(format!("rar failed: {}", String::from_utf8_lossy(&out.stderr)))
     }
@@ -1634,10 +1697,81 @@ mod tests {
         }
     }
 
+    fn names_in(d: &Path) -> Vec<String> {
+        let mut v: Vec<String> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
+        v.sort();
+        v
+    }
+
+    /// An archive that fails halfway through a file (damaged, cut off, or cancelled: the
+    /// same path) leaves the file it was to overwrite as it was, and nothing else behind.
+    #[test]
+    fn a_failed_overwrite_while_extracting_keeps_the_existing_file() {
+        let d = tmpdir("extract-fail");
+        let big: Vec<u8> = (0..400_000u32).map(|i| (i * 7 % 251) as u8).collect();
+        // A zip whose stored data is changed: the checksum fails at its end.
+        let zip_path = d.join("bad.zip");
+        {
+            let mut w = zip::ZipWriter::new(File::create(&zip_path).unwrap());
+            w.start_file("a.txt", zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored)).unwrap();
+            w.write_all(&big).unwrap();
+            w.finish().unwrap();
+        }
+        let mut bytes = std::fs::read(&zip_path).unwrap();
+        bytes[200_000] ^= 0xff;
+        std::fs::write(&zip_path, bytes).unwrap();
+        // A tar cut off in the middle of the file.
+        let tar_path = d.join("cut.tar");
+        {
+            let mut b = tar::Builder::new(File::create(&tar_path).unwrap());
+            let mut h = tar::Header::new_gnu();
+            h.set_size(big.len() as u64);
+            h.set_mode(0o644);
+            b.append_data(&mut h, "a.txt", big.as_slice()).unwrap();
+            b.finish().unwrap();
+        }
+        let f = std::fs::OpenOptions::new().write(true).open(&tar_path).unwrap();
+        f.set_len(512 + 100_000).unwrap();
+        for archive in [&zip_path, &tar_path] {
+            let out = d.join(format!("out-{}", archive.extension().unwrap().to_string_lossy()));
+            std::fs::create_dir_all(&out).unwrap();
+            std::fs::write(out.join("a.txt"), "precious").unwrap();
+            assert!(extract(archive, &out, &[], "", Conflict::Overwrite, &Progress::default()).is_err(), "{archive:?}");
+            assert_eq!(std::fs::read(out.join("a.txt")).unwrap(), b"precious", "{archive:?}");
+            assert_eq!(names_in(&out), ["a.txt"], "no temporary file left: {archive:?}");
+        }
+    }
+
+    /// A name taken after the dialog checked it is kept: the archive gets a free name.
+    #[test]
+    fn compressing_never_replaces_a_file() {
+        let d = tmpdir("compress-taken");
+        let src = sample(&d);
+        for fmt in [ArchiveFormat::Zip, ArchiveFormat::SevenZ, ArchiveFormat::TarGz] {
+            let dest = d.join(format!("out.{}", fmt.extension()));
+            std::fs::write(&dest, "someone else's").unwrap();
+            let made = create(std::slice::from_ref(&src), None, &dest, fmt, 3, &[], &Progress::default()).unwrap();
+            assert_eq!(made, d.join(format!("out (1).{}", fmt.extension())), "{fmt:?}");
+            assert_eq!(std::fs::read(&dest).unwrap(), b"someone else's");
+            assert!(list(&made).unwrap().iter().any(|e| e.path == "src/a.txt"), "{fmt:?}");
+        }
+        // A cancelled one leaves nothing, and takes nothing.
+        let p = Progress::default();
+        p.cancel();
+        let before = names_in(&d);
+        assert!(create(std::slice::from_ref(&src), None, &d.join("out.zip"), ArchiveFormat::Zip, 3, &[], &p).is_err());
+        assert_eq!(names_in(&d), before);
+        assert_eq!(std::fs::read(d.join("out.zip")).unwrap(), b"someone else's");
+    }
+
     #[cfg(unix)]
     #[test]
     fn unreadable_folders_fail_the_archive_instead_of_truncating_it() {
         use std::os::unix::fs::PermissionsExt;
+        // Root reads a folder whatever its permissions say (as in a container).
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
         let d = tmpdir("unreadable");
         let src = d.join("src");
         let locked = src.join("locked");
@@ -1650,6 +1784,7 @@ mod tests {
         let err = r.unwrap_err();
         assert!(err.contains("locked") && err.contains("1 item"), "{err}");
         assert!(!dest.exists(), "no partial archive");
+        assert_eq!(names_in(&d), ["src"], "nor a temporary one");
         // Excluding it is the way out, and everything else then gets in.
         let ex = crate::backup::build_globset(&["**/locked".to_string()]).unwrap();
         create(std::slice::from_ref(&src), ex.as_ref(), &dest, ArchiveFormat::Zip, 3, &[], &Progress::default()).unwrap();
@@ -1731,6 +1866,24 @@ mod password_tests {
         let (_d, p) = temp_file("a.zip", &zip_bytes("aes"));
         remember_password(&p, "wrong");
         assert_eq!(read_entry(&p, "secret.txt", 100).unwrap_err(), wrong_password());
+    }
+
+    #[test]
+    fn a_changed_aes_entry_is_an_error_even_when_only_its_start_is_read() {
+        let mut bytes = zip_bytes("aes");
+        let end = {
+            let mut z = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+            let f = z.by_name_raw(b"secret.txt").unwrap();
+            f.data_start().unwrap() + f.compressed_size()
+        };
+        // The last byte of the authentication code: the text itself still decrypts fine.
+        bytes[end as usize - 1] ^= 0x55;
+        let (_d, p) = temp_file("a.zip", &bytes);
+        remember_password(&p, PASSWORD);
+        assert_eq!(read_entry(&p, "secret.txt", 3).unwrap_err(), wrong_password());
+        assert_eq!(read_entry(&p, "secret.txt", 100).unwrap_err(), wrong_password());
+        assert_eq!(read_entry(&p, "plain.txt", 100).unwrap(), b"for everyone");
+        assert!(!check_password(&p, PASSWORD));
     }
 
     #[test]

@@ -38,7 +38,7 @@ fn check_workbook<R: Read + Seek>(mut r: R, streamed: bool) -> Res<()> {
     r.seek(std::io::SeekFrom::Start(0)).map_err(es)?;
     if let Ok(mut zip) = zip::ZipArchive::new(&mut r) {
         let unpacked: u64 = (0..zip.len())
-            .filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !(streamed && f.name().starts_with("xl/worksheets/"))).map(|f| f.size()))
+            .filter_map(|i| zip.by_index_raw(i).ok().filter(|f| !(streamed && f.name().is_ok_and(|n| n.starts_with("xl/worksheets/")))).map(|f| f.size()))
             .sum();
         if unpacked > MAX_WORKBOOK_UNPACKED {
             return Err(too_large());

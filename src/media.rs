@@ -6,7 +6,7 @@ use crate::util::Res;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -67,7 +67,7 @@ pub fn tool_output(mut cmd: Command, cancel: &Cancel) -> Option<Vec<u8>> {
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
-    cmd.stdin(Stdio::null()).stdout(std::fs::File::create(&out).ok()?).stderr(Stdio::null());
+    cmd.stdin(Stdio::null()).stdout(std::fs::File::create_new(&out).ok()?).stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -94,16 +94,17 @@ pub fn tool_output(mut cmd: Command, cancel: &Cancel) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-/// A private temporary folder, removed with everything in it when dropped.
+/// A private temporary folder, removed with everything in it when dropped. It is new,
+/// only the user can open it and its name cannot be guessed, so files written in it
+/// cannot be redirected by another user (see `util::private_temp_dir`).
 pub struct TempDir(PathBuf);
+
+/// The name the preview's temporary folders start with.
+pub const TEMP_PREFIX: &str = "preview";
 
 impl TempDir {
     pub fn new() -> Res<Self> {
-        static NEXT: AtomicU64 = AtomicU64::new(0);
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("matrix_finder-preview-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-        Ok(Self(dir))
+        crate::util::private_temp_dir(TEMP_PREFIX).map(Self).map_err(|e| e.to_string())
     }
 
     pub fn path(&self) -> &Path {

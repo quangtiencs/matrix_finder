@@ -480,7 +480,7 @@ impl Preview {
                 let source = crate::table::source_language(&n).map(|lang| {
                     use std::io::Read;
                     let mut head = Vec::new();
-                    if let Ok(f) = std::fs::File::open(&path) {
+                    if let Ok(f) = crate::util::open_regular(&path) {
                         let _ = f.take(512 * 1024).read_to_end(&mut head);
                     }
                     let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(&head), lang, &theme);
@@ -491,7 +491,7 @@ impl Preview {
             Err(e) => {
                 use std::io::Read;
                 let mut head = Vec::new();
-                if let Ok(f) = std::fs::File::open(&path) {
+                if let Ok(f) = crate::util::open_regular(&path) {
                     let _ = f.take(MAX_TEXT as u64).read_to_end(&mut head);
                 }
                 text_instead(e, &head, &n, &theme)
@@ -1611,7 +1611,7 @@ fn field_row(label: String, value: Option<String>, rows: &mut Vec<crate::certvie
 fn video_summary(path: &Path, max_texture: usize, cancel: &crate::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
     use crate::i18n::t;
     use crate::media::{format_duration, video_info, video_thumbnail};
-    let info = match std::fs::File::open(path) {
+    let info = match crate::util::open_regular(path) {
         Ok(f) => video_info(&mut std::io::BufReader::new(f)),
         Err(e) => return Loaded::Error(e.to_string()),
     };
@@ -1723,12 +1723,12 @@ fn iwork_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
         _ => "Numbers",
     };
     let no_picture = || Loaded::Error(t("This document has no preview picture."));
-    let Ok(file) = std::fs::File::open(path) else { return no_picture() };
+    let Ok(file) = crate::util::open_regular(path) else { return no_picture() };
     let Ok(mut zip) = zip::ZipArchive::new(std::io::BufReader::new(file)) else {
         // A `.key` that is not a Keynote file is a key: named, never shown.
         if format == "Keynote" {
             let mut head = Vec::new();
-            if std::fs::File::open(path).and_then(|f| f.take(1024 * 1024).read_to_end(&mut head)).is_ok() {
+            if crate::util::open_regular(path).and_then(|f| f.take(1024 * 1024).read_to_end(&mut head)).is_ok() {
                 return certificate_summary(&head);
             }
         }
@@ -1818,7 +1818,7 @@ fn heif_loaded(path: &Path, fmt: String, max_texture: usize, cancel: &crate::med
 fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, cancel: &crate::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
     let fmt = ext_of(name).to_uppercase();
     match classify(name) {
-        Kind::Image => match std::fs::File::open(path) {
+        Kind::Image => match crate::util::open_regular(path) {
             Ok(f) => psd_loaded(std::io::BufReader::new(f), name, max_texture),
             Err(e) => Loaded::Error(e.to_string()),
         },
@@ -1828,7 +1828,7 @@ fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, 
         },
         Kind::Heif => heif_loaded(path, fmt, max_texture, cancel),
         Kind::Video => video_summary(path, max_texture, cancel, early),
-        Kind::Audio => match std::fs::File::open(path) {
+        Kind::Audio => match crate::util::open_regular(path) {
             Ok(f) => audio_summary(f, name, max_texture),
             Err(e) => Loaded::Error(e.to_string()),
         },
@@ -1837,7 +1837,7 @@ fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, 
             Ok(data) => Loaded::Geo(Box::new(crate::geoview::GeoView::new(data, None))),
             Err(e) => Loaded::Error(e),
         },
-        Kind::Raw => match std::fs::File::open(path) {
+        Kind::Raw => match crate::util::open_regular(path) {
             Ok(f) => raw_summary(&mut std::io::BufReader::new(f), fmt, max_texture),
             Err(e) => Loaded::Error(e.to_string()),
         },
@@ -1846,7 +1846,7 @@ fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, 
             if std::fs::metadata(path).is_ok_and(|m| m.len() > crate::model3d::MAX_FILE) {
                 return Loaded::Error(crate::i18n::t("This model is too large to preview."));
             }
-            match std::fs::read(path) {
+            match crate::util::read_regular(path) {
                 Ok(bytes) => match crate::model3d::load(name, &bytes, path.parent()) {
                     Ok(mesh) => Loaded::Model(Box::new(crate::model3d::ModelView::new(mesh))),
                     Err(e) => Loaded::Error(e),
@@ -1865,7 +1865,7 @@ fn with_temp_file(name: &str, bytes: &[u8], f: impl FnOnce(&Path) -> Loaded) -> 
     };
     let ext = ext_of(name);
     let path = dir.path().join(format!("preview.{ext}"));
-    if let Err(e) = std::fs::write(&path, bytes) {
+    if let Err(e) = std::fs::File::create_new(&path).and_then(|mut f| std::io::Write::write_all(&mut f, bytes)) {
         return Loaded::Error(e.to_string());
     }
     f(&path)

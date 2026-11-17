@@ -2875,6 +2875,66 @@ fn too_large_files_are_not_opened() {
     }
 }
 
+/// Named pipes and devices are never opened by Quick View (a pipe with no writer would
+/// hold a preview forever, one with a writer would lose its data): an info card instead,
+/// and the regular file next to them still previews.
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn special_files_are_not_opened() {
+    let d = demo_env();
+    let dir = d.demo.join("special");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["pipe.txt", "pipe.png", "pipe.zip"] {
+        let c = std::ffi::CString::new(dir.join(name).to_string_lossy().as_bytes()).unwrap();
+        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
+    }
+    std::os::unix::fs::symlink("/dev/zero", dir.join("zero.txt")).unwrap();
+    std::fs::write(dir.join("small.txt"), "hello").unwrap();
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.quick_view = true;
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().shot_pane(0, &dir, None);
+    settle(&mut h, 3);
+    for (name, kind) in [("pipe.txt", "Named pipe"), ("pipe.png", "Named pipe"), ("pipe.zip", "Named pipe"), ("zero.txt", "Device")] {
+        h.state_mut().panes[0].tab_mut().select_name(name);
+        settle(&mut h, 2);
+        let q = h.state().quick.as_ref().expect("a preview");
+        assert_eq!(q.name, name);
+        assert!(q.describe().starts_with(&format!("info {}", t(kind))), "{name}: {}", q.describe());
+    }
+    h.state_mut().panes[0].tab_mut().select_name("small.txt");
+    wait_until(&mut h, 3.0, |a| a.quick.as_ref().is_some_and(|q| q.name == "small.txt" && q.is_ready()));
+    assert!(h.state().quick.as_ref().unwrap().describe().starts_with("code"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A settings file that cannot be read is set aside, not overwritten by the defaults when
+/// quitting, and the user is told where it is.
+#[test]
+#[ignore]
+fn broken_settings_are_kept_and_told() {
+    let _ = demo_env();
+    let file = crate::config::config_file();
+    let dir = file.parent().unwrap().to_path_buf();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("MATRIX_FINDER_CHROME", "gnome");
+    let broken = r#"{"connections":[{"name":"srv","protocol":"Sftp","host":"h","port":22,"user":"me","password":"pw"}"#;
+    std::fs::write(&file, broken).unwrap();
+    let mut h = Harness::builder().with_size(egui::vec2(W, H)).with_pixels_per_point(1.0).wgpu().build_eframe(|cc| App::new(cc, crate::chrome::Chrome::detect(true), None));
+    settle(&mut h, 3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Message { title, .. }) if *title == t("The settings file could not be read")));
+    let kept: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains("settings.json.broken-")).collect();
+    assert_eq!(kept.len(), 1);
+    assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), broken);
+    // Saving writes a good file, and leaves the one set aside alone.
+    h.state_mut().save_cfg();
+    assert!(crate::config::parse_lenient(&std::fs::read_to_string(&file).unwrap()).is_ok());
+    assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), broken);
+}
+
 /// Checking for updates: GitHub's answer (made up here; tests never go online) shows a
 /// newer version with its notes, can be skipped, and the check at start keeps quiet about
 /// a skipped version. Nothing is installed.
@@ -4379,6 +4439,31 @@ fn dialog_keys_follow_the_focused_widget() {
     assert!(h.state().dialog.is_none());
     settle(&mut h, 4);
     assert!(h.state().jobs.is_empty() && dir.join("keep.txt").exists());
+
+    // Deleting for good takes a click on the red button: Enter does not confirm it, even
+    // with nothing focused, while it confirms other dialogs then.
+    h.state_mut().cfg.use_trash = false;
+    h.state_mut().run_cmd(Cmd::Delete);
+    settle(&mut h, 2);
+    assert!(matches!(h.state().dialog, Some(Dialog::Delete { trash: false, .. })));
+    assert!(h.state().egui_ctx.memory(|m| m.focused()).is_none(), "nothing focused");
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 3);
+    assert!(matches!(h.state().dialog, Some(Dialog::Delete { trash: false, .. })), "Enter alone does not delete for good");
+    assert!(h.state().jobs.is_empty() && dir.join("keep.txt").exists());
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert!(h.state().dialog.is_none());
+    // With confirmations off, deleting for good (Shift+Delete) still asks.
+    h.state_mut().cfg.confirm_delete = false;
+    h.state_mut().cfg.use_trash = true;
+    let ctx = h.ctx.clone();
+    h.state_mut().run_shortcut(&ctx, Action::DeletePermanently);
+    settle(&mut h, 2);
+    assert!(matches!(h.state().dialog, Some(Dialog::Delete { trash: false, .. })), "Shift+Delete asks even with confirmations off");
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    settle(&mut h, 3);
+    assert!(h.state().jobs.is_empty() && dir.join("keep.txt").exists());
+    h.state_mut().cfg.confirm_delete = true;
 
     // A click outside keeps a typed name; Enter in the field creates the folder where
     // it was asked for, even when the window went to another folder meanwhile.

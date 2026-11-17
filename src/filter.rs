@@ -578,7 +578,7 @@ fn cmp_num(a: f64, op: Op, b: f64) -> bool {
 /// Whether some line of the file at `path` passes `test`, like grep. `None` for a binary
 /// file (a NUL byte in its first 64 KB), one that cannot be read, or once `stop` is set.
 pub fn grep(path: &Path, stop: &AtomicBool, mut test: impl FnMut(&str) -> bool) -> Option<bool> {
-    let f = std::fs::File::open(path).ok()?;
+    let f = crate::util::open_regular(path).ok()?;
     let mut r = std::io::BufReader::with_capacity(64 * 1024, f);
     if r.fill_buf().ok()?.contains(&0) {
         return None;
