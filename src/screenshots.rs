@@ -1,7 +1,7 @@
 //! README screenshots, rendered headlessly with egui_kittest (wgpu):
 //! `cargo test export_screenshots -- --ignored` (or `make screenshots`) writes every
 //! scene to `docs/light/` and `docs/dark/`, then combines four of them into
-//! `docs/showcase.png`.
+//! `docs/showcase.png` and, with the logo, name, slogan and link above, `docs/banner.png`.
 //!
 //! Every scene starts a fresh `App` with `HOME` pointing at a generated demo tree
 //! (`/tmp/matrix_finder`), so the user's own settings and files never show up.
@@ -2145,19 +2145,35 @@ fn wait_for_git(h: &mut Harness<'static, App>, d: &Demo) {
     settle(h, 4);
 }
 
-/// Combine four scenes into one image: windows with rounded corners and a soft
-/// shadow on a calm gradient that suits both light and dark pages.
+/// The banner's slogan and link: `docs/banner.png` is the showcase under a header with
+/// the logo and the name, for sharing the project.
+const SLOGAN: &str = "Files, data and a terminal, side by side.";
+const REPO: &str = "github.com/quangtiencs/matrix_finder";
+
+/// Combine four scenes into `docs/showcase.png`, and the same with a header into `docs/banner.png`.
 fn compose_showcase() {
+    for (name, header) in [("showcase", false), ("banner", true)] {
+        let p = out_dir().join(format!("{name}.png"));
+        compose(header).save(&p).unwrap();
+        eprintln!("wrote {}", p.display());
+    }
+}
+
+/// Four scenes as windows with rounded corners and a soft shadow on a calm gradient
+/// that suits both light and dark pages; `header` adds the logo, name, slogan and link above.
+fn compose(header: bool) -> RgbaImage {
     const PAD: u32 = 56;
     const GAP: u32 = 36;
     const RADIUS: f32 = 12.0;
+    const HEAD: u32 = 300;
     let tiles: Vec<RgbaImage> = SHOWCASE
         .iter()
         .map(|(mode, name)| image::open(out_dir().join(mode).join(format!("{name}.png"))).unwrap().to_rgba8())
         .collect();
     let (tw, th) = tiles[0].dimensions();
-    let (cw, ch) = (PAD * 2 + GAP + tw * 2, PAD * 2 + GAP + th * 2);
-    let top_left = |i: usize| (PAD + (i as u32 % 2) * (tw + GAP), PAD + (i as u32 / 2) * (th + GAP));
+    let head = if header { HEAD } else { 0 };
+    let (cw, ch) = (PAD * 2 + GAP + tw * 2, head + PAD * 2 + GAP + th * 2);
+    let top_left = |i: usize| (PAD + (i as u32 % 2) * (tw + GAP), head + PAD + (i as u32 / 2) * (th + GAP));
 
     let mut out = RgbaImage::from_fn(cw, ch, |x, y| {
         let k = (x as f32 / cw as f32 + y as f32 / ch as f32) / 2.0;
@@ -2188,9 +2204,56 @@ fn compose_showcase() {
             out.put_pixel(ox + x, oy + y, over(below, [p.0[0], p.0[1], p.0[2]], a));
         }
     }
-    let p = out_dir().join("showcase.png");
-    out.save(&p).unwrap();
-    eprintln!("wrote {}", p.display());
+    if header {
+        draw_header(&mut out, PAD + HEAD / 2);
+    }
+    out
+}
+
+/// The logo beside the name, the slogan and the link, centred as one group at height `mid`.
+fn draw_header(out: &mut RgbaImage, mid: u32) {
+    use resvg::{tiny_skia, usvg};
+    const LOGO: u32 = 216;
+    const SPACE: u32 = 44;
+    let esc = |s: &str| s.replace('&', "&amp;").replace('<', "&lt;");
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="{LOGO}">
+  <text x="0" y="100" font-family="'Source Sans 3'" font-weight="600" font-size="108" fill="#ffffff">Matrix Finder</text>
+  <text x="3" y="158" font-family="'Source Sans 3'" font-size="44" fill="#ffffff" fill-opacity="0.9">{}</text>
+  <text x="3" y="206" font-family="'Source Sans 3'" font-size="34" fill="#d4e2ff">{}</text>
+</svg>"##,
+        esc(SLOGAN),
+        esc(REPO)
+    );
+    let mut opt = usvg::Options::default();
+    opt.fontdb_mut().load_font_data(include_bytes!("../assets/fonts/SourceSans3-Regular.otf").to_vec());
+    opt.fontdb_mut().load_font_data(include_bytes!("../assets/fonts/SourceSans3-Semibold.otf").to_vec());
+    let tree = usvg::Tree::from_str(&svg, &opt).unwrap();
+    let mut text = tiny_skia::Pixmap::new(1800, LOGO).unwrap();
+    resvg::render(&tree, tiny_skia::Transform::default(), &mut text.as_mut());
+    // The text's real width, so the group is centred.
+    let text_w = (0..1800u32).rev().find(|&x| (0..LOGO).any(|y| text.pixel(x, y).unwrap().alpha() > 0)).unwrap() + 1;
+    let logo = crate::logo::render(crate::logo::LOGO_SVG, LOGO).unwrap();
+    let left = (out.width() - (LOGO + SPACE + text_w)) / 2;
+    let top = mid - LOGO / 2;
+    for y in 0..LOGO {
+        for x in 0..LOGO {
+            let p = &logo[((y * LOGO + x) * 4) as usize..][..4];
+            let below = *out.get_pixel(left + x, top + y);
+            out.put_pixel(left + x, top + y, over(below, [p[0], p[1], p[2]], p[3] as f32 / 255.0));
+        }
+        for x in 0..text_w {
+            // Premultiplied: the colour over the background is c + below × (1 − a).
+            let p = text.pixel(x, y).unwrap();
+            let a = p.alpha() as f32 / 255.0;
+            if a > 0.0 {
+                let (ox, oy) = (left + LOGO + SPACE + x, top + y);
+                let b = out.get_pixel(ox, oy).0;
+                let mix = |c: u8, b: u8| (c as f32 + b as f32 * (1.0 - a)).round().min(255.0) as u8;
+                out.put_pixel(ox, oy, image::Rgba([mix(p.red(), b[0]), mix(p.green(), b[1]), mix(p.blue(), b[2]), 255]));
+            }
+        }
+    }
 }
 
 /// An animation really changes on screen, and stops when paused.
