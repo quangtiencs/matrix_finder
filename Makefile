@@ -12,7 +12,7 @@ icons:
 	cargo test export_assets -- --ignored
 
 # Re-render the README screenshots headlessly (demo data in /tmp/matrix_finder): every scene
-# to docs/light and docs/dark, plus docs/showcase.png. SHOTS=panels,palette renders only those scenes.
+# to docs/light and docs/dark, plus docs/showcase.png and docs/banner.png. SHOTS=panels,palette renders only those scenes.
 screenshots:
 	MATRIX_FINDER_SHOTS=$(SHOTS) cargo test export_screenshots -- --ignored --nocapture
 

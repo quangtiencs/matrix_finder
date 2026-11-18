@@ -30,7 +30,7 @@ This builds `target/macos/Matrix Finder.app` and `target/macos/MatrixFinder-<ver
 - `--sign "Developer ID Application: …"` applies a real signature. The default is an ad-hoc signature, so macOS asks for confirmation the first time you open the app (right-click → Open).
 - `--no-layout` skips the Finder window styling, and `BUNDLE_ID=…` changes the bundle identifier.
 - After editing the SVGs in `assets/logo`, run `make icons` to regenerate the PNGs, the `.icns` file and the DMG background.
-- `make screenshots` re-renders the screenshots headlessly from a generated demo folder: every scene to `docs/light` and `docs/dark`, plus `docs/showcase.png` (`SHOTS=panels,palette` renders only some).
+- `make screenshots` re-renders the screenshots headlessly from a generated demo folder: every scene to `docs/light` and `docs/dark`, plus `docs/showcase.png` and `docs/banner.png` (the showcase under the logo, name, slogan and GitHub link; `SHOTS=panels,palette` renders only some).
 
 ## Tests
 
