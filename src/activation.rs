@@ -2,7 +2,9 @@
 //! hands it a token (`XDG_ACTIVATION_TOKEN` on Wayland) and shows a spinning "starting"
 //! cursor until a window of the app uses the token, or for about 15 seconds. eframe
 //! does not pass the token on to the window, so [`activate`] does, through the window's
-//! own Wayland connection (xdg-activation-v1).
+//! own Wayland connection (xdg-activation-v1), once the window is on screen. A launch
+//! that hands its folder to the running app passes its token along, and the running
+//! window uses it to come to the front.
 
 use std::sync::OnceLock;
 
@@ -17,17 +19,22 @@ pub fn take_token() {
     let _ = TOKEN.set(token);
 }
 
-/// Hands the token to the new window (Wayland only): the desktop stops its "starting"
-/// cursor and gives the window the focus. A failure only leaves the cursor to time out.
-pub fn activate(cc: &eframe::CreationContext) {
+/// The token this launch was given, if any.
+pub fn startup_token() -> Option<String> {
+    TOKEN.get().cloned().flatten()
+}
+
+/// Hands `token` to the window (Wayland only): the desktop stops its "starting" cursor
+/// and brings the window to the front. Called once the window has been drawn: a
+/// compositor may ignore a window that is not on screen yet. A failure only leaves the
+/// cursor to time out.
+pub fn activate(frame: &eframe::Frame, token: &str) {
     #[cfg(target_os = "linux")]
-    if let Some(token) = TOKEN.get().cloned().flatten() {
-        if let Err(e) = wayland::activate(cc, &token) {
-            eprintln!("matrix_finder: startup notification: {e}");
-        }
+    if let Err(e) = wayland::activate(frame, token) {
+        eprintln!("matrix_finder: startup notification: {e}");
     }
     #[cfg(not(target_os = "linux"))]
-    let _ = cc;
+    let _ = (frame, token);
 }
 
 #[cfg(target_os = "linux")]
@@ -49,9 +56,9 @@ mod wayland {
         fn event(_: &mut Self, _: &XdgActivationV1, _: xdg_activation_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
     }
 
-    pub fn activate(cc: &eframe::CreationContext, token: &str) -> Result<(), String> {
-        let display = cc.display_handle().map_err(|e| e.to_string())?.as_raw();
-        let window = cc.window_handle().map_err(|e| e.to_string())?.as_raw();
+    pub fn activate(frame: &eframe::Frame, token: &str) -> Result<(), String> {
+        let display = frame.display_handle().map_err(|e| e.to_string())?.as_raw();
+        let window = frame.window_handle().map_err(|e| e.to_string())?.as_raw();
         // On X11 the desktop matches the window by its class (StartupWMClass) instead.
         let (RawDisplayHandle::Wayland(d), RawWindowHandle::Wayland(w)) = (display, window) else { return Ok(()) };
         // Safety: the display and the surface belong to the window eframe has just made,

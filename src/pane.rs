@@ -87,6 +87,9 @@ pub struct Tab {
     scroll_offset: f32,
     view_height: f32,
     pub ensure_visible: bool,
+    /// A right-click menu of the file list was open in the last frame: the Esc that
+    /// closes it is not for the list (which would unmark the items).
+    pub menu_open: bool,
     select_name: Option<String>,
     pub dir_sizes: Option<Receiver<(String, u64)>>,
     /// Recursive search results shown instead of the folder.
@@ -211,6 +214,7 @@ impl Tab {
             scroll_offset: 0.0,
             view_height: 400.0,
             ensure_visible: true,
+            menu_open: false,
             select_name: None,
             dir_sizes: None,
             search: None,
@@ -2345,9 +2349,11 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     let mut row_target: Option<(Location, String)> = None;
     let mut drag_started: Option<(usize, Vec<Entry>)> = None;
     let mut clicked: Option<(usize, egui::Modifiers)> = None;
+    let mut unmark = false;
     let mut double: Option<usize> = None;
     let mut context: Option<(usize, Cmd)> = None;
     let mut bg_context: Option<Cmd> = None;
+    let mut menu_open = false;
     let n = tab.view.len();
     let only_parent = n <= 1 && tab.entries.iter().filter(|e| !e.is_parent).count() == tab.entries.len().saturating_sub(1);
     let out = ui.scope(|ui| {
@@ -2463,13 +2469,18 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 if resp.double_clicked() {
                     double = Some(row);
                 }
+                // A right-click outside the marked rows is about that row alone (as in
+                // Finder): the marks go, so the menu and its command name the same items.
                 if resp.secondary_clicked() && !tab.marked.contains(&e.name) {
                     clicked = Some((row, egui::Modifiers::NONE));
+                    // ".." has no commands that act on items: the marks stay.
+                    unmark = !e.is_parent;
                 }
                 let (entry_is_dir, entry_is_parent) = (e.is_dir, e.is_parent);
                 resp.context_menu(|ui| {
+                    menu_open = true;
                     // The local folders the menu acts on: the marked ones when this row is
-                    // one of them (as the command then finds them), else this row.
+                    // one of them, else this row (a right-click there unmarks the others).
                     let dirs: Vec<String> = if !matches!(tab.loc, Location::Local(_)) || entry_is_parent {
                         vec![]
                     } else if tab.marked.contains(&e.name) {
@@ -2519,6 +2530,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     ev.push(PaneEvent::Focus);
                 }
                 bg.context_menu(|ui| {
+                    menu_open = true;
                     if let Some(cmd) = background_menu(ui, c) {
                         bg_context = Some(cmd);
                         ui.close_menu();
@@ -2530,6 +2542,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     if !tab.ensure_visible {
         tab.scroll_offset = out.inner.state.offset.y;
     }
+    tab.menu_open = menu_open;
     if let Some((row, items)) = drag_started {
         tab.cursor = row;
         egui::DragAndDrop::set_payload(ui.ctx(), DragPayload { side, loc: tab.loc.clone(), items });
@@ -2606,6 +2619,9 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
         } else {
             tab.cursor = row;
             tab.end_range();
+            if unmark {
+                tab.marked.clear();
+            }
         }
     }
     if let Some(row) = double {

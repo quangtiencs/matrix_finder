@@ -432,6 +432,9 @@ pub struct Settings {
     /// Quick View width as a share of the window width.
     pub quick_view_frac: f32,
     pub sidebar_width: f32,
+    /// The window's size when Matrix Finder starts, in logical pixels (see `WINDOW_MIN`).
+    pub window_width: f32,
+    pub window_height: f32,
     pub dirs_first: bool,
     pub show_sidebar: bool,
     pub show_key_hints: bool,
@@ -480,6 +483,8 @@ pub struct Settings {
     pub start_in_home: bool,
     /// Draw the title bar inside the window, with native-looking buttons.
     pub integrated_titlebar: bool,
+    /// Linux (Wayland, GNOME or KDE): round the window's corners like the desktop's own.
+    pub round_corners: bool,
     /// Starting Matrix Finder again: a new tab of the running one, or a separate window.
     pub instance_mode: InstanceMode,
     /// Tabs and tab groups of the active pane, restored at start.
@@ -532,6 +537,12 @@ const QUICK_FILTER_ADDED: &[(u32, &str, &str)] = &[(1, "Data", "safetensors onnx
 /// Allowed terminal scroll speeds (lines per trackpad row or wheel notch).
 pub const SCROLL_SPEEDS: std::ops::RangeInclusive<f32> = 0.1..=10.0;
 
+/// The window's size at start (logical pixels): the default, the least that still
+/// shows two panels and the sidebar (also the window's own minimum), and the most.
+pub const WINDOW_DEFAULT: [f32; 2] = [1280.0, 800.0];
+pub const WINDOW_MIN: [f32; 2] = [720.0, 420.0];
+pub const WINDOW_MAX: [f32; 2] = [7680.0, 4320.0];
+
 impl Default for Settings {
     fn default() -> Self {
         let home = dirs::home_dir()
@@ -571,6 +582,8 @@ impl Default for Settings {
             quick_view: false,
             quick_view_frac: 1.0 / 3.0,
             sidebar_width: 210.0,
+            window_width: WINDOW_DEFAULT[0],
+            window_height: WINDOW_DEFAULT[1],
             dirs_first: true,
             show_sidebar: true,
             show_key_hints: true,
@@ -600,6 +613,7 @@ impl Default for Settings {
             term_restore: false,
             start_in_home: true,
             integrated_titlebar: true,
+            round_corners: true,
             instance_mode: InstanceMode::NewTab,
             session: None,
             unknown: Default::default(),
@@ -993,6 +1007,11 @@ impl Settings {
         if !crate::fonts::UI_SIZES.contains(&self.ui_font_size) {
             self.ui_font_size = crate::fonts::DEFAULT_UI_SIZE;
         }
+        // The window size at start: within reach of the screen and big enough to use,
+        // whatever was typed or read from a damaged file.
+        for (v, k) in [(&mut self.window_width, 0), (&mut self.window_height, 1)] {
+            *v = if v.is_finite() { v.round().clamp(WINDOW_MIN[k], WINDOW_MAX[k]) } else { WINDOW_DEFAULT[k] };
+        }
         if !(160.0..=360.0).contains(&self.sidebar_width) {
             self.sidebar_width = 210.0;
         }
@@ -1103,6 +1122,21 @@ mod tests {
         let mut v: Vec<String> = std::fs::read_dir(d).unwrap().flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect();
         v.sort();
         v
+    }
+
+    /// A start size out of range is brought into it; one of the wrong kind is the default.
+    #[test]
+    fn window_size_stays_usable() {
+        let (mut s, _) = parse_lenient(r#"{"window_width": 10, "window_height": 99999}"#).unwrap();
+        s.normalize();
+        assert_eq!((s.window_width, s.window_height), (WINDOW_MIN[0], WINDOW_MAX[1]));
+        let (mut s, reset) = parse_lenient(r#"{"window_width": "wide", "window_height": -5}"#).unwrap();
+        s.normalize();
+        assert_eq!((s.window_width, s.window_height), (WINDOW_DEFAULT[0], WINDOW_MIN[1]));
+        assert!(reset.iter().any(|r| r == "window_width"));
+        let mut s = Settings { window_width: f32::NAN, window_height: 1000.4, ..Settings::default() };
+        s.normalize();
+        assert_eq!((s.window_width, s.window_height), (WINDOW_DEFAULT[0], 1000.0));
     }
 
     /// One unreadable value resets that value alone: saved connections survive a newer

@@ -137,7 +137,8 @@ pub struct TermSession {
     pub id: egui::Id,
     /// Title set by the program (OSC 0/2).
     pub title: String,
-    /// Current directory of the shell (tracked on Linux, else the start folder).
+    /// Current directory of the shell (read from the system on Linux and macOS, else the
+    /// start folder and the folders the app has `cd`-ed it to).
     pub cwd: PathBuf,
     cwd_at: Instant,
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -492,6 +493,27 @@ impl TermSession {
         None
     }
 
+    /// The shell's working folder read now, as a destination for Copy / Move. None
+    /// where it cannot be read (Windows), when the shell is gone or its folder was
+    /// deleted, and while a program runs in front of the shell (tmux, ssh, a nested
+    /// shell): the folder shown there is not the shell's. `cwd` may be behind a `cd`.
+    pub fn live_cwd(&self) -> Option<PathBuf> {
+        if self.foreground_pid().is_some() {
+            return None;
+        }
+        let p = self.pid.filter(|_| self.exited.is_none()).and_then(process_cwd)?;
+        Some(self.as_known(p)).filter(|p| p.is_dir())
+    }
+
+    /// `p` as the user knows it: the folder the terminal was given (`/tmp`) when the
+    /// system reports the same folder by its real path (`/private/tmp` on macOS).
+    fn as_known(&self, p: PathBuf) -> PathBuf {
+        if p != self.cwd && std::fs::canonicalize(&self.cwd).ok().as_ref() == Some(&p) {
+            return self.cwd.clone();
+        }
+        p
+    }
+
     /// A short label for the tab.
     pub fn label(&self) -> String {
         if !self.title.trim().is_empty() {
@@ -546,11 +568,8 @@ impl TermSession {
         // The shell prints a prompt after `cd`, so new output is the moment to look.
         if woke || self.cwd_at.elapsed() > Duration::from_secs(3) {
             self.cwd_at = Instant::now();
-            #[cfg(target_os = "linux")]
-            if let Some(pid) = self.pid {
-                if let Ok(p) = std::fs::read_link(format!("/proc/{pid}/cwd")) {
-                    self.cwd = p;
-                }
+            if let Some(p) = self.pid.and_then(process_cwd) {
+                self.cwd = self.as_known(p);
             }
         }
     }
@@ -1468,6 +1487,33 @@ fn link_target(url: &str) -> Option<LinkTarget> {
             }
         }
         _ => None,
+    }
+}
+
+/// The working folder of process `pid` (the shell): where Copy / Move to this window
+/// goes. None where it cannot be read (Windows): the window is then not offered.
+pub fn process_cwd(pid: u32) -> Option<PathBuf> {
+    #[cfg(target_os = "linux")]
+    return std::fs::read_link(format!("/proc/{pid}/cwd")).ok();
+    #[cfg(target_os = "macos")]
+    {
+        let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
+        let size = std::mem::size_of::<libc::proc_vnodepathinfo>() as libc::c_int;
+        // Safety: `info` is a buffer of `size` bytes, which proc_pidinfo fills.
+        let n = unsafe { libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDVNODEPATHINFO, 0, (&mut info as *mut libc::proc_vnodepathinfo).cast(), size) };
+        if n != size {
+            return None;
+        }
+        // The path is a NUL-terminated C string in 32 × 32 bytes.
+        let bytes: Vec<u8> = info.pvi_cdir.vip_path.iter().flatten().map(|&c| c as u8).take_while(|&b| b != 0).collect();
+        use std::os::unix::ffi::OsStringExt;
+        let p = PathBuf::from(std::ffi::OsString::from_vec(bytes));
+        return p.is_absolute().then_some(p);
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = pid;
+        None
     }
 }
 

@@ -42,6 +42,10 @@ struct Request {
     token: String,
     /// The folder (or file, archive, URL) to open; `None` only asks "are you there?".
     open: Option<String>,
+    /// The later launch's startup token (Wayland), for the running window to come to
+    /// the front with (see `activation`).
+    #[serde(default)]
+    activation: Option<String>,
 }
 
 fn info_file() -> PathBuf {
@@ -59,7 +63,7 @@ fn send(open: Option<&str>) -> bool {
     if !crate::util::pid_alive(info.pid) {
         return false;
     }
-    ask(info.port, &info.token, open)
+    ask(info.port, &info.token, open, open.and(crate::activation::startup_token()))
 }
 
 /// What the running app answers to challenge `nonce`.
@@ -78,7 +82,7 @@ fn send_line(s: &TcpStream, v: &impl Serialize) -> bool {
 }
 
 /// Talk to the app at `port`: check that it knows `token`, then send the request.
-fn ask(port: u16, token: &str, open: Option<&str>) -> bool {
+fn ask(port: u16, token: &str, open: Option<&str>, activation: Option<String>) -> bool {
     let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
     let Ok(s) = TcpStream::connect_timeout(&addr, Duration::from_millis(500)) else { return false };
     let _ = s.set_read_timeout(Some(Duration::from_secs(3)));
@@ -97,7 +101,7 @@ fn ask(port: u16, token: &str, open: Option<&str>) -> bool {
     if !crate::util::same_bytes(answer.proof.as_bytes(), proof(token, &nonce).as_bytes()) {
         return false;
     }
-    if !send_line(&s, &Request { token: token.to_string(), open: open.map(str::to_string) }) {
+    if !send_line(&s, &Request { token: token.to_string(), open: open.map(str::to_string), activation }) {
         return false;
     }
     let mut reply = String::new();
@@ -112,7 +116,8 @@ pub fn hand_off(target: &str) -> bool {
 
 /// Requests from later launches, for the running app.
 pub struct Server {
-    pub rx: Receiver<String>,
+    /// What to open, and the later launch's startup token.
+    pub rx: Receiver<(String, Option<String>)>,
     token: String,
 }
 
@@ -134,9 +139,9 @@ impl Server {
             .name("single-instance".into())
             .spawn(move || {
                 for s in listener.incoming().flatten() {
-                    let Some(open) = serve(s, &want) else { continue };
+                    let Some((open, activation)) = serve(s, &want) else { continue };
                     if let Some(open) = open {
-                        if tx.send(open).is_err() {
+                        if tx.send((open, activation)).is_err() {
                             return;
                         }
                         ctx.request_repaint();
@@ -155,9 +160,9 @@ impl Server {
     }
 }
 
-/// Answer one connection: prove the token is known, then take the request. `Some(open)`
-/// for a request with the right token.
-fn serve(s: TcpStream, token: &str) -> Option<Option<String>> {
+/// Answer one connection: prove the token is known, then take the request. `Some((open,
+/// startup token))` for a request with the right token.
+fn serve(s: TcpStream, token: &str) -> Option<(Option<String>, Option<String>)> {
     let _ = s.set_read_timeout(Some(Duration::from_secs(2)));
     let _ = s.set_write_timeout(Some(Duration::from_secs(2)));
     let mut r = BufReader::new((&s).take(MAX_REQUEST));
@@ -178,7 +183,9 @@ fn serve(s: TcpStream, token: &str) -> Option<Option<String>> {
         return None;
     }
     let _ = (&s).write_all(b"ok\n");
-    Some(req.open)
+    // A token is a short printable string; anything else is not passed on.
+    let activation = req.activation.filter(|t| t.len() <= 512 && t.chars().all(|c| c.is_ascii_graphic()));
+    Some((req.open, activation))
 }
 
 /// 128 random bits as hex.
@@ -306,16 +313,18 @@ mod tests {
             }
             got
         });
-        assert!(ask(port, "secret", Some("/tmp")));
+        // With the launch's startup token, which reaches the running app; a malformed
+        // one does not.
+        assert!(ask(port, "secret", Some("/tmp"), Some("tok-1".into())));
         // The server's proof does not match this token: the request is never sent.
-        assert!(!ask(port, "wrong", Some("/private")));
+        assert!(!ask(port, "wrong", Some("/private"), None));
         let mut s = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-        let req = serde_json::to_string(&Request { token: "secret".into(), open: Some("/old".into()) }).unwrap();
+        let req = serde_json::to_string(&Request { token: "secret".into(), open: Some("/old".into()), activation: None }).unwrap();
         s.write_all(format!("{req}\n").as_bytes()).unwrap();
         let mut r = String::new();
         let _ = BufReader::new(s).read_line(&mut r);
         assert_eq!(r, "");
-        assert_eq!(srv.join().unwrap(), vec![Some(Some("/tmp".to_string())), None, None]);
+        assert_eq!(srv.join().unwrap(), vec![Some((Some("/tmp".to_string()), Some("tok-1".to_string()))), None, None]);
     }
 
     /// Another program on the recorded port (after a crash) cannot prove the token, so
@@ -335,7 +344,7 @@ mod tests {
             let _ = r.read_to_string(&mut rest);
             first + &rest
         });
-        assert!(!ask(port, "secret", Some("/home/me/private")));
+        assert!(!ask(port, "secret", Some("/home/me/private"), Some("tok".into())));
         let heard = srv.join().unwrap();
         assert!(!heard.contains("private") && !heard.contains("secret"), "{heard}");
         assert!(!crate::util::pid_alive(u32::MAX));

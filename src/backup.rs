@@ -158,17 +158,22 @@ impl BackupUi {
         drives: &[crate::drives::Drive],
         show_hidden: bool,
         theme: &Theme,
+        chrome: &crate::chrome::Chrome,
         t: &dyn Fn(&str) -> String,
     ) -> Option<BackupAction> {
         let opts = |width: f32, hint: Option<String>| crate::pathfield::Opts { base: current_dir, show_hidden, drives, width, hint };
         let mut action = None;
         let mut open = self.open;
-        egui::Window::new(t("Backup"))
+        let title = t("Backup");
+        chrome
+            .dialog_window(ctx, &title, egui::Id::new("backup"))
             .open(&mut open)
-            .collapsible(false)
             .default_size([860.0, 560.0])
             .max_height(720.0)
             .show(ctx, |ui| {
+                if chrome.dialog_title(ui, theme, &title) {
+                    self.open = false;
+                }
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(t("Local backups to an archive file (no cloud).")).color(theme.weak));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -382,8 +387,8 @@ impl BackupUi {
                     }
                 });
             });
-        self.open = open;
-        if !open {
+        self.open &= open;
+        if !self.open {
             self.paths.reset();
         }
         action

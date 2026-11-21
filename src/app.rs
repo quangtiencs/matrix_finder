@@ -223,6 +223,22 @@ pub struct App {
     /// The narrowest the sidebar can be without its content spilling past its edge
     /// (the app menu row): learned from the frames where it did.
     sidebar_min: f32,
+    /// What `sidebar_min` was learned for (font size, UI scale, language): it is learned
+    /// again when they change.
+    sidebar_min_for: (f32, f32, String),
+    /// The main window's corner radius in this frame (Linux; 0 = square).
+    window_radius: f32,
+    /// The app's windows that are open, back to front (see `track_windows`), and whether
+    /// the keyboard is theirs rather than the files' and terminals'.
+    windows: Vec<&'static str>,
+    keys_to_window: bool,
+    /// The active window and tab when the keyboard last went to the app's windows.
+    keys_at: (usize, u64),
+    /// Frames drawn so far (up to `u32::MAX`).
+    frames: u32,
+    /// Startup tokens for the window (see `activation`): this launch's, then those of
+    /// later launches that handed their folder over. Used once the window is drawn.
+    activation: Vec<String>,
     /// X11: the window's own cursor is set (see `own_cursor`); 0 not yet, 1 hidden for a
     /// frame, 2 done.
     cursor_owned: u8,
@@ -236,6 +252,8 @@ pub struct App {
     /// Copy / Move in a split tab: "Another folder" is chosen (rather than a window).
     /// None until the dialog's first frame decides it.
     dialog_custom: Option<bool>,
+    /// Copy / Move's choices, and when they were read (see `dst_choices`).
+    dialog_choices: Option<(Instant, Vec<DstChoice>, Vec<(usize, egui::Rect, bool)>)>,
     logo_large: Option<egui::TextureHandle>,
     icon_key: String,
     icon_previews: HashMap<String, icons::IconSet>,
@@ -317,7 +335,6 @@ enum SettingsPage {
 impl App {
     /// `open`: a folder given on the command line, shown first.
     pub fn new(cc: &eframe::CreationContext, chrome: crate::chrome::Chrome, open: Option<String>) -> Self {
-        crate::activation::activate(cc);
         let (cfg, store) = crate::config::Store::open();
         i18n::set_language(&cfg.language);
         // Previews' temporary folders left by a Matrix Finder that crashed.
@@ -401,11 +418,19 @@ impl App {
             pane_rects: Vec::new(),
             drive_rows: Vec::new(),
             sidebar_min: 0.0,
+            sidebar_min_for: (0.0, 0.0, String::new()),
+            window_radius: 0.0,
+            activation: crate::activation::startup_token().into_iter().collect(),
+            windows: Vec::new(),
+            keys_to_window: false,
+            keys_at: (usize::MAX, 0),
+            frames: 0,
             cursor_owned: 0,
             dialog_dst: None,
             dialog_path: Default::default(),
             dialog_tree: None,
             dialog_custom: None,
+            dialog_choices: None,
             logo_large: None,
             icon_key: String::new(),
             icon_previews: HashMap::new(),
@@ -522,7 +547,10 @@ impl App {
         let mut close = false;
         let mut skip = false;
         let asset = crate::update::asset_for(r, std::env::consts::OS, std::env::consts::ARCH);
-        egui::Window::new(t("Update available")).open(&mut open).collapsible(false).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
+        let title = t("Update available");
+        let chrome = &self.chrome;
+        chrome.dialog_window(ctx, &title, egui::Id::new("update")).open(&mut open).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
+            close |= chrome.dialog_title(ui, th, &title);
             ui.label(RichText::new(format!("Matrix Finder {}", crate::update::version_text(r.version))).size(18.0).strong().color(th.strong()));
             let mut line = format!("{} {}", t("You have"), env!("CARGO_PKG_VERSION"));
             if !r.date.is_empty() {
@@ -617,12 +645,19 @@ impl App {
         let mut thumb = Vec::new();
         for (k, &side) in self.layout.leaves().iter().enumerate() {
             let tab = self.panes[side].tab();
+            // A terminal's folder as its shell has it now (not offered where that cannot
+            // be read); file windows inside an archive cannot be written to.
             let (loc, terminal) = match &tab.term {
-                Some(term) => (Some(Location::Local(term.cwd.clone())), true),
-                None if tab.is_files() => (Some(tab.loc.clone()), false),
+                Some(term) => (term.live_cwd().map(Location::Local), true),
+                None if tab.is_files() && !matches!(tab.loc, Location::Archive { .. }) => (Some(tab.loc.clone()), false),
                 None => (None, false),
             };
-            let source = loc.as_ref() == Some(src);
+            // The source, also when reached another way (a terminal's shell reports
+            // /private/tmp for /tmp on macOS, or a folder through a link).
+            let source = match (&loc, src) {
+                (Some(Location::Local(a)), Location::Local(b)) if terminal => a == b || std::fs::canonicalize(a).ok().is_some_and(|a| std::fs::canonicalize(b).ok() == Some(a)),
+                (l, s) => l.as_ref() == Some(s),
+            };
             if let Some(r) = places.iter().find(|(s, _)| *s == side).map(|(_, r)| *r) {
                 thumb.push((side, r, source));
             }
@@ -630,7 +665,7 @@ impl App {
             let text = loc.display(|id| self.remote_label(id));
             let name = match &loc {
                 Location::Local(p) => p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| text.clone()),
-                _ => text.rsplit(['/', ':']).find(|s| !s.is_empty()).unwrap_or(&text).to_string(),
+                _ => last_part(&text),
             };
             choices.push(DstChoice { side, number: k + 1, text, name, terminal });
         }
@@ -956,7 +991,8 @@ impl App {
         if text.starts_with("ftp://") || text.starts_with("sftp://") {
             // Already connected with this label?
             for (id, (label, _)) in &self.remotes {
-                if let Some(rest) = text.strip_prefix(label.as_str()) {
+                // The whole label: "sftp://db:2222/x" is not the connection "sftp://db:22".
+                if let Some(rest) = text.strip_prefix(label.as_str()).filter(|r| r.is_empty() || r.starts_with('/')) {
                     let path = if rest.is_empty() { "/".to_string() } else { rest.to_string() };
                     return Some(Location::Remote { id: *id, path });
                 }
@@ -1050,12 +1086,18 @@ impl App {
     /// Folders sent by later launches: each opens in a new tab, and the window comes forward.
     fn poll_instance(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.instance.as_ref().map(|s| &s.rx) else { return };
-        let got: Vec<String> = rx.try_iter().collect();
+        let got: Vec<(String, Option<String>)> = rx.try_iter().collect();
         if got.is_empty() {
             return;
         }
-        for open in got {
+        for (open, token) in got {
             self.open_from_launch(&open, true);
+            // The later launch's startup token raises this window (Wayland), in the
+            // next frame.
+            self.activation.extend(token);
+        }
+        if !self.activation.is_empty() {
+            ctx.request_repaint();
         }
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
         ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -1865,11 +1907,15 @@ impl App {
                 if sel.is_empty() {
                     return;
                 }
-                let dst_loc = match self.other() {
-                    Some(o) => self.panes[o].tab().loc.clone(),
-                    None => loc.clone(),
+                // The other window (as before), when it can take the items; never the
+                // folder copied from, nor a window the user did not call the other one.
+                // Else nothing: the user picks one (the tree opens at the folder copied from).
+                let (choices, _) = self.dst_choices(&loc);
+                let other = self.other();
+                let dst = match choices.iter().find(|c| Some(c.side) == other) {
+                    Some(c) => c.text.clone(),
+                    None => String::new(),
                 };
-                let dst = dst_loc.display(|id| self.remote_label(id));
                 self.show_dialog(Dialog::Transfer { src: loc.clone(), mv: cmd == Cmd::Move, items: sel, dst, policy: Conflict::Rename }, true);
             }
             Cmd::BatchRename => self.open_batch_rename(),
@@ -2054,6 +2100,11 @@ impl App {
             return;
         };
         let dirs: Vec<PathBuf> = tab.selection().iter().filter(|e| e.is_dir && !e.is_parent).map(|e| base.join(&e.name)).collect();
+        // Each one is a terminal (a tab and a shell): a few at a time, not a whole drive.
+        if dirs.len() > MAX_TERMINALS {
+            self.toast(t("Open terminals in at most {n} folders at once").replace("{n}", &MAX_TERMINALS.to_string()), true);
+            return;
+        }
         match dirs.as_slice() {
             [] => {}
             [one] => {
@@ -2189,6 +2240,168 @@ impl App {
 
     // ------------------------------------------------------------ keyboard
 
+    /// The folder tree under Copy / Move's address, following it (`typed`: the address
+    /// changed in this frame); a click on a folder fills the address in.
+    #[allow(clippy::too_many_arguments)]
+    fn transfer_tree(&mut self, ui: &mut egui::Ui, th: &Theme, dst: &mut String, base: Option<&Path>, home: Option<&Path>, typed: bool, dst_id: egui::Id, max_h: f32) {
+        let typed_dir = |dst: &str| crate::pathfield::typed_dir(dst, home, base).filter(|p| p.is_dir());
+        let tree = self.dialog_tree.get_or_insert_with(|| {
+            let roots = crate::foldertree::roots(home, &self.drives);
+            match typed_dir(dst) {
+                Some(d) => crate::foldertree::FolderTree::new(roots, Some(&d), self.cfg.show_hidden),
+                // Nothing chosen yet: open at the folder copied from, for bearings, with
+                // nothing chosen in it.
+                None => {
+                    let mut t = crate::foldertree::FolderTree::new(roots, base.filter(|b| b.is_dir()), self.cfg.show_hidden);
+                    t.unselect();
+                    t
+                }
+            }
+        });
+        tree.max_height = max_h;
+        if typed {
+            if let Some(p) = typed_dir(dst) {
+                tree.reveal(&p);
+                tree.select(&p);
+            }
+        }
+        ui.add_space(6.0);
+        // Its own background: the chosen folder stays visible inside a chosen (lit) row.
+        let picked = egui::Frame::NONE
+            .fill(ui.visuals().window_fill)
+            .stroke(egui::Stroke::new(1.0_f32, th.border))
+            .corner_radius(6)
+            .inner_margin(egui::Margin::same(4))
+            .show(ui, |ui| tree.ui(ui, th))
+            .inner;
+        // Only a folder clicked: closing a branch also moves the choice (to the folder
+        // closed), which is not a destination the user picked.
+        if let Some(p) = picked.or(tree.clicked.take()) {
+            *dst = p.display().to_string();
+            self.dialog_path.reset();
+            crate::pathfield::cursor_to_end(ui.ctx(), dst_id, dst);
+        }
+    }
+
+    /// The dimmed backdrop under a modal dialog. With rounded window corners it is drawn
+    /// here, rounded too, below the dialog: egui's own square one would darken the
+    /// see-through corners.
+    fn modal_backdrop(&self, ctx: &egui::Context) -> egui::Color32 {
+        let dim = egui::Color32::from_black_alpha(100);
+        if self.window_radius <= 0.0 {
+            return dim;
+        }
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("rounded-backdrop"))).rect_filled(ctx.screen_rect(), self.window_radius, dim);
+        egui::Color32::TRANSPARENT
+    }
+
+    /// A start size saved on a bigger screen: brought within this one, so that the
+    /// title bar (which moves the window) is never off the screen.
+    fn fit_to_screen(&self, ctx: &egui::Context) {
+        let (inner, monitor, filled) = ctx.input(|i| {
+            let v = i.viewport();
+            (v.inner_rect, v.monitor_size, v.maximized.unwrap_or(false) || v.fullscreen.unwrap_or(false))
+        });
+        let (Some(inner), Some(monitor)) = (inner, monitor) else { return };
+        // Only a window bigger than the screen (a maximized one is the screen's size).
+        if filled || (inner.width() <= monitor.x && inner.height() <= monitor.y) {
+            return;
+        }
+        let fit = egui::vec2(inner.width().min(monitor.x * 0.95), inner.height().min(monitor.y * 0.9));
+        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(fit));
+    }
+
+    /// The app's windows (About, Keyboard shortcuts…) that are open, by name (see
+    /// `window_id`).
+    fn open_windows(&self) -> Vec<&'static str> {
+        [
+            ("reset", self.confirm_reset),
+            ("viewer", self.viewer.is_some()),
+            ("help", self.show_help),
+            ("about", self.show_about),
+            ("update", self.update_found.is_some()),
+            ("backup", self.backup.open),
+        ]
+        .into_iter()
+        .filter(|(_, open)| *open)
+        .map(|(n, _)| n)
+        .collect()
+    }
+
+    /// Keep `windows` in front-to-back order (the last opened or clicked last), and
+    /// whether the keyboard is theirs: a window takes it when it opens or is clicked,
+    /// the files and terminals take it back when they are clicked.
+    fn track_windows(&mut self, ctx: &egui::Context) {
+        let open = self.open_windows();
+        self.windows.retain(|w| open.contains(w));
+        for w in &open {
+            if !self.windows.contains(w) {
+                self.windows.push(w);
+                // A window the user opened takes the keyboard; the update notice, which
+                // can open by itself while they type in a terminal, does not.
+                if *w != "update" {
+                    self.keys_to_window = true;
+                }
+            }
+        }
+        // Going to another window or tab by keyboard (or by a command) gives it the keys.
+        let at = (self.active, self.live);
+        if self.keys_at != at {
+            self.keys_at = at;
+            self.keys_to_window = false;
+        }
+        let id = window_id;
+        // egui brings a clicked window to the front.
+        let top = ctx.memory(|m| m.areas().top_layer_id(egui::Order::Middle)).map(|l| l.id);
+        if let Some(k) = self.windows.iter().position(|w| Some(id(w)) == top) {
+            let w = self.windows.remove(k);
+            self.windows.push(w);
+        }
+        if let Some(p) = ctx.input(|i| if i.pointer.any_pressed() { i.pointer.interact_pos() } else { None }) {
+            self.keys_to_window = self.windows.iter().any(|w| ctx.memory(|m| m.area_rect(id(w))).is_some_and(|r| r.contains(p)));
+        }
+        if self.windows.is_empty() {
+            self.keys_to_window = false;
+        }
+    }
+
+    /// Esc closes the app's window in front, while the keyboard is the windows': not
+    /// while a text field, the palette, a folder tree or a drag has it, nor after a click
+    /// in the files or a terminal (Esc is theirs then).
+    fn esc_closes_window(&mut self, ctx: &egui::Context) -> bool {
+        // A widget with the keyboard keeps Esc, unless it is a button of the window
+        // reached with Tab (a text field clears or cancels with it).
+        let focus_keeps_esc = ctx.memory(|m| m.focused()).is_some_and(|id| {
+            let in_window = ctx.read_response(id).is_some_and(|r| self.windows.iter().any(|w| r.layer_id.id == window_id(w)));
+            !in_window || egui::TextEdit::load_state(ctx, id).is_some()
+        });
+        if !self.keys_to_window
+            || self.quit == Quit::Asking
+            || !ctx.input(|i| i.key_pressed(Key::Escape) && !i.modifiers.any())
+            || ctx.memory(|m| m.any_popup_open())
+            || focus_keeps_esc
+            || self.palette.open
+            || crate::pane::drag_payload(ctx).is_some()
+            || self.backup.paths.tree.is_some()
+        {
+            return false;
+        }
+        let Some(w) = self.windows.pop() else { return false };
+        match w {
+            "reset" => self.confirm_reset = false,
+            "viewer" => self.viewer = None,
+            "help" => self.show_help = false,
+            "about" => self.show_about = false,
+            "update" => self.update_found = None,
+            _ => {
+                self.backup.open = false;
+                self.backup.paths.reset();
+            }
+        }
+        ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
+        true
+    }
+
     /// The next key press while Settings waits for a new shortcut: it goes nowhere else.
     fn capture_shortcut(&mut self, ctx: &egui::Context, action: Action, slot: Option<usize>) {
         let pressed = ctx.input(|i| {
@@ -2265,6 +2478,9 @@ impl App {
             self.capture_shortcut(ctx, action, slot);
             return;
         }
+        if self.esc_closes_window(ctx) {
+            return;
+        }
         let term_mode = self.panes[self.active].tab().is_terminal();
         let keys = shortcuts::active();
         // The palette has its keys in text fields too, and closes by them.
@@ -2333,6 +2549,11 @@ impl App {
             if self.dialog.is_some() || self.palette.open || self.panes[self.active].tab().is_terminal() != term_mode {
                 return;
             }
+        }
+        // A window in front has the keyboard: the files behind it (drawn inactive) take
+        // no typing, Enter or Delete.
+        if self.keys_to_window {
+            return;
         }
         if !term_mode && !shortcut_pressed && self.type_to_search(ctx) {
             return;
@@ -2657,7 +2878,9 @@ impl App {
                     self.focus_window();
                 }
                 Key::Escape => {
-                    if crate::pane::drag_payload(ctx).is_some() {
+                    // Esc that closes a menu (right-click, …) is that menu's alone.
+                    if ctx.memory(|m| m.any_popup_open()) || self.panes[a].tab().menu_open {
+                    } else if crate::pane::drag_payload(ctx).is_some() {
                         egui::DragAndDrop::clear_payload(ctx);
                     } else if self.viewer.is_some() {
                         self.viewer = None;
@@ -3742,7 +3965,7 @@ impl App {
         let mut keep = false;
         let mut stop = false;
         let edited: Vec<String> = self.temp_copies.unsaved().map(|c| c.name.clone()).collect();
-        egui::Modal::new(egui::Id::new("quit-confirm")).show(ctx, |ui| {
+        egui::Modal::new(egui::Id::new("quit-confirm")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.heading(if n > 0 {
                 t("Quit while tasks are running?")
@@ -5387,7 +5610,7 @@ impl App {
                 pane_count: self.panes.len(),
                 can_split: [SplitDir::Right, SplitDir::Left, SplitDir::Down, SplitDir::Up].map(|d| self.layout.can_split(side, d)),
                 terminal_profiles: &profiles,
-                focused: side == self.active && self.dialog.is_none() && !self.palette.open,
+                focused: side == self.active && self.dialog.is_none() && !self.palette.open && !self.keys_to_window,
                 term_font_size: self.cfg.term_font_size,
                 term_copy_on_select: self.cfg.term_copy_on_select,
                 term_scroll: [self.cfg.term_scroll_trackpad, self.cfg.term_scroll_wheel],
@@ -5646,12 +5869,22 @@ impl App {
         }
         let home = dirs::home_dir();
         // Copy / Move in a split tab: the other windows' folders, to pick one.
+        // Read again twice a second, not in every frame: a terminal's folder is asked of
+        // the system, and a folder on a slow network drive should not stall the window.
         let (choices, thumb) = match &dialog {
-            Dialog::Transfer { src, .. } => self.dst_choices(src),
+            Dialog::Transfer { src, .. } => {
+                if self.dialog_choices.as_ref().is_none_or(|(at, ..)| at.elapsed() > Duration::from_millis(500)) {
+                    let (c, t) = self.dst_choices(src);
+                    self.dialog_choices = Some((Instant::now(), c, t));
+                    ctx.request_repaint_after(Duration::from_millis(500));
+                }
+                let (_, c, t) = self.dialog_choices.as_ref().unwrap();
+                (c.clone(), t.clone())
+            }
             _ => (Vec::new(), Vec::new()),
         };
         let focus = std::mem::take(&mut self.dialog_focus);
-        let modal = egui::Modal::new(egui::Id::new("dialog")).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::new("dialog")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
             ui.set_min_width(440.0);
             let enter = ui.input(|i| i.key_pressed(Key::Enter));
             // Enter confirms from a text field, or when nothing has the keyboard. On a button
@@ -5673,77 +5906,72 @@ impl App {
                     let base = src.local_path().map(|p| p.to_path_buf());
                     ui.label(RichText::new(t("To:")).strong());
                     if !choices.is_empty() {
-                        // A split tab: one list where exactly one place is chosen, a window
-                        // or "Another folder"; the address shows only for the latter.
-                        let typed = crate::pathfield::resolve_typed(dst, home.as_deref(), base.as_deref());
-                        let custom = *self.dialog_custom.get_or_insert_with(|| !choices.iter().any(|c| same_place(&typed, &c.text)));
-                        for c in &choices {
-                            let chosen = !custom && same_place(&typed, &c.text);
-                            if dst_choice_row(ui, th, c, chosen, &thumb).clicked() {
-                                *dst = c.text.clone();
-                                self.dialog_custom = Some(false);
-                                self.dialog_path.reset();
-                                ui.memory_mut(|m| m.surrender_focus(dst_id));
+                        // Scrolls in a window too low for every choice, so the buttons stay in it.
+                        let max_h = (ctx.screen_rect().height() - 230.0).max(140.0);
+                        egui::ScrollArea::vertical().id_salt("transfer-choices").max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
+                            // A split tab: one list where exactly one place is chosen, a window
+                            // or "Another folder"; the address shows only for the latter.
+                            let typed = crate::pathfield::resolve_typed(dst, home.as_deref(), base.as_deref());
+                            // When no window is the destination (any more: a window may have moved
+                            // on while the dialog is open), the address shows what will be used.
+                            let custom = if choices.iter().any(|c| same_place(&typed, &c.text)) { *self.dialog_custom.get_or_insert(false) } else { true };
+                            self.dialog_custom = Some(custom);
+                            for c in &choices {
+                                let chosen = !custom && same_place(&typed, &c.text);
+                                if dst_choice_row(ui, th, c, chosen, &thumb).clicked() {
+                                    *dst = c.text.clone();
+                                    self.dialog_custom = Some(false);
+                                    self.dialog_path.reset();
+                                    self.dialog_tree = None;
+                                    ui.memory_mut(|m| m.surrender_focus(dst_id));
+                                }
                             }
-                        }
-                        let frame = egui::Frame::NONE
-                            .fill(if custom { th.selection } else { egui::Color32::TRANSPARENT })
-                            .stroke(egui::Stroke::new(1.0_f32, if custom { th.accent } else { th.border }))
-                            .corner_radius(7)
-                            .inner_margin(egui::Margin { left: 0, right: 0, top: 0, bottom: if custom { 8 } else { 0 } });
-                        let (head, field) = frame
-                            .show(ui, |ui| {
-                                let head = other_folder_head(ui, th, custom);
-                                let field = custom.then(|| {
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(CHOICE_TEXT_X - 8.0);
-                                        let o = crate::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: ui.available_width() - 8.0, hint: Some(t("Type a path, or pick one from the folder tree")) };
-                                        self.dialog_path.show(ui, dst, dst_id, o, th)
-                                    })
-                                    .inner
-                                });
-                                (head, field)
-                            })
-                            .inner;
-                        if let Some(r) = &field {
-                            focus_edit(r);
-                        }
-                        if head.clicked() && !custom {
-                            self.dialog_custom = Some(true);
-                            // The address is drawn from the next frame on: it takes the keyboard then.
-                            self.dialog_focus = true;
-                            crate::pathfield::cursor_to_end(ui.ctx(), dst_id, dst);
-                        }
+                            // A window clicked just now hides the address in this frame already.
+                            let custom = self.dialog_custom.unwrap_or(custom);
+                            let frame = egui::Frame::NONE
+                                .fill(if custom { th.selection } else { egui::Color32::TRANSPARENT })
+                                .stroke(egui::Stroke::new(1.0_f32, if custom { th.accent } else { th.border }))
+                                .corner_radius(7)
+                                .inner_margin(egui::Margin { left: 0, right: 0, top: 0, bottom: if custom { 8 } else { 0 } });
+                            let (head, field) = frame
+                                .show(ui, |ui| {
+                                    let head = other_folder_head(ui, th, custom);
+                                    let field = custom.then(|| {
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(CHOICE_TEXT_X - 8.0);
+                                            ui.vertical(|ui| {
+                                                ui.set_width(ui.available_width() - 8.0);
+                                                let o = crate::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: ui.available_width(), hint: Some(t("Type a path, or pick one from the folder tree")) };
+                                                let r = self.dialog_path.show(ui, dst, dst_id, o, th);
+                                                // The tree in the choice, under its address: what a small window has room for.
+                                                let max_h = (ui.ctx().screen_rect().height() - 470.0).clamp(96.0, 220.0);
+                                                self.transfer_tree(ui, th, dst, base.as_deref(), home.as_deref(), r.changed(), dst_id, max_h);
+                                                r
+                                            })
+                                            .inner
+                                        })
+                                        .inner
+                                    });
+                                    (head, field)
+                                })
+                                .inner;
+                            if let Some(r) = &field {
+                                focus_edit(r);
+                            }
+                            if head.clicked() && !custom {
+                                self.dialog_custom = Some(true);
+                                // The address is drawn from the next frame on: it takes the keyboard then.
+                                self.dialog_focus = true;
+                                crate::pathfield::cursor_to_end(ui.ctx(), dst_id, dst);
+                            }
+                        });
                     } else {
-                        let o = crate::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
+                        let o = crate::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: Some(t("Type a path, or pick one from the folder tree")) };
                         let r = self.dialog_path.show(ui, dst, dst_id, o, th);
                         focus_edit(&r);
                         // One window: the folder tree right under the address, following it.
-                        let typed = || crate::pathfield::typed_dir(dst, home.as_deref(), base.as_deref()).filter(|p| p.is_dir());
-                        let tree = self.dialog_tree.get_or_insert_with(|| {
-                            let roots = crate::foldertree::roots(home.as_deref(), &self.drives);
-                            crate::foldertree::FolderTree::new(roots, typed().as_deref(), self.cfg.show_hidden)
-                        });
-                        if r.changed() {
-                            if let Some(p) = typed() {
-                                tree.reveal(&p);
-                                tree.select(&p);
-                            }
-                        }
-                        ui.add_space(6.0);
-                        let before = tree.selected().map(|p| p.to_path_buf());
-                        let picked = egui::Frame::NONE
-                            .stroke(egui::Stroke::new(1.0_f32, th.border))
-                            .corner_radius(6)
-                            .inner_margin(egui::Margin::same(4))
-                            .show(ui, |ui| tree.ui(ui, th))
-                            .inner;
-                        let after = tree.selected().map(|p| p.to_path_buf());
-                        if let Some(p) = picked.or(if after != before { after } else { None }) {
-                            *dst = p.display().to_string();
-                            self.dialog_path.reset();
-                            crate::pathfield::cursor_to_end(ui.ctx(), dst_id, dst);
-                        }
+                        let max_h = (ctx.screen_rect().height() - 300.0).clamp(120.0, 264.0);
+                        self.transfer_tree(ui, th, dst, base.as_deref(), home.as_deref(), r.changed(), dst_id, max_h);
                     }
                     ui.horizontal(|ui| {
                         ui.label(t("If file exists:"));
@@ -6093,11 +6321,13 @@ impl App {
                 };
                 let danger = matches!(dialog, Dialog::Delete { trash: false, .. } | Dialog::CloseTerminals { .. } | Dialog::ImportSettings { .. });
                 let (fill, fg) = if danger { (th.danger, egui::Color32::WHITE) } else { (th.accent, th.on_accent()) };
-                let ok = ui.add(egui::Button::new(RichText::new(ok_label).color(fg).strong()).fill(fill).min_size(egui::vec2(96.0, 30.0)));
+                // Copy / Move needs a destination first (none is filled in for the user).
+                let ready = !matches!(&dialog, Dialog::Transfer { dst, .. } if dst.trim().is_empty());
+                let ok = ui.add_enabled(ready, egui::Button::new(RichText::new(ok_label).color(fg).strong()).fill(fill).min_size(egui::vec2(96.0, 30.0)));
                 // Trusting a server, deleting for good and replacing the settings take a
                 // deliberate click (or Enter on that button, tabbed to), never a stray Enter.
                 let deliberate = matches!(dialog, Dialog::TrustHostKey { .. } | Dialog::Delete { trash: false, .. } | Dialog::ImportSettings { .. });
-                let enter_confirms = enter && enter_free && !deliberate;
+                let enter_confirms = enter && enter_free && !deliberate && ready;
                 if ok.clicked() || enter_confirms {
                     confirmed = true;
                 }
@@ -6116,10 +6346,15 @@ impl App {
         if close {
             confirmed = false;
         }
+        if close && matches!(dialog, Dialog::Transfer { .. } | Dialog::ArchivePassword { .. }) {
+            // The drop target of a cancelled drag & drop is not for the next Copy.
+            self.dialog_dst = None;
+        }
         if close || confirmed {
             self.dialog_path.reset();
             self.dialog_tree = None;
             self.dialog_custom = None;
+            self.dialog_choices = None;
         }
         if confirmed {
             if let Some(next) = self.confirm_dialog(dialog) {
@@ -6389,14 +6624,18 @@ impl App {
         let th = self.theme;
         let mut keep_open = true;
         let mut reset = false;
-        egui::Window::new(t("Reset to defaults"))
-            .id(egui::Id::new("settings-reset"))
-            .collapsible(false)
+        let title = t("Reset to defaults");
+        let chrome = self.chrome.clone();
+        chrome
+            .dialog_window(ctx, &title, egui::Id::new("settings-reset"))
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .order(egui::Order::Foreground)
             .show(ctx, |ui| {
                 ui.set_max_width(420.0);
+                if chrome.dialog_title(ui, th, &title) {
+                    keep_open = false;
+                }
                 ui.label(t("All settings go back to their defaults: Breeze Light theme, English, UI scale, panels, terminal and safety options."));
                 ui.label(RichText::new(t("Kept: bookmarks, saved connections, backup profiles, terminal profiles, default apps and open tabs.")).color(th.weak));
                 ui.add_space(8.0);
@@ -6406,7 +6645,7 @@ impl App {
                         if ui.add(b).clicked() {
                             reset = true;
                         }
-                        if ui.add(egui::Button::new(t("Cancel")).min_size(egui::vec2(96.0, 30.0))).clicked() || ui.input(|i| i.key_pressed(Key::Escape)) {
+                        if ui.add(egui::Button::new(t("Cancel")).min_size(egui::vec2(96.0, 30.0))).clicked() {
                             keep_open = false;
                         }
                     });
@@ -6428,7 +6667,12 @@ impl App {
         let keys = shortcuts::active();
         let os = keys.os();
         let mut go_to_settings = false;
-        egui::Window::new(t("Keyboard shortcuts")).open(&mut open).collapsible(false).default_width(620.0).show(ctx, |ui| {
+        let title = t("Keyboard shortcuts");
+        let chrome = self.chrome.clone();
+        chrome.dialog_window(ctx, &title, egui::Id::new("help")).open(&mut open).default_width(620.0).show(ctx, |ui| {
+            if chrome.dialog_title(ui, self.theme, &title) {
+                self.show_help = false;
+            }
             if ui.link(t("Change them in Settings")).clicked() {
                 go_to_settings = true;
             }
@@ -6474,7 +6718,7 @@ impl App {
                 ui.label(t("Tip: drop files from your OS file manager onto the window to copy them into the active panel."));
             });
         });
-        self.show_help = open && !go_to_settings;
+        self.show_help &= open && !go_to_settings;
         if go_to_settings {
             self.open_settings(SettingsPage::Shortcuts);
         }
@@ -6485,7 +6729,11 @@ impl App {
         if self.logo_large.is_none() {
             self.logo_large = crate::logo::texture(ctx, false, 256);
         }
-        egui::Window::new(t("About")).open(&mut open).collapsible(false).resizable(false).default_width(420.0).show(ctx, |ui| {
+        let title = t("About");
+        let chrome = self.chrome.clone();
+        let mut close = false;
+        chrome.dialog_window(ctx, &title, egui::Id::new("about")).open(&mut open).resizable(false).default_width(420.0).show(ctx, |ui| {
+            close |= chrome.dialog_title(ui, self.theme, &title);
             ui.vertical_centered(|ui| {
                 if let Some(tex) = &self.logo_large {
                     ui.add(egui::Image::new((tex.id(), egui::vec2(112.0, 112.0))));
@@ -6516,7 +6764,7 @@ impl App {
                 });
             });
         });
-        self.show_about = open;
+        self.show_about = open && !close;
     }
 
     fn toasts_ui(&mut self, ctx: &egui::Context) {
@@ -6613,11 +6861,30 @@ impl eframe::App for App {
     /// Paint the window background in the theme colour so live resizing never
     /// flashes a dark strip before the next frame.
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
+        if self.window_radius > 0.0 {
+            return [0.0; 4];
+        }
         egui::Rgba::from(self.theme.panel).to_array()
     }
 
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.chrome.setup_native(frame);
+        // Startup tokens, once the window has been drawn: from the third frame on (a pass
+        // may be redone within one frame, so frames are counted here, not passes). An
+        // idle app draws no next frame by itself: ask for it while one waits.
+        self.frames = self.frames.saturating_add(1);
+        if self.frames == 2 {
+            self.fit_to_screen(ctx);
+        }
+        if !self.activation.is_empty() {
+            if self.frames > 2 {
+                for token in std::mem::take(&mut self.activation) {
+                    crate::activation::activate(frame, &token);
+                }
+            } else {
+                ctx.request_repaint();
+            }
+        }
         self.max_texture = ctx.input(|i| i.max_texture_side).max(1024);
         // Follow the OS (theme "System") and keep the icon set in sync.
         crate::chrome::install_quit_guard(frame);
@@ -6642,6 +6909,7 @@ impl eframe::App for App {
             self.last_active = self.active;
         }
         self.quit_step(ctx);
+        self.track_windows(ctx);
         self.handle_keys(ctx);
         self.poll_terminals(ctx);
         self.poll_agents();
@@ -6673,10 +6941,23 @@ impl eframe::App for App {
             self.title = title;
         }
 
-        let panel = self.theme.panel;
+        // Linux: the window's background is one rounded shape, and the panels on it are
+        // see-through, so its corners show the desktop (see `clear_color`).
+        self.window_radius = self.chrome.window_radius(ctx);
+        let panel = if self.window_radius > 0.0 {
+            ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.screen_rect(), self.window_radius, self.theme.panel);
+            egui::Color32::TRANSPARENT
+        } else {
+            self.theme.panel
+        };
         self.chrome.resize_edges(ctx);
         // Sidebar first so it spans the full window height (Finder / Nautilus layout).
         if self.cfg.show_sidebar {
+            let (f, s, l) = &self.sidebar_min_for;
+            if (*f, *s, l.as_str()) != (self.cfg.ui_font_size, self.cfg.ui_scale, self.cfg.language.as_str()) {
+                self.sidebar_min_for = (self.cfg.ui_font_size, self.cfg.ui_scale, self.cfg.language.clone());
+                self.sidebar_min = 0.0;
+            }
             egui::SidePanel::left("sidebar")
                 .resizable(false)
                 // In a narrow window the sidebar gives up space (never more than ~26 %).
@@ -6770,12 +7051,15 @@ impl eframe::App for App {
         if self.viewer.is_some() {
             let mut open = true;
             let name = self.viewer.as_ref().map(|v| v.name.clone()).unwrap_or_default();
-            egui::Window::new(name.clone())
-                .id(egui::Id::new("viewer"))
+            let chrome = self.chrome.clone();
+            chrome
+                .dialog_window(ctx, &name, egui::Id::new("viewer"))
                 .open(&mut open)
-                .collapsible(false)
                 .default_size([820.0, 600.0])
                 .show(ctx, |ui| {
+                    if chrome.dialog_title(ui, self.theme, &name) {
+                        self.viewer = None;
+                    }
                     if let Some(v) = &mut self.viewer {
                         v.ui(ui, self.theme, t);
                     }
@@ -6786,7 +7070,7 @@ impl eframe::App for App {
         }
         if self.backup.open {
             let cur = self.panes[self.active].tab().loc.local_path().map(|p| p.to_path_buf());
-            let action = self.backup.ui(ctx, &mut self.cfg.backups, cur.as_deref(), &self.drives, self.cfg.show_hidden, self.theme, &t);
+            let action = self.backup.ui(ctx, &mut self.cfg.backups, cur.as_deref(), &self.drives, self.cfg.show_hidden, self.theme, &self.chrome, &t);
             match action {
                 Some(BackupAction::Run(profile)) => {
                     self.save_cfg();
@@ -7007,6 +7291,7 @@ fn cmd_works_in(cmd: Cmd, tab: &Tab) -> bool {
 }
 
 /// A window of the shown tab that Copy / Move can send to.
+#[derive(Clone)]
 struct DstChoice {
     /// The window's index in `panes`, and its number as shown (1 to 4).
     side: usize,
@@ -7016,6 +7301,14 @@ struct DstChoice {
     name: String,
     terminal: bool,
 }
+
+/// The egui id of one of the app's windows, by its name in `App::windows`.
+fn window_id(name: &str) -> egui::Id {
+    egui::Id::new(if name == "reset" { "settings-reset" } else { name })
+}
+
+/// The most terminals "Open terminals in N folders" opens at once.
+const MAX_TERMINALS: usize = 20;
 
 /// Copy / Move destination rows: their height, and where their text starts.
 const CHOICE_H: f32 = 46.0;
@@ -7061,15 +7354,39 @@ fn other_folder_head(ui: &mut egui::Ui, th: &Theme, chosen: bool) -> egui::Respo
     resp
 }
 
-/// The last part of a typed destination, for the dialog's button (cut when long). None
+/// The last part of a typed destination, for the dialog's button (cut past 18 characters,
+/// so the button stays short). None
 /// when nothing is typed.
 fn place_name(dst: &str) -> Option<String> {
     let s = dst.trim();
     if s.is_empty() {
         return None;
     }
-    let name = s.trim_end_matches(['/', '\\']).rsplit(['/', '\\', ':']).find(|p| !p.is_empty()).unwrap_or(s);
-    Some(if name.chars().count() > 24 { format!("{}…", name.chars().take(23).collect::<String>()) } else { name.to_string() })
+    let name = last_part(s);
+    Some(if name.chars().count() > 18 { format!("{}…", name.chars().take(17).collect::<String>()) } else { name.to_string() })
+}
+
+/// The last part of an address, to name it: the folder, or for a server's top folder
+/// the host (not the port: `sftp://me@db:22/` is "db").
+fn last_part(s: &str) -> String {
+    let s = s.trim();
+    if let Some((_, rest)) = s.split_once("://") {
+        let (auth, path) = rest.split_once('/').unwrap_or((rest, ""));
+        if let Some(n) = path.split('/').rfind(|p| !p.is_empty()) {
+            return n.to_string();
+        }
+        let host = auth.rsplit_once('@').map_or(auth, |(_, h)| h);
+        let host = match host.strip_prefix('[') {
+            Some(v6) => v6.split(']').next().unwrap_or(v6),
+            // "db:22" → "db"; "::1:22" (IPv6 written without brackets) → "::1".
+            None => match host.rsplit_once(':') {
+                Some((h, port)) if !h.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => h,
+                _ => host,
+            },
+        };
+        return host.to_string();
+    }
+    s.trim_end_matches(['/', '\\']).rsplit(['/', '\\', ':']).find(|p| !p.is_empty()).unwrap_or(s).to_string()
 }
 
 /// The two addresses name the same folder (a trailing slash aside).
