@@ -1088,6 +1088,8 @@ pub enum Cmd {
     CopyPath,
     Reveal,
     Terminal,
+    /// Open a terminal in each selected folder (several are confirmed first).
+    TerminalInSelection,
     Bookmark,
     BookmarkItem,
     Properties,
@@ -2466,7 +2468,18 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 }
                 let (entry_is_dir, entry_is_parent) = (e.is_dir, e.is_parent);
                 resp.context_menu(|ui| {
-                    if let Some(cmd) = context_menu(ui, entry_is_dir, entry_is_parent, is_arch, is_sum, c) {
+                    // The local folders the menu acts on: the marked ones when this row is
+                    // one of them (as the command then finds them), else this row.
+                    let dirs: Vec<String> = if !matches!(tab.loc, Location::Local(_)) || entry_is_parent {
+                        vec![]
+                    } else if tab.marked.contains(&e.name) {
+                        tab.selection().into_iter().filter(|x| x.is_dir).map(|x| x.name).collect()
+                    } else if entry_is_dir {
+                        vec![e.name.clone()]
+                    } else {
+                        vec![]
+                    };
+                    if let Some(cmd) = context_menu(ui, entry_is_dir, entry_is_parent, is_arch, is_sum, &dirs, c) {
                         context = Some((row, cmd));
                         ui.close_menu();
                     }
@@ -2697,12 +2710,23 @@ fn msub(ui: &mut egui::Ui, th: &Theme, icon: MenuIcon, label: &str, add: impl Fn
     paint_menu_icon(ui, r.response.rect, icon, th.weak);
 }
 
-/// Terminal and pane-layout submenus shared by every context menu.
-fn layout_items(ui: &mut egui::Ui, c: &PaneUiCtx, out: &mut Option<Cmd>) {
+/// Terminal and pane-layout submenus shared by every context menu. `dirs`: the selected
+/// folders the Terminal submenu also offers (none on the empty part of a folder).
+fn layout_items(ui: &mut egui::Ui, c: &PaneUiCtx, dirs: &[String], out: &mut Option<Cmd>) {
     let th = c.theme;
     msub(ui, th, crate::tabs::terminal_glyph, &t("Terminal"), |ui| {
         if mitem(ui, th, crate::tabs::terminal_glyph, &t("Open terminal here"), crate::shortcuts::hint(crate::shortcuts::Action::OpenTerminal), false) {
             *out = Some(Cmd::Terminal);
+        }
+        let label = match dirs {
+            [] => None,
+            [one] => Some(t("Open terminal in “{name}”").replace("{name}", &short_name(one, 28))),
+            many => Some(t("Open terminals in {n} folders…").replace("{n}", &many.len().to_string())),
+        };
+        if let Some(label) = label {
+            if mitem(ui, th, crate::tabs::terminal_glyph, &label, "", false) {
+                *out = Some(Cmd::TerminalInSelection);
+            }
         }
         if c.terminal_profiles.len() > 1 {
             ui.separator();
@@ -2749,6 +2773,14 @@ pub fn split_items(ui: &mut egui::Ui, terminal: bool, c: &PaneUiCtx, out: &mut O
     }
 }
 
+/// `name` cut to `max` characters, with "…" when it is longer.
+fn short_name(name: &str, max: usize) -> String {
+    if name.chars().count() <= max {
+        return name.to_string();
+    }
+    format!("{}…", name.chars().take(max - 1).collect::<String>())
+}
+
 fn close_glyph(p: &egui::Painter, r: Rect, c: egui::Color32) {
     let s = egui::Stroke::new(1.3_f32, c);
     let k = r.shrink(r.width() * 0.2);
@@ -2756,7 +2788,7 @@ fn close_glyph(p: &egui::Painter, r: Rect, c: egui::Color32) {
     p.line_segment([k.right_top(), k.left_bottom()], s);
 }
 
-fn context_menu(ui: &mut egui::Ui, is_dir: bool, is_parent: bool, is_arch: bool, is_sum: bool, c: &PaneUiCtx) -> Option<Cmd> {
+fn context_menu(ui: &mut egui::Ui, is_dir: bool, is_parent: bool, is_arch: bool, is_sum: bool, dirs: &[String], c: &PaneUiCtx) -> Option<Cmd> {
     let th = c.theme;
     ui.set_min_width(250.0);
     let mut out = None;
@@ -2769,7 +2801,7 @@ fn context_menu(ui: &mut egui::Ui, is_dir: bool, is_parent: bool, is_arch: bool,
         pick(mitem(ui, th, icons::mi_open, &t("Open"), "Enter", false), Cmd::Open, &mut out);
         new_submenu(ui, th, &mut out);
         ui.separator();
-        layout_items(ui, c, &mut out);
+        layout_items(ui, c, &[], &mut out);
         return out;
     }
     pick(mitem(ui, th, icons::mi_open, &t("Open"), "Enter", false), Cmd::Open, &mut out);
@@ -2811,7 +2843,7 @@ fn context_menu(ui: &mut egui::Ui, is_dir: bool, is_parent: bool, is_arch: bool,
     }
     pick(mitem(ui, th, icons::mi_info, &t("Properties"), crate::shortcuts::hint(crate::shortcuts::Action::Properties), false), Cmd::Properties, &mut out);
     ui.separator();
-    layout_items(ui, c, &mut out);
+    layout_items(ui, c, dirs, &mut out);
     out
 }
 
@@ -2851,7 +2883,7 @@ fn background_menu(ui: &mut egui::Ui, c: &PaneUiCtx) -> Option<Cmd> {
         }
     });
     ui.separator();
-    layout_items(ui, c, &mut out);
+    layout_items(ui, c, &[], &mut out);
     out
 }
 

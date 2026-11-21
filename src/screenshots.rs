@@ -3865,9 +3865,15 @@ fn copy_dialog_suggests_folders_and_has_a_tree() {
         assert_eq!(names(h), want);
     };
 
+    // The other window is chosen; "Another folder" shows the address, with it filled in.
+    let other_folder = |h: &mut Harness<'static, App>| {
+        h.get_by_label(&t("Another folder")).click();
+        settle(h, 3);
+    };
     // Typing a path: its folders, not the zip.
     key_press(&mut h, Key::F5, None, Modifiers::NONE);
     settle(&mut h, 2);
+    other_folder(&mut h);
     assert_eq!(dst(&h), Some(d.home.display().to_string()));
     key_press(&mut h, Key::A, None, Modifiers::COMMAND);
     push(&mut h, Event::Text(format!("{}/", dir.display())));
@@ -3920,6 +3926,7 @@ fn copy_dialog_suggests_folders_and_has_a_tree() {
     let tree = dialog_tree;
     key_press(&mut h, Key::F5, None, Modifiers::NONE);
     settle(&mut h, 2);
+    other_folder(&mut h);
     let r = open_dialog_tree(&mut h, &docs);
     assert_eq!(tree(&h).unwrap().1, Some(d.home.clone()), "the folder in the field is chosen");
     assert_eq!(h.state().dialog_path.tree_of(egui::Id::new("dialog-dst")).unwrap().current(), Some(d.home.as_path()));
@@ -4618,4 +4625,162 @@ fn narrow_sidebar_leaves_no_band() {
             assert_eq!([px[0], px[1], px[2]], [panel.r(), panel.g(), panel.b()], "{chrome} sidebar {sidebar} window {w}: painted to its edge ({r:?})");
         }
     }
+}
+
+/// The Terminal submenu also offers the selected folders: one opens at once, several
+/// only after a confirmation that names them (a stray click opens nothing).
+#[test]
+#[ignore]
+fn terminal_in_selected_folders() {
+    let d = demo_env();
+    let row = |h: &Harness<'static, App>, k: f32| {
+        let r = window_rect(h, 0);
+        pos2(r.left() + 120.0, r.top() + 80.0 + crate::pane::ROW_H * k)
+    };
+    let menu_item = |h: &mut Harness<'static, App>, k: f32, label: &str| {
+        right_click(h, row(h, k));
+        settle(h, 2);
+        let p = node_center(h, &t("Terminal"), 0.0).expect("Terminal submenu");
+        move_to(h, p);
+        settle(h, 4);
+        let p = node_center(h, label, 0.0).unwrap_or_else(|| panic!("no menu item {label:?}"));
+        click_at(h, p);
+        settle(h, 4);
+    };
+    let cwd = |h: &Harness<'static, App>| h.state().panes[h.state().active].tab().term.as_ref().map(|t| t.cwd.clone());
+
+    // Several marked folders (rows 1 and 2: big, data): asks first, names them.
+    let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, Some(".."));
+    h.state_mut().shot_mark(0, &["big", "data", "archive.tar"]);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let tabs = h.state().strip.tabs.len();
+    menu_item(&mut h, 1.0, &t("Open terminals in {n} folders…").replace("{n}", "2"));
+    match &h.state().dialog {
+        Some(Dialog::OpenTerminals { dirs }) => assert_eq!(dirs, &vec![d.demo.join("big"), d.demo.join("data")]),
+        _ => panic!("asks before opening several terminals"),
+    }
+    assert_eq!(h.state().strip.tabs.len(), tabs, "nothing opened yet");
+    assert!(h.query_by_label(&t("Open {n} terminals?").replace("{n}", "2")).is_some());
+    h.get_by_label(&t("Open {n} terminals").replace("{n}", "2")).click();
+    settle(&mut h, 4);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs + 2, "a terminal tab for each folder");
+    assert_eq!(cwd(&h), Some(d.demo.join("data")));
+
+    // Cancel opens nothing.
+    let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, Some(".."));
+    h.state_mut().shot_mark(0, &["big", "data"]);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let tabs = h.state().strip.tabs.len();
+    menu_item(&mut h, 2.0, &t("Open terminals in {n} folders…").replace("{n}", "2"));
+    h.get_by_label(&t("Cancel")).click();
+    settle(&mut h, 3);
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs, "cancelled");
+
+    // One folder, right-clicked without a selection: named in the menu, opens at once.
+    h.state_mut().shot_mark(0, &[]);
+    menu_item(&mut h, 1.0, &t("Open terminal in “{name}”").replace("{name}", "big"));
+    assert!(h.state().dialog.is_none(), "no question for one folder");
+    assert_eq!(h.state().strip.tabs.len(), tabs + 1);
+    assert_eq!(cwd(&h), Some(d.demo.join("big")));
+}
+
+/// Copy / Move in a split tab offers the other windows (with a picture of where each
+/// one is); with one window, the folder tree shows under the address and follows it.
+#[test]
+#[ignore]
+fn transfer_destinations() {
+    let d = demo_env();
+    let shots = std::env::var("MATRIX_FINDER_SHOT_DIR").ok();
+    let dst = |h: &Harness<'static, App>| match &h.state().dialog {
+        Some(Dialog::Transfer { dst, .. }) => dst.clone(),
+        _ => panic!("no Copy dialog"),
+    };
+
+    // Split: windows 2 and 3 are offered (not window 1, the source), and "Another folder";
+    // exactly one is chosen, and the button names it.
+    let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
+    let app = h.state_mut();
+    app.shot_pane(0, &d.demo, Some("big"));
+    app.shot_pane(1, &d.demo.join("docs"), Some(".."));
+    app.split_pane(1, SplitDir::Down, false);
+    app.shot_pane(2, &d.demo.join("images"), Some(".."));
+    app.shot_focus(0);
+    settle(&mut h, 3);
+    h.state_mut().run_cmd(Cmd::Copy);
+    settle(&mut h, 3);
+    let win = |n: usize, dir: &Path| format!("{} · {}: {}", t("Window {n}").replace("{n}", &n.to_string()), dir.file_name().unwrap().to_string_lossy(), dir.display());
+    let selected = |h: &Harness<'static, App>, label: &str| h.get_by_label(label).toggled() == Some(egui::accesskit::Toggled::True);
+    let other = t("Another folder");
+    let fields = |h: &Harness<'static, App>| h.query_all_by_role(egui::accesskit::Role::TextInput).count();
+    let docs = d.demo.join("docs");
+    let images = d.demo.join("images");
+    assert!(h.query_by_label(&win(1, &d.demo)).is_none(), "not the source");
+    assert!(selected(&h, &win(2, &docs)), "the other window, as before");
+    assert!(!selected(&h, &win(3, &images)) && !selected(&h, &other));
+    assert_eq!(fields(&h), 0, "no address while a window is chosen");
+    assert!(h.query_by_label(&t("Copy to “{name}”").replace("{name}", "docs")).is_some(), "the button names the place");
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(format!("{dir}/transfer-split.png")).unwrap();
+    }
+    h.get_by_label(&win(3, &images)).click();
+    settle(&mut h, 2);
+    assert_eq!(dst(&h), images.display().to_string());
+    assert!(selected(&h, &win(3, &images)) && !selected(&h, &win(2, &docs)));
+    // Another folder: the address shows, has the keyboard, and the windows are not chosen.
+    h.get_by_label(&other).click();
+    settle(&mut h, 3);
+    assert!(selected(&h, &other) && !selected(&h, &win(3, &images)), "only Another folder is chosen");
+    assert_eq!(fields(&h), 1);
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")), "typing goes to the address");
+    key_press(&mut h, Key::A, None, Modifiers::COMMAND);
+    let formats = d.demo.join("formats");
+    push(&mut h, Event::Text(formats.display().to_string()));
+    settle(&mut h, 3);
+    assert_eq!(dst(&h), formats.display().to_string());
+    assert!(h.query_by_label(&t("Copy to “{name}”").replace("{name}", "formats")).is_some());
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(format!("{dir}/transfer-split-other.png")).unwrap();
+    }
+    // Back to a window: the address goes away.
+    h.get_by_label(&win(2, &docs)).click();
+    settle(&mut h, 2);
+    assert_eq!(dst(&h), docs.display().to_string());
+    assert_eq!(fields(&h), 0);
+    assert!(h.state().dialog_tree.is_none(), "no tree in a split tab");
+
+    // One window: the tree is there; a click on a folder fills in the address, and
+    // typing a folder moves the tree to it.
+    let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, Some("big"));
+    while h.state().panes.len() > 1 {
+        h.state_mut().close_pane(1);
+    }
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    h.state_mut().run_cmd(Cmd::Copy);
+    settle(&mut h, 6);
+    let tree = h.state().dialog_tree.as_ref().expect("the folder tree");
+    assert_eq!(tree.selected(), Some(d.demo.as_path()));
+    let formats = d.demo.join("formats");
+    let row = tree.rows.iter().find(|(p, _)| *p == formats).map(|(_, r)| r.center()).expect("formats in the tree");
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(format!("{dir}/transfer-tree.png")).unwrap();
+    }
+    click_at(&mut h, row);
+    settle(&mut h, 2);
+    assert_eq!(dst(&h), formats.display().to_string());
+    // Type another folder into the address.
+    if let Some(Dialog::Transfer { dst, .. }) = h.state_mut().dialog.as_mut() {
+        dst.clear();
+    }
+    let docs = d.demo.join("docs");
+    assert!(type_into(&mut h, egui::Rect::EVERYTHING, &docs.display().to_string()));
+    assert_eq!(dst(&h), docs.display().to_string(), "typed");
+    assert_eq!(h.state().dialog_tree.as_ref().unwrap().selected(), Some(docs.as_path()), "the tree follows the address");
 }

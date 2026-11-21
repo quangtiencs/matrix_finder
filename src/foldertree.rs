@@ -478,9 +478,14 @@ pub fn popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, tree: &mut FolderTre
     }
     let screen = ctx.screen_rect();
     let x = anchor.left().min(screen.right() - WIDTH - 8.0).max(screen.left() + 4.0);
+    // Under the button, or above it when there is no room below (a tall dialog in a
+    // small window). Its height is the last frame's, or the most it can be.
+    let h = ctx.memory(|m| m.area_rect(id)).map_or(MAX_H + 60.0, |r| r.height());
+    let below = anchor.bottom() + 4.0;
+    let y = if below + h > screen.bottom() - 8.0 && anchor.top() - 4.0 - h >= screen.top() + 4.0 { anchor.top() - 4.0 - h } else { below };
     let shown = egui::Area::new(id)
         .order(egui::Order::Foreground)
-        .fixed_pos(pos2(x, anchor.bottom() + 4.0))
+        .fixed_pos(pos2(x, y))
         .show(&ctx, |ui| {
             egui::Frame::popup(ui.style())
                 .fill(th.panel)
