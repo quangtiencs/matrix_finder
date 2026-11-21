@@ -35,6 +35,10 @@ pub struct Chrome {
     pub right: Vec<Button>,
     /// macOS: the 52 pt unified title bar is in place (see `setup_native`).
     mac_tall: bool,
+    /// Linux: the window is see-through so that its corners can be rounded, as GNOME's
+    /// and KDE's own windows are (also when previewing their chrome elsewhere). Settings
+    /// can turn it off (`round_corners`).
+    pub rounded: bool,
     setup_done: bool,
 }
 
@@ -71,7 +75,16 @@ impl Chrome {
         };
         // "mac-tall" previews the 52 pt title bar layout on another OS.
         let mac_tall = std::env::var("MATRIX_FINDER_CHROME").is_ok_and(|v| v == "mac-tall");
-        Self { style, integrated, left, right, mac_tall, setup_done: false }
+        // See-through corners only where they are sure to work: Wayland always composites
+        // (an X server may have no compositor, or no 32-bit visual to start the window
+        // with), on the desktops whose own windows are rounded. Previews round anywhere.
+        let desk = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty());
+        let rounded_desktop = ["gnome", "kde", "plasma"].iter().any(|d| desk.contains(d));
+        let rounded = integrated
+            && matches!(style, Style::Gnome | Style::Kde)
+            && (forced.is_some() || (cfg!(target_os = "linux") && wayland && rounded_desktop));
+        Self { style, integrated, left, right, mac_tall, rounded, setup_done: false }
     }
 
     /// Window options for the platform (call before the window is created).
@@ -81,8 +94,15 @@ impl Chrome {
         }
         match self.style {
             Style::Mac => vp.with_fullsize_content_view(true).with_titlebar_shown(false).with_title_shown(false),
-            _ => vp.with_decorations(false),
+            _ => vp.with_decorations(false).with_transparent(self.rounded),
         }
+    }
+
+    /// The main window's corner radius now: rounded on Linux, square when maximized or
+    /// full screen (and elsewhere, where the system draws the window).
+    pub fn window_radius(&self, ctx: &egui::Context) -> f32 {
+        let filled = ctx.input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false));
+        if self.rounded && !filled { self.radius() } else { 0.0 }
     }
 
     /// Top margin of the first row (macOS: centre it on the traffic lights).
@@ -293,13 +313,109 @@ impl Chrome {
         }
     }
 
+    /// Corner radius of windows on this platform (the app's dialogs, and the main window
+    /// on Linux).
+    pub fn radius(&self) -> f32 {
+        match self.style {
+            Style::Gnome => 12.0,
+            Style::Mac => 10.0,
+            Style::Kde | Style::Windows => 8.0,
+        }
+    }
+
+    /// An in-app window (About, Keyboard shortcuts…) dressed as a dialog of the platform:
+    /// instead of egui's title bar, [`Self::dialog_title`] draws the platform's.
+    pub fn dialog_window<'a>(&self, ctx: &egui::Context, title: &str, id: egui::Id) -> egui::Window<'a> {
+        let frame = egui::Frame::window(&ctx.style()).inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 14 }).corner_radius(self.radius() as u8);
+        egui::Window::new(title.to_string()).id(id).title_bar(false).collapsible(false).frame(frame)
+    }
+
+    /// The title bar of a [`Self::dialog_window`], in the platform's style: the title
+    /// (centred, or on the left on Windows) and the close button where the platform puts
+    /// it. Dragging it moves the window. Returns whether the close button was clicked.
+    pub fn dialog_title(&self, ui: &mut egui::Ui, th: &Theme, title: &str) -> bool {
+        const H: f32 = 44.0;
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), H), Sense::hover());
+        // The bar spans the window's whole width, its side margins included: drawn and
+        // clicked in a child that may reach into them (egui clips content short of them).
+        let bar = rect.expand2(vec2(14.0, 0.0));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar));
+        child.set_clip_rect(bar.intersect(ui.ctx().screen_rect()));
+        let ui = &mut child;
+        let close_left = match self.style {
+            Style::Mac => true,
+            Style::Gnome => self.left.contains(&Button::Close),
+            _ => false,
+        };
+        let btn = match self.style {
+            Style::Windows => Rect::from_min_size(pos2(bar.right() - WIN_BTN_W, bar.top()), vec2(WIN_BTN_W, 32.0)),
+            Style::Mac => Rect::from_center_size(pos2(bar.left() + 20.0, bar.center().y), vec2(14.0, 14.0)),
+            _ if close_left => Rect::from_center_size(pos2(bar.left() + 26.0, bar.center().y), vec2(26.0, 26.0)),
+            _ => Rect::from_center_size(pos2(bar.right() - 26.0, bar.center().y), vec2(26.0, 26.0)),
+        };
+        let resp = ui.interact(btn, ui.id().with("dialog-close"), Sense::click());
+        let (hovered, pressed) = (resp.hovered(), resp.is_pointer_button_down_on());
+        let p = ui.painter();
+        let mut glyph = th.text;
+        let gr = Rect::from_center_size(btn.center(), vec2(9.0, 9.0));
+        match self.style {
+            Style::Mac => {
+                // The red light, and the other two greyed out: a dialog is not resized.
+                p.circle_filled(btn.center(), 6.0, Color32::from_rgb(0xff, 0x5f, 0x57));
+                for k in 1..3 {
+                    p.circle_filled(btn.center() + vec2(20.0 * k as f32, 0.0), 6.0, th.text.gamma_multiply(0.18));
+                }
+                if hovered {
+                    close_glyph(p, Rect::from_center_size(btn.center(), vec2(5.0, 5.0)), Stroke::new(1.2_f32, Color32::from_rgb(0x4d, 0x00, 0x00)));
+                }
+            }
+            Style::Windows => {
+                if hovered || pressed {
+                    let red = if pressed { Color32::from_rgb(0x94, 0x1f, 0x17) } else { Color32::from_rgb(0xc4, 0x2b, 0x1c) };
+                    let r = self.radius() as u8;
+                    p.rect_filled(btn, egui::CornerRadius { ne: r, ..Default::default() }, red);
+                    glyph = Color32::WHITE;
+                }
+                close_glyph(p, Rect::from_center_size(btn.center(), vec2(10.0, 10.0)), Stroke::new(1.0_f32, glyph));
+            }
+            Style::Gnome => {
+                let a = if pressed { 0.26 } else if hovered { 0.18 } else { 0.10 };
+                p.circle_filled(btn.center(), 12.0, th.text.gamma_multiply(a));
+                close_glyph(p, gr, Stroke::new(1.6_f32, glyph));
+            }
+            Style::Kde => {
+                if hovered {
+                    p.circle_filled(btn.center(), 10.0, Color32::from_rgb(0xda, 0x44, 0x53));
+                    glyph = Color32::WHITE;
+                }
+                close_glyph(p, gr, Stroke::new(1.3_f32, glyph));
+            }
+        }
+        // The title, cut to the room the buttons leave (a long file name in the viewer).
+        let font = egui::FontId::new(14.0, egui::FontFamily::Name("bold".into()));
+        let room = match self.style {
+            Style::Windows => bar.width() - 14.0 - WIN_BTN_W - 8.0,
+            Style::Mac => bar.width() - 2.0 * 80.0,
+            _ => bar.width() - 2.0 * 52.0,
+        };
+        let mut job = egui::text::LayoutJob::simple_singleline(title.to_string(), font, th.strong());
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room.max(20.0));
+        let galley = ui.fonts(|f| f.layout_job(job));
+        let x = if self.style == Style::Windows { bar.left() + 14.0 } else { bar.center().x - galley.size().x / 2.0 };
+        ui.painter().galley(pos2(x, bar.center().y - galley.size().y / 2.0), galley, th.strong());
+        ui.painter().line_segment([pos2(bar.left(), bar.bottom()), pos2(bar.right(), bar.bottom())], Stroke::new(1.0_f32, th.border));
+        ui.add_space(8.0);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, crate::i18n::t("Close")));
+        resp.on_hover_text(crate::i18n::t("Close")).clicked()
+    }
+
     /// A thin outline so an undecorated window stays visible on a same-coloured desktop.
     pub fn outline(&self, ctx: &egui::Context, th: &Theme) {
         if !self.integrated || self.style == Style::Mac || ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
             return;
         }
         let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("window-outline")));
-        p.rect_stroke(ctx.screen_rect(), 0.0, Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
+        p.rect_stroke(ctx.screen_rect(), self.window_radius(ctx), Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
     }
 }
 

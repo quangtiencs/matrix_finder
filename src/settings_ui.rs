@@ -271,6 +271,41 @@ pub(super) fn pick_application() -> Option<String> {
 }
 
 impl App {
+    /// The window's size at start: width × height, with the current size and the default
+    /// a click away. Kept in range here and when the settings load.
+    fn window_size_row(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
+        use crate::config::{WINDOW_DEFAULT, WINDOW_MAX, WINDOW_MIN};
+        let mut changed = false;
+        ui.add_space(4.0);
+        ui.label(RichText::new(t("Window size at start")).color(th.text));
+        ui.label(RichText::new(t("Width × height in pixels, at least 720 × 420. Takes effect the next time Matrix Finder starts.")).size(11.5).color(th.weak));
+        ui.add_space(2.0);
+        ui.horizontal(|ui| {
+            let w = egui::DragValue::new(&mut self.cfg.window_width).range(WINDOW_MIN[0]..=WINDOW_MAX[0]).speed(4.0).max_decimals(0);
+            changed |= ui.add(w).on_hover_text(t("Width")).changed();
+            ui.label("×");
+            let h = egui::DragValue::new(&mut self.cfg.window_height).range(WINDOW_MIN[1]..=WINDOW_MAX[1]).speed(4.0).max_decimals(0);
+            changed |= ui.add(h).on_hover_text(t("Height")).changed();
+            ui.add_space(8.0);
+            // The window as it is now, in the same pixels as the start size (before the UI scale).
+            let now = ui.ctx().screen_rect().size() * ui.ctx().zoom_factor();
+            // Maximized, the window is the screen's size: no size to start a window with.
+            let filled = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false));
+            let b = ui.add_enabled(!filled, egui::Button::new(t("Use current size"))).on_disabled_hover_text(t("Not while the window is maximized or full screen"));
+            if b.clicked() {
+                self.cfg.window_width = now.x.round().clamp(WINDOW_MIN[0], WINDOW_MAX[0]);
+                self.cfg.window_height = now.y.round().clamp(WINDOW_MIN[1], WINDOW_MAX[1]);
+                changed = true;
+            }
+            if ui.button(format!("{} ({} × {})", t("Default"), WINDOW_DEFAULT[0], WINDOW_DEFAULT[1])).clicked() {
+                (self.cfg.window_width, self.cfg.window_height) = (WINDOW_DEFAULT[0], WINDOW_DEFAULT[1]);
+                changed = true;
+            }
+        });
+        ui.add_space(4.0);
+        changed
+    }
+
     /// Settings → Default apps: one row per file type. An empty field means the type
     /// opens with the system's default app, which the field names as its hint.
     fn default_app_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
@@ -731,6 +766,12 @@ impl App {
                 settings_section(ui, th, &t("Window"), "");
                 card(ui, th, |ui| {
                     changed |= toggle_row(ui, th, &mut self.cfg.integrated_titlebar, &t("Integrated title bar with native window buttons"), &t("Takes effect after restarting Matrix Finder"));
+                    row_line(ui, th);
+                    if cfg!(target_os = "linux") {
+                        changed |= toggle_row(ui, th, &mut self.cfg.round_corners, &t("Round window corners"), &t("GNOME and KDE on Wayland, with the integrated title bar. Takes effect after restarting Matrix Finder"));
+                        row_line(ui, th);
+                    }
+                    changed |= self.window_size_row(ui, th);
                     row_line(ui, th);
                     ui.add_space(4.0);
                     ui.label(RichText::new(t("When Matrix Finder is started again")).color(th.text));

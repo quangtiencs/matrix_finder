@@ -19,6 +19,8 @@ const ROW_H: f32 = 24.0;
 const INDENT: f32 = 14.0;
 const WIDTH: f32 = 300.0;
 const MAX_H: f32 = 264.0;
+/// The popup's frame, separator and OK / Cancel row around the list.
+const POPUP_EXTRA: f32 = 64.0;
 
 /// A top-level entry: the home folder or a drive.
 #[derive(Clone, Debug, PartialEq)]
@@ -122,6 +124,10 @@ pub struct FolderTree {
     pub toggles: Vec<(PathBuf, Rect)>,
     /// Where the popup's OK and Cancel buttons were drawn in the last frame.
     pub buttons: Option<(Rect, Rect)>,
+    /// The most the list is tall (less in a dialog that must fit a small window).
+    pub max_height: f32,
+    /// A folder clicked in the last frame (taken by whoever shows the tree).
+    pub clicked: Option<PathBuf>,
 }
 
 impl FolderTree {
@@ -145,6 +151,8 @@ impl FolderTree {
             rows: Vec::new(),
             toggles: Vec::new(),
             buttons: None,
+            max_height: MAX_H,
+            clicked: None,
         };
         let current = current.filter(|c| root_of(&tree.roots, c).is_some());
         match current {
@@ -160,6 +168,12 @@ impl FolderTree {
         }
         tree.selected = tree.current.clone().or_else(|| tree.roots.first().map(|r| r.path.clone()));
         tree
+    }
+
+    /// Choose nothing (until a folder is clicked or reached with the keys).
+    pub fn unselect(&mut self) {
+        self.selected = None;
+        self.sel_at = None;
     }
 
     /// The folder chosen, which OK takes.
@@ -370,21 +384,24 @@ impl FolderTree {
         self.toggles.clear();
         // As tall as its rows (up to MAX_H): the area would keep the height of the first
         // frame, when the folders are still being read.
-        let h = (rows.len() as f32 * ROW_H).min(MAX_H);
+        let max_h = self.max_height;
+        let h = (rows.len() as f32 * ROW_H).min(max_h);
         let mut area = egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h).auto_shrink([false, true]);
         // While the folders above the chosen one are read, it moves down: follow it.
         let at = self.sel_index(&rows);
         self.sel_at = at.or(self.sel_at);
-        let reading = match at {
+        // With nothing chosen, the folder it was opened at is the one kept in view.
+        let shown_at = at.or_else(|| self.current.as_ref().and_then(|c| rows.iter().position(|r| &r.path == c)));
+        let reading = match shown_at {
             Some(i) => rows[..i].iter().any(|r| r.kids == Kids::Loading && r.open),
             None => true,
         };
         if std::mem::take(&mut self.follow) || !self.settled {
             // Keep the chosen folder in view (a third down when it opens).
-            if let Some(i) = at {
+            if let Some(i) = shown_at {
                 let (top, bottom) = (i as f32 * ROW_H, (i + 1) as f32 * ROW_H);
                 let offset = if !self.settled {
-                    (top - MAX_H / 3.0).max(0.0)
+                    (top - max_h / 3.0).max(0.0)
                 } else if top < self.offset {
                     top
                 } else if bottom > self.offset + h {
@@ -458,6 +475,7 @@ impl FolderTree {
             ui.ctx().request_repaint();
         }
         if let Some((p, i)) = chosen {
+            self.clicked = Some(p.clone());
             self.selected = Some(p);
             self.sel_at = Some(i);
             self.settled = true;
@@ -478,9 +496,9 @@ pub fn popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, tree: &mut FolderTre
     }
     let screen = ctx.screen_rect();
     let x = anchor.left().min(screen.right() - WIDTH - 8.0).max(screen.left() + 4.0);
-    // Under the button, or above it when there is no room below (a tall dialog in a
-    // small window). Its height is the last frame's, or the most it can be.
-    let h = ctx.memory(|m| m.area_rect(id)).map_or(MAX_H + 60.0, |r| r.height());
+    // Under the button, or above it when the tallest it can be does not fit below (a tall
+    // dialog in a small window). Above, its top stays put while folders open and close.
+    let h = tree.max_height + POPUP_EXTRA;
     let below = anchor.bottom() + 4.0;
     let y = if below + h > screen.bottom() - 8.0 && anchor.top() - 4.0 - h >= screen.top() + 4.0 { anchor.top() - 4.0 - h } else { below };
     let shown = egui::Area::new(id)
@@ -599,6 +617,17 @@ mod tests {
         let t = tree(&[("Home", "/home/me")], Some("/elsewhere"));
         assert_eq!(t.current(), None);
         assert!(t.visible()[0].open);
+    }
+
+    /// Closing a branch above the chosen folder chooses the folder closed, but that is
+    /// not a click: a dialog that follows the tree keeps its destination.
+    #[test]
+    fn closing_a_branch_is_not_a_click() {
+        let mut t = tree(&[("Home", "/home/me")], Some("/home/me/a"));
+        t.set_kids("/home/me".into(), vec!["a".into()]);
+        t.toggle(Path::new("/home/me"));
+        assert_eq!(t.selected(), Some(Path::new("/home/me")));
+        assert_eq!(t.clicked, None);
     }
 
     #[test]

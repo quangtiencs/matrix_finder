@@ -4647,7 +4647,8 @@ fn terminal_in_selected_folders() {
         click_at(h, p);
         settle(h, 4);
     };
-    let cwd = |h: &Harness<'static, App>| h.state().panes[h.state().active].tab().term.as_ref().map(|t| t.cwd.clone());
+    // The shell's folder, as the shell has it (/private/tmp for /tmp on macOS).
+    let cwd = |h: &Harness<'static, App>| h.state().panes[h.state().active].tab().term.as_ref().and_then(|t| t.cwd.canonicalize().ok());
 
     // Several marked folders (rows 1 and 2: big, data): asks first, names them.
     let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
@@ -4667,7 +4668,7 @@ fn terminal_in_selected_folders() {
     settle(&mut h, 4);
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().strip.tabs.len(), tabs + 2, "a terminal tab for each folder");
-    assert_eq!(cwd(&h), Some(d.demo.join("data")));
+    assert_eq!(cwd(&h), d.demo.join("data").canonicalize().ok());
 
     // Cancel opens nothing.
     let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
@@ -4682,12 +4683,41 @@ fn terminal_in_selected_folders() {
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().strip.tabs.len(), tabs, "cancelled");
 
+    // A right-click on a folder outside the marked ones is about that folder alone: the
+    // marks go, and the terminal opens where the menu says (not in the marked folders).
+    let tabs = h.state().strip.tabs.len();
+    h.state_mut().shot_mark(0, &["big", "data"]);
+    settle(&mut h, 2);
+    menu_item(&mut h, 3.0, &t("Open terminal in “{name}”").replace("{name}", "docs"));
+    assert!(h.state().dialog.is_none());
+    assert_eq!(h.state().strip.tabs.len(), tabs + 1);
+    assert_eq!(cwd(&h), d.demo.join("docs").canonicalize().ok());
+    let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, Some(".."));
+    h.state_mut().shot_mark(0, &["big", "data"]);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let p = row(&h, 3.0);
+    // On "..", which has no commands for items, the marks stay.
+    let up = row(&h, 0.0);
+    right_click(&mut h, up);
+    settle(&mut h, 2);
+    assert_eq!(h.state().panes[0].tab().marked.len(), 2, "a right-click on .. keeps the marks");
+    // Esc closes the menu, and only the menu (it used to clear the marks too).
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert_eq!(h.state().panes[0].tab().marked.len(), 2, "Esc on the menu keeps the marks");
+    right_click(&mut h, p);
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().marked.is_empty(), "the marks are gone");
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    let tabs = h.state().strip.tabs.len();
+
     // One folder, right-clicked without a selection: named in the menu, opens at once.
     h.state_mut().shot_mark(0, &[]);
     menu_item(&mut h, 1.0, &t("Open terminal in “{name}”").replace("{name}", "big"));
     assert!(h.state().dialog.is_none(), "no question for one folder");
     assert_eq!(h.state().strip.tabs.len(), tabs + 1);
-    assert_eq!(cwd(&h), Some(d.demo.join("big")));
+    assert_eq!(cwd(&h), d.demo.join("big").canonicalize().ok());
 }
 
 /// Copy / Move in a split tab offers the other windows (with a picture of where each
@@ -4737,6 +4767,7 @@ fn transfer_destinations() {
     settle(&mut h, 3);
     assert!(selected(&h, &other) && !selected(&h, &win(3, &images)), "only Another folder is chosen");
     assert_eq!(fields(&h), 1);
+    assert!(h.state().dialog_tree.is_some(), "with the folder tree");
     assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")), "typing goes to the address");
     key_press(&mut h, Key::A, None, Modifiers::COMMAND);
     let formats = d.demo.join("formats");
@@ -4752,7 +4783,16 @@ fn transfer_destinations() {
     settle(&mut h, 2);
     assert_eq!(dst(&h), docs.display().to_string());
     assert_eq!(fields(&h), 0);
-    assert!(h.state().dialog_tree.is_none(), "no tree in a split tab");
+    assert!(h.state().dialog_tree.is_none(), "no tree while a window is chosen");
+    // Window 2 shows another folder while the dialog is open: no window is the
+    // destination any more, so the address shows the one that will be used.
+    h.state_mut().shot_pane(1, &d.demo.join("out"), Some(".."));
+    // The choices are read again twice a second.
+    std::thread::sleep(Duration::from_millis(600));
+    settle(&mut h, 3);
+    assert_eq!(dst(&h), docs.display().to_string(), "unchanged");
+    assert!(selected(&h, &other), "Another folder is chosen");
+    assert_eq!(fields(&h), 1, "with its address shown");
 
     // One window: the tree is there; a click on a folder fills in the address, and
     // typing a folder moves the tree to it.
@@ -4766,7 +4806,11 @@ fn transfer_destinations() {
     h.state_mut().run_cmd(Cmd::Copy);
     settle(&mut h, 6);
     let tree = h.state().dialog_tree.as_ref().expect("the folder tree");
-    assert_eq!(tree.selected(), Some(d.demo.as_path()));
+    // Nothing is filled in (never the folder copied from): the tree opens there for
+    // bearings, nothing chosen, and Copy waits for a destination.
+    assert_eq!(dst(&h), "");
+    assert_eq!((tree.current(), tree.selected()), (Some(d.demo.as_path()), None));
+    assert!(h.query_all_by_label(&t("Copy")).any(|n| n.is_disabled()), "Copy waits for a destination");
     let formats = d.demo.join("formats");
     let row = tree.rows.iter().find(|(p, _)| *p == formats).map(|(_, r)| r.center()).expect("formats in the tree");
     if let Some(dir) = &shots {
@@ -4783,4 +4827,149 @@ fn transfer_destinations() {
     assert!(type_into(&mut h, egui::Rect::EVERYTHING, &docs.display().to_string()));
     assert_eq!(dst(&h), docs.display().to_string(), "typed");
     assert_eq!(h.state().dialog_tree.as_ref().unwrap().selected(), Some(docs.as_path()), "the tree follows the address");
+
+    // A terminal beside, in the folder copied from: not offered, and nothing filled in.
+    let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, Some("big"));
+    while h.state().panes.len() > 1 {
+        h.state_mut().close_pane(1);
+    }
+    let _ = h.state_mut().split_pane(0, SplitDir::Right, true);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 10);
+    h.state_mut().run_cmd(Cmd::Copy);
+    settle(&mut h, 3);
+    assert_eq!(dst(&h), "", "not the source, though a window shows it");
+    assert!(h.state().dialog_tree.is_some(), "the tree to pick from");
+}
+
+/// The app's windows (About, Keyboard shortcuts…) have the platform's title bar: its
+/// close button closes them, and so does Esc, the one in front first.
+#[test]
+#[ignore]
+fn dialogs_close_by_their_button_and_esc() {
+    let d = demo_env();
+    let shots = std::env::var("MATRIX_FINDER_SHOT_DIR").ok();
+    for chrome in ["gnome", "kde", "mac", "windows"] {
+        let mut h = app_harness(&settings("Adwaita Light", &d), chrome);
+        h.state_mut().show_about = true;
+        settle(&mut h, 3);
+        if let Some(dir) = &shots {
+            h.render().unwrap().save(format!("{dir}/about-{chrome}.png")).unwrap();
+        }
+        // The close button in About's title bar.
+        let about = h.ctx.memory(|m| m.area_rect(egui::Id::new("about"))).expect("About is shown");
+        let close = h
+            .query_all_by_label(&t("Close"))
+            .filter_map(|n| n.bounding_box())
+            .map(|r| pos2(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32))
+            .find(|p| about.contains(*p))
+            .unwrap_or_else(|| panic!("{chrome}: a close button in About"));
+        assert!(close.y < about.top() + 44.0, "{chrome}: in the title bar");
+        click_at(&mut h, close);
+        settle(&mut h, 2);
+        assert!(!h.state().show_about, "{chrome}: the button closes About");
+
+        // Esc: the window in front first (About opens after Keyboard shortcuts).
+        h.state_mut().show_help = true;
+        settle(&mut h, 2);
+        h.state_mut().show_about = true;
+        settle(&mut h, 3);
+        key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+        assert!(!h.state().show_about && h.state().show_help, "{chrome}: Esc closes the front window");
+        key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+        assert!(!h.state().show_help, "{chrome}: and then the next");
+
+        // After a click in the files, Esc is theirs: the window stays.
+        h.state_mut().show_about = true;
+        settle(&mut h, 3);
+        click_at(&mut h, pos2(W * 0.9, H * 0.85));
+        key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+        assert!(h.state().show_about, "{chrome}: Esc after a click in the files is not the window's");
+        // A click on the window gives it the keyboard back.
+        let about = h.ctx.memory(|m| m.area_rect(egui::Id::new("about"))).unwrap();
+        click_at(&mut h, about.center());
+        key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+        assert!(!h.state().show_about, "{chrome}: Esc after a click on the window closes it");
+
+        // Going to another window by keyboard (or a command) gives the files the keys back.
+        if chrome == "gnome" {
+            if h.state().panes.len() < 2 {
+                h.state_mut().split_pane(0, SplitDir::Right, false);
+                settle(&mut h, 3);
+            }
+            h.state_mut().show_about = true;
+            settle(&mut h, 3);
+            assert!(h.state().keys_to_window);
+            let other = h.state().layout.next_after(h.state().active);
+            h.state_mut().shot_focus(other);
+            settle(&mut h, 2);
+            assert!(!h.state().keys_to_window, "the keyboard follows the window switched to");
+            key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+            assert!(h.state().show_about, "Esc is the files' then");
+        }
+    }
+}
+
+/// On Linux the main window has rounded corners: they are see-through, the rest is not.
+#[test]
+#[ignore]
+fn linux_window_has_round_corners() {
+    let d = demo_env();
+    for (chrome, radius) in [("gnome", 12.0), ("kde", 8.0)] {
+        let mut h = app_harness(&settings("Adwaita Light", &d), chrome);
+        settle(&mut h, 2);
+        assert_eq!(h.state().window_radius, radius, "{chrome}");
+        let img = h.render().unwrap();
+        let alpha = |x: f32, y: f32| img.get_pixel(x as u32, y as u32).0[3];
+        for (x, y) in [(0.0, 0.0), (W - 1.0, 0.0), (0.0, H - 1.0), (W - 1.0, H - 1.0)] {
+            assert_eq!(alpha(x, y), 0, "{chrome}: corner ({x}, {y}) shows the desktop");
+        }
+        for (x, y) in [(radius, 1.0), (W / 2.0, H - 2.0), (2.0, H / 2.0), (W - 2.0, H / 2.0)] {
+            assert_eq!(alpha(x, y), 255, "{chrome}: ({x}, {y}) is the window");
+        }
+    }
+}
+
+#[test]
+fn transfer_button_names_short() {
+    assert_eq!(place_name("/home/me/docs/"), Some("docs".into()));
+    assert_eq!(place_name("  "), None);
+    assert_eq!(place_name("/data/a-very-long-folder-name-from-2024"), Some("a-very-long-folde…".into()));
+    assert_eq!(place_name("sftp://host/srv/www"), Some("www".into()));
+    // A server's top folder is named by its host, not its port.
+    assert_eq!(place_name("sftp://me@db:22/"), Some("db".into()));
+    assert_eq!(place_name("ftp://[::1]:2121"), Some("::1".into()));
+    assert_eq!(place_name("sftp://me@::1:22/"), Some("::1".into()), "IPv6 written without brackets");
+    assert_eq!(place_name("C:\\Users\\me\\docs"), Some("docs".into()));
+    assert_eq!(place_name("/tmp/b.zip::inner/x"), Some("x".into()));
+}
+
+/// Settings → Files & layout → Window: the size at start, set from the window as it is
+/// or back to the default, and saved.
+#[test]
+#[ignore]
+fn window_size_at_start_setting() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
+    h.state_mut().open_settings(SettingsPage::Files);
+    settle(&mut h, 3);
+    assert!(h.query_by_label(&t("Window size at start")).is_some());
+    h.get_by_label(&t("Use current size")).click();
+    settle(&mut h, 2);
+    assert_eq!((h.state().cfg.window_width, h.state().cfg.window_height), (W, H), "the window as it is");
+    assert_eq!((Settings::load().window_width, Settings::load().window_height), (W, H), "saved");
+    if let Ok(dir) = std::env::var("MATRIX_FINDER_SHOT_DIR") {
+        // Scroll down to the Window section.
+        move_to(&mut h, pos2(W * 0.6, H * 0.6));
+        for _ in 0..6 {
+            push(&mut h, Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -120.0), modifiers: Modifiers::NONE });
+            h.step();
+        }
+        settle(&mut h, 3);
+        h.render().unwrap().save(format!("{dir}/window-size.png")).unwrap();
+    }
+    h.get_by_label(&format!("{} (1280 × 800)", t("Default"))).click();
+    settle(&mut h, 2);
+    assert_eq!((h.state().cfg.window_width, h.state().cfg.window_height), (1280.0, 800.0));
 }
