@@ -85,3 +85,10 @@ raw-window-handle = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Startup notification on Wayland (src/activation.rs): the same crates winit uses.
+[target.'cfg(target_os = "linux")'.dependencies]
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }

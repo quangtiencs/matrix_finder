@@ -128,6 +128,7 @@ src/
 ├── defaultapps.rs which app opens which file type, and the system's own choice
 ├── chrome.rs      native-looking integrated title bar
 ├── agents.rs      AI coding agents for the AI button: which are installed, their logos
+├── activation.rs  Linux startup notification: hands the desktop's token to the window
 └── i18n.rs        translations (+ i18n_data.rs: keys and Vietnamese)
 assets/agents/     logos of the AI coding agents (LobeHub Icons, MIT)
 assets/fonts/      Source Sans 3, Source Serif 4, Source Code Pro (SIL OFL 1.1)

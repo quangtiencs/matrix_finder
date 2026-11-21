@@ -317,6 +317,7 @@ enum SettingsPage {
 impl App {
     /// `open`: a folder given on the command line, shown first.
     pub fn new(cc: &eframe::CreationContext, chrome: crate::chrome::Chrome, open: Option<String>) -> Self {
+        crate::activation::activate(cc);
         let (cfg, store) = crate::config::Store::open();
         i18n::set_language(&cfg.language);
         // Previews' temporary folders left by a Matrix Finder that crashed.
