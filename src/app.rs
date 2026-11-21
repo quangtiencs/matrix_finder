@@ -218,6 +218,9 @@ pub struct App {
     pane_rects: Vec<(usize, egui::Rect)>,
     /// The drives shown in the sidebar: mount point, name, and where its eject button was drawn.
     drive_rows: Vec<(PathBuf, String, Option<egui::Rect>)>,
+    /// The narrowest the sidebar can be without its content spilling past its edge
+    /// (the app menu row): learned from the frames where it did.
+    sidebar_min: f32,
     /// Exact destination of a drag & drop awaiting confirmation.
     dialog_dst: Option<Location>,
     /// The suggestions and folder tree of a dialog's folder field (Copy / Move to,
@@ -386,6 +389,7 @@ impl App {
             shift_down: false,
             pane_rects: Vec::new(),
             drive_rows: Vec::new(),
+            sidebar_min: 0.0,
             dialog_dst: None,
             dialog_path: Default::default(),
             logo_large: None,
@@ -6488,7 +6492,9 @@ impl eframe::App for App {
             egui::SidePanel::left("sidebar")
                 .resizable(false)
                 // In a narrow window the sidebar gives up space (never more than ~26 %).
-                .exact_width(self.cfg.sidebar_width.min((ctx.screen_rect().width() * 0.26).max(160.0)).round())
+                // Never narrower than its content, which would spill past the panel's
+                // edge and leave an unpainted band beside it.
+                .exact_width(self.cfg.sidebar_width.min((ctx.screen_rect().width() * 0.26).max(160.0)).max(self.sidebar_min).round())
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: 8, right: 8, top: self.chrome.top_margin(), bottom: 6 }))
                 .show(ctx, |ui| {
@@ -6513,6 +6519,12 @@ impl eframe::App for App {
                         self.save_cfg();
                     }
                     self.sidebar(ui);
+                    // (`max_rect` grows with the content, so compare with the room it was given.)
+                    let used = ui.min_rect();
+                    if used.right() > inner.right() + 0.5 {
+                        self.sidebar_min = (used.width() + 16.0).ceil();
+                        ui.ctx().request_repaint();
+                    }
                 });
         }
         egui::TopBottomPanel::top("topbar")

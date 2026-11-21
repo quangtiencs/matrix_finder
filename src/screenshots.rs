@@ -4596,3 +4596,26 @@ fn dialog_keys_follow_the_focused_widget() {
     h.state_mut().run_cmd(Cmd::NewFolder);
     assert!(h.state().dialog.is_none());
 }
+
+/// A narrow sidebar (dragged to its minimum, or a quarter of a small window) is never
+/// narrower than its app menu row: content spilling past its edge left an unpainted
+/// band between the sidebar and the files.
+#[test]
+#[ignore]
+fn narrow_sidebar_leaves_no_band() {
+    let d = demo_env();
+    for chrome in ["mac", "gnome", "windows"] {
+        for (sidebar, w) in [(160.0, W), (210.0, 640.0), (210.0, 560.0)] {
+            let mut cfg = settings("macOS Light", &d);
+            cfg.sidebar_width = sidebar;
+            let mut h = app_harness(&cfg, chrome);
+            h.set_size(egui::vec2(w, H));
+            settle(&mut h, 4);
+            let img = h.render().unwrap();
+            let r = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("sidebar")).unwrap().rect;
+            let panel = h.state().theme.panel;
+            let px = img.get_pixel(r.right() as u32 - 2, (H - 120.0) as u32).0;
+            assert_eq!([px[0], px[1], px[2]], [panel.r(), panel.g(), panel.b()], "{chrome} sidebar {sidebar} window {w}: painted to its edge ({r:?})");
+        }
+    }
+}
