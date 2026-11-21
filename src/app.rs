@@ -228,6 +228,10 @@ pub struct App {
     sidebar_min_for: (f32, f32, String),
     /// The main window's corner radius in this frame (Linux; 0 = square).
     window_radius: f32,
+    /// The folder of the file window the user was last in (Settings → Bookmarks adds it).
+    last_files_loc: Option<Location>,
+    /// Settings → Bookmarks: a group was just added; put its name in view, ready to type.
+    bm_focus_last: bool,
     /// The app's windows that are open, back to front (see `track_windows`), and whether
     /// the keyboard is theirs rather than the files' and terminals'.
     windows: Vec<&'static str>,
@@ -420,6 +424,8 @@ impl App {
             sidebar_min: 0.0,
             sidebar_min_for: (0.0, 0.0, String::new()),
             window_radius: 0.0,
+            last_files_loc: None,
+            bm_focus_last: false,
             activation: crate::activation::startup_token().into_iter().collect(),
             windows: Vec::new(),
             keys_to_window: false,
@@ -1204,7 +1210,7 @@ impl App {
             }
             ui.close_menu();
         }
-        if ui.button(t("Remove folder (keep its bookmarks)")).clicked() {
+        if ui.button(t("Remove group (keep its bookmarks)")).clicked() {
             remove_bookmark_folder(&mut self.cfg.bookmarks, i);
             self.save_cfg();
             ui.close_menu();
@@ -1397,6 +1403,114 @@ impl App {
     }
 
     /// Settings → Bookmarks: where they are shown, icons, and the list itself.
+    /// The actions above the bookmark list: add a bookmark (the folder the user was in,
+    /// one they choose, or the standard folders still missing), add a group, and import
+    /// or export the list.
+    fn bookmark_toolbar(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
+        let mut changed = false;
+        let have = |list: &[Bookmark], path: &str| Bookmark::leaves(list).any(|b| bookmark_target(&b.path) == bookmark_target(path));
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            let add = egui::Button::new(RichText::new(format!("+ {}", t("Add bookmark"))).color(th.on_accent()).strong()).fill(th.accent).min_size(egui::vec2(0.0, 28.0));
+            egui::menu::menu_custom_button(ui, add, |ui| {
+                ui.set_min_width(280.0);
+                // The folder of the file window the user was in (Settings is a tab of its own).
+                if let Some(loc) = self.last_files_loc.clone() {
+                    let path = loc.display(|id| self.remote_label(id));
+                    let name = loc.short_name();
+                    let label = t("The folder you were in: {name}").replace("{name}", &name);
+                    let r = ui.add_enabled(!have(&self.cfg.bookmarks, &path), egui::Button::new(label)).on_hover_text(&path).on_disabled_hover_text(t("Already a bookmark"));
+                    if r.clicked() {
+                        changed |= self.add_bookmark(name, path);
+                        ui.close_menu();
+                    }
+                }
+                if ui.button(t("Choose a folder…")).clicked() {
+                    ui.close_menu();
+                    if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
+                        changed |= self.add_bookmark(name, p.display().to_string());
+                    }
+                }
+                ui.separator();
+                // Home, Desktop, Documents…: the ones not bookmarked yet, named.
+                let missing: Vec<Bookmark> = crate::config::system_bookmarks().into_iter().filter(|b| !have(&self.cfg.bookmarks, &b.path)).collect();
+                let label = if missing.is_empty() {
+                    t("Standard folders: all bookmarked")
+                } else {
+                    t("Standard folders: {names}").replace("{names}", &missing.iter().map(|b| b.name.as_str()).collect::<Vec<_>>().join(", "))
+                };
+                if ui.add_enabled(!missing.is_empty(), egui::Button::new(label)).clicked() {
+                    self.toast(t("Added {n} bookmarks").replace("{n}", &missing.len().to_string()), false);
+                    self.cfg.bookmarks.extend(missing);
+                    changed = true;
+                    ui.close_menu();
+                }
+            })
+            .response
+            .on_hover_text(t("Add a folder you use often"));
+            if ui.add(egui::Button::new(format!("+ {}", t("New group"))).min_size(egui::vec2(0.0, 28.0))).on_hover_text(t("A group keeps bookmarks together: pick it in a bookmark's Group list")).clicked() {
+                self.cfg.bookmarks.push(Bookmark::new_folder(t("New group")));
+                self.bm_focus_last = true;
+                changed = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button(t("Export…")).on_hover_text(t("Save the bookmarks to a file")).clicked() {
+                    self.export_bookmarks();
+                }
+                if ui.button(t("Import…")).on_hover_text(t("Add the bookmarks of a file saved with Export")).clicked() {
+                    changed |= self.import_bookmarks();
+                }
+            });
+        });
+        changed
+    }
+
+    /// Bookmark `path` as `name`, unless it already is; says which it was.
+    fn add_bookmark(&mut self, name: String, path: String) -> bool {
+        if Bookmark::leaves(&self.cfg.bookmarks).any(|b| bookmark_target(&b.path) == bookmark_target(&path)) {
+            self.toast(t("Already a bookmark"), false);
+            return false;
+        }
+        self.toast(t("Added to bookmarks: {name}").replace("{name}", &name), false);
+        self.cfg.bookmarks.push(Bookmark::new(name, path));
+        true
+    }
+
+    fn export_bookmarks(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().set_file_name("matrix_finder-bookmarks.json").save_file() {
+            let r = serde_json::to_string_pretty(&self.cfg.bookmarks).map_err(es).and_then(|s| std::fs::write(&p, s).map_err(es));
+            match r {
+                Ok(()) => self.toast(format!("{} {}", t("Exported to"), p.display()), false),
+                Err(e) => self.toast(e, true),
+            }
+        }
+    }
+
+    fn import_bookmarks(&mut self) -> bool {
+        let Some(p) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() else { return false };
+        let r: Res<Vec<Bookmark>> = std::fs::read_to_string(&p).map_err(es).and_then(|s| serde_json::from_str(&s).map_err(es));
+        match r {
+            Ok(list) => {
+                for mut b in list {
+                    // Skip what is already bookmarked (also inside imported groups).
+                    let have = |x: &Bookmark, list: &[Bookmark]| Bookmark::leaves(list).any(|y| y.path == x.path);
+                    if b.folder {
+                        b.children.retain(|c| !have(c, &self.cfg.bookmarks));
+                        self.cfg.bookmarks.push(b);
+                    } else if !have(&b, &self.cfg.bookmarks) {
+                        self.cfg.bookmarks.push(b);
+                    }
+                }
+                true
+            }
+            Err(e) => {
+                self.toast(e, true);
+                false
+            }
+        }
+    }
+
     fn bookmark_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
         use crate::config::{BookmarkAction, BookmarkBar, BookmarkIcon};
         let mut changed = false;
@@ -1428,12 +1542,15 @@ impl App {
         }
         top.end(ui);
 
-        settings_section(ui, th, &t("Bookmarks"), &t("Rename, reorder and pick icons. Put bookmarks into folders to group them."));
+        settings_section(ui, th, &t("Bookmarks"), &t("Rename, reorder and pick icons. Put bookmarks into groups to keep them together."));
         let folders: Vec<(usize, String)> = self.cfg.bookmarks.iter().enumerate().filter(|(_, b)| b.folder).map(|(i, b)| (i, b.name.clone())).collect();
         let mut list = card_frame(th).begin(ui);
         let ui_outer = ui;
         let ui = &mut list.content_ui;
         ui.set_width(ui.available_width());
+        changed |= self.bookmark_toolbar(ui, th);
+        ui.add_space(6.0);
+        let focus_last = std::mem::take(&mut self.bm_focus_last);
         // The location takes the width the rest of a row leaves (a row inside a folder is indented).
         let path_w = (ui.available_width() - 413.0).max(120.0);
         let mut edit: Option<BmEdit> = None;
@@ -1442,7 +1559,7 @@ impl App {
         let mut paths = std::mem::take(&mut self.bookmark_paths);
         let (drives, show_hidden) = (&self.drives, self.cfg.show_hidden);
         let home = dirs::home_dir();
-        let mut row = |ui: &mut egui::Ui, b: &mut Bookmark, at: (usize, Option<usize>), count: usize, edit: &mut Option<BmEdit>, changed: &mut bool| {
+        let mut row = |ui: &mut egui::Ui, b: &mut Bookmark, at: (usize, Option<usize>), count: usize, edit: &mut Option<BmEdit>, changed: &mut bool, focus: bool| {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 if at.1.is_some() {
@@ -1474,25 +1591,31 @@ impl App {
                         }
                     });
                 }
-                *changed |= ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(if b.folder { 200.0 } else { 130.0 }).hint_text(t("Name"))).changed();
+                let name = ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(if b.folder { 200.0 } else { 130.0 }).hint_text(t("Name")));
+                // A group just made: in view, its name ready to type.
+                if focus {
+                    name.request_focus();
+                    name.scroll_to_me(Some(egui::Align::Center));
+                }
+                *changed |= name.changed();
                 if !b.folder {
                     let o = crate::pathfield::Opts { base: home.as_deref(), show_hidden, drives, width: path_w, hint: Some(t("Location")) };
                     *changed |= paths.show(ui, &mut b.path, egui::Id::new(("bm-path", at)), o, th).changed();
                     // Folder to keep it in.
                     let cur = at.1.and_then(|_| folders.iter().find(|(i, _)| *i == at.0)).map(|(_, n)| n.clone()).unwrap_or_else(|| "—".into());
                     egui::ComboBox::from_id_salt(("bm-folder", at.0, at.1)).width(110.0).selected_text(cur).show_ui(ui, |ui| {
-                        if ui.selectable_label(at.1.is_none(), t("No folder")).clicked() && at.1.is_some() {
+                        if ui.selectable_label(at.1.is_none(), t("No group")).clicked() && at.1.is_some() {
                             *edit = Some(BmEdit::MoveTo(at, None));
                         }
                         for (fi, name) in &folders {
                             let here = at.1.is_some() && at.0 == *fi;
-                            if ui.selectable_label(here, if name.is_empty() { t("Unnamed folder") } else { name.clone() }).clicked() && !here {
+                            if ui.selectable_label(here, if name.is_empty() { t("Unnamed group") } else { name.clone() }).clicked() && !here {
                                 *edit = Some(BmEdit::MoveTo(at, Some(*fi)));
                             }
                         }
                     })
                     .response
-                    .on_hover_text(t("Folder"));
+                    .on_hover_text(t("Group"));
                 }
                 let k = at.1.unwrap_or(at.0);
                 if icons::icon_button(ui, 24.0, k > 0, th, |p, r, c| icons::chevron(p, r, 0, c)).on_hover_text(t("Move up")).clicked() {
@@ -1501,7 +1624,7 @@ impl App {
                 if icons::icon_button(ui, 24.0, k + 1 < count, th, |p, r, c| icons::chevron(p, r, 2, c)).on_hover_text(t("Move down")).clicked() {
                     *edit = Some(BmEdit::Down(at));
                 }
-                let tip = if b.folder { t("Remove folder (keep its bookmarks)") } else { t("Remove bookmark") };
+                let tip = if b.folder { t("Remove group (keep its bookmarks)") } else { t("Remove bookmark") };
                 if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(tip).clicked() {
                     *edit = Some(BmEdit::Delete(at));
                 }
@@ -1509,17 +1632,17 @@ impl App {
         };
         for i in 0..n {
             let b = &mut self.cfg.bookmarks[i];
-            row(ui, b, (i, None), n, &mut edit, &mut changed);
+            row(ui, b, (i, None), n, &mut edit, &mut changed, focus_last && i + 1 == n);
             if b.folder {
                 let m = b.children.len();
                 for j in 0..m {
                     let c = &mut self.cfg.bookmarks[i].children[j];
-                    row(ui, c, (i, Some(j)), m, &mut edit, &mut changed);
+                    row(ui, c, (i, Some(j)), m, &mut edit, &mut changed, false);
                 }
                 if m == 0 {
                     ui.horizontal(|ui| {
                         ui.add_space(54.0);
-                        ui.label(RichText::new(t("Empty folder: choose it in a bookmark's folder list")).size(11.5).color(th.weak));
+                        ui.label(RichText::new(t("Empty group: pick it in a bookmark's Group list")).size(11.5).color(th.weak));
                     });
                 }
             }
@@ -1529,59 +1652,9 @@ impl App {
             apply_bookmark_edit(&mut self.cfg.bookmarks, e);
             changed = true;
         }
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(format!("+ {}", t("Add current folder"))).clicked() {
-                let loc = self.panes[self.active].tab().loc.clone();
-                let path = loc.display(|id| self.remote_label(id));
-                if !Bookmark::leaves(&self.cfg.bookmarks).any(|b| bookmark_target(&b.path) == path) {
-                    self.cfg.bookmarks.push(Bookmark::new(loc.short_name(), path));
-                    changed = true;
-                }
-            }
-            if ui.button(format!("+ {}", t("New folder"))).clicked() {
-                self.cfg.bookmarks.push(Bookmark::new_folder(t("New folder")));
-                changed = true;
-            }
-            if ui.button(t("Add standard folders")).on_hover_text(t("Desktop, Documents, Downloads, Music, Pictures and Movies, if they are missing")).clicked() {
-                for b in crate::config::system_bookmarks() {
-                    if !Bookmark::leaves(&self.cfg.bookmarks).any(|x| bookmark_target(&x.path) == bookmark_target(&b.path)) {
-                        self.cfg.bookmarks.push(b);
-                        changed = true;
-                    }
-                }
-            }
-            if ui.button(t("Export…")).clicked() {
-                if let Some(p) = rfd::FileDialog::new().set_file_name("matrix_finder-bookmarks.json").save_file() {
-                    let r = serde_json::to_string_pretty(&self.cfg.bookmarks).map_err(es).and_then(|s| std::fs::write(&p, s).map_err(es));
-                    match r {
-                        Ok(()) => self.toast(format!("{} {}", t("Exported to"), p.display()), false),
-                        Err(e) => self.toast(e, true),
-                    }
-                }
-            }
-            if ui.button(t("Import…")).clicked() {
-                if let Some(p) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
-                    let r: Res<Vec<Bookmark>> = std::fs::read_to_string(&p).map_err(es).and_then(|s| serde_json::from_str(&s).map_err(es));
-                    match r {
-                        Ok(list) => {
-                            for mut b in list {
-                                // Skip what is already bookmarked (also inside imported folders).
-                                let have = |x: &Bookmark, list: &[Bookmark]| Bookmark::leaves(list).any(|y| y.path == x.path);
-                                if b.folder {
-                                    b.children.retain(|c| !have(c, &self.cfg.bookmarks));
-                                    self.cfg.bookmarks.push(b);
-                                } else if !have(&b, &self.cfg.bookmarks) {
-                                    self.cfg.bookmarks.push(b);
-                                }
-                            }
-                            changed = true;
-                        }
-                        Err(e) => self.toast(e, true),
-                    }
-                }
-            }
-        });
+        if n == 0 {
+            ui.label(RichText::new(t("No bookmarks yet: add the folder you were in, or choose one with Add bookmark.")).color(th.weak));
+        }
         list.end(ui_outer);
         changed
     }
@@ -6910,6 +6983,11 @@ impl eframe::App for App {
         }
         self.quit_step(ctx);
         self.track_windows(ctx);
+        if let Some(tab) = self.panes.get(self.active).map(|p| p.tab()).filter(|t| t.is_files()) {
+            if self.last_files_loc.as_ref() != Some(&tab.loc) {
+                self.last_files_loc = Some(tab.loc.clone());
+            }
+        }
         self.handle_keys(ctx);
         self.poll_terminals(ctx);
         self.poll_agents();

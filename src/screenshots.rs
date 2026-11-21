@@ -683,8 +683,19 @@ fn settings(theme: &str, demo: &Demo) -> Settings {
     cfg.bookmarks = vec![
         Bookmark::new("Demo", demo.demo.to_string_lossy().to_string()),
         Bookmark::new("Docs", demo.demo.join("docs").to_string_lossy().to_string()),
+        Bookmark::new("Data", demo.demo.join("data").to_string_lossy()),
+        // A group, so the screenshots show that bookmarks can be kept together.
+        github_group(demo),
     ];
     cfg
+}
+
+/// A bookmark group "Github" holding two projects (code icons), for the screenshots.
+fn github_group(d: &Demo) -> Bookmark {
+    let code = |name: &str, path: PathBuf| Bookmark { icon: crate::config::BookmarkIcon::Code, ..Bookmark::new(name, path.to_string_lossy()) };
+    let mut g = Bookmark::new_folder("Github");
+    g.children = vec![code("Project 1", d.home.join("Projects/matrix_finder")), code("Project 2", d.demo.join("src"))];
+    g
 }
 
 /// Terminal profiles have their own colour theme (Breeze Dark by default).
@@ -911,8 +922,8 @@ fn drag(h: &mut Harness<'static, App>, from: Pos2, to: Pos2) {
     settle(h, 3);
 }
 
-/// Drag a dialog (`id` is its title, unless it sets its own) to the middle of the
-/// window, as a user would: egui opens dialogs towards the top left.
+/// Drag a dialog (`id` is its egui id: the app's windows set their own, e.g. "about")
+/// to the middle of the window, as a user would: egui opens dialogs towards the top left.
 fn center_dialog(h: &mut Harness<'static, App>, id: &str) {
     let r = h.ctx.memory(|m| m.area_rect(egui::Id::new(id))).unwrap_or_else(|| panic!("no dialog {id}"));
     let grab = r.left_top() + egui::vec2(40.0, 30.0);
@@ -1661,7 +1672,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         app.shot_focus(0);
         app.show_about = true;
         settle(&mut h, 3);
-        center_dialog(&mut h, &t("About"));
+        center_dialog(&mut h, "about");
         shot(&mut h, "about");
     }
 
@@ -1825,7 +1836,12 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         // Light files beside a dark terminal in both modes, so the two windows are easy to tell apart.
         let mut cfg = settings("Breeze Light", d);
         set_terminal_theme(&mut cfg, "Breeze Dark");
-        cfg.bookmarks = vec![Bookmark::new("Home", d.home.to_string_lossy().to_string())];
+        cfg.bookmarks = vec![
+            Bookmark::new("Home", d.home.to_string_lossy().to_string()),
+            Bookmark::new("Documents", d.home.join("Documents").to_string_lossy()),
+            Bookmark::new("Downloads", d.home.join("Downloads").to_string_lossy()),
+            github_group(d),
+        ];
         let mut h = app_harness(&cfg, gnome);
         let proj = d.home.join("Projects/matrix_finder");
         let app = h.state_mut();
@@ -4969,7 +4985,50 @@ fn window_size_at_start_setting() {
         settle(&mut h, 3);
         h.render().unwrap().save(format!("{dir}/window-size.png")).unwrap();
     }
-    h.get_by_label(&format!("{} (1280 × 800)", t("Default"))).click();
+    h.get_by_label(&format!("{} (1000 × 600)", t("Default"))).click();
     settle(&mut h, 2);
-    assert_eq!((h.state().cfg.window_width, h.state().cfg.window_height), (1280.0, 800.0));
+    assert_eq!((h.state().cfg.window_width, h.state().cfg.window_height), (1000.0, 600.0));
+}
+
+/// Settings → Bookmarks: "Add bookmark" offers the folder the user was in (not the
+/// Settings tab's), named; "New group" adds a group with its name ready to type.
+#[test]
+#[ignore]
+fn bookmark_toolbar_adds_folders_and_groups() {
+    let d = demo_env();
+    let shots = std::env::var("MATRIX_FINDER_SHOT_DIR").ok();
+    let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
+    let formats = d.demo.join("formats");
+    h.state_mut().shot_pane(0, &formats, Some(".."));
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    h.state_mut().open_settings(SettingsPage::Bookmarks);
+    settle(&mut h, 3);
+    let before = h.state().cfg.bookmarks.len();
+    h.get_by_label(&format!("+ {}", t("Add bookmark"))).click();
+    settle(&mut h, 3);
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(format!("{dir}/bookmarks-add.png")).unwrap();
+    }
+    let item = t("The folder you were in: {name}").replace("{name}", "formats");
+    h.get_by_label(&item).click();
+    settle(&mut h, 3);
+    let b = h.state().cfg.bookmarks.last().unwrap().clone();
+    assert_eq!(h.state().cfg.bookmarks.len(), before + 1);
+    assert_eq!((b.name.as_str(), b.path.as_str()), ("formats", formats.to_string_lossy().as_ref()), "the folder the user was in");
+    assert_eq!(Settings::load().bookmarks.len(), before + 1, "saved");
+    // Once bookmarked, it is offered no more.
+    h.get_by_label(&format!("+ {}", t("Add bookmark"))).click();
+    settle(&mut h, 3);
+    assert!(h.get_by_label(&item).is_disabled(), "already a bookmark");
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    // A new group: at the end, its name has the keyboard.
+    h.get_by_label(&format!("+ {}", t("New group"))).click();
+    settle(&mut h, 4);
+    let g = h.state().cfg.bookmarks.last().unwrap().clone();
+    assert!(g.folder && g.name == t("New group"));
+    assert!(h.ctx.memory(|m| m.focused()).is_some(), "the group's name is ready to type");
+    if let Some(dir) = &shots {
+        h.render().unwrap().save(format!("{dir}/bookmarks-group.png")).unwrap();
+    }
 }
