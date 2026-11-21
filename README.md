@@ -29,6 +29,14 @@ model checkpoint holds without opening Python. A terminal sits next to your file
 
 <sub>Git folders with their branch · a terminal beside the files · an HDF5 dataset · a JSON value and its path</sub>
 
+<br>
+
+**Install:** the [macOS DMG](https://github.com/quangtiencs/matrix_finder/releases/latest) (Apple silicon), or the script on macOS and Linux ([details](#install)):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash
+```
+
 </div>
 
 ---
