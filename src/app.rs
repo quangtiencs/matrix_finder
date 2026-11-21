@@ -221,6 +221,9 @@ pub struct App {
     /// The narrowest the sidebar can be without its content spilling past its edge
     /// (the app menu row): learned from the frames where it did.
     sidebar_min: f32,
+    /// X11: the window's own cursor is set (see `own_cursor`); 0 not yet, 1 hidden for a
+    /// frame, 2 done.
+    cursor_owned: u8,
     /// Exact destination of a drag & drop awaiting confirmation.
     dialog_dst: Option<Location>,
     /// The suggestions and folder tree of a dialog's folder field (Copy / Move to,
@@ -390,6 +393,7 @@ impl App {
             pane_rects: Vec::new(),
             drive_rows: Vec::new(),
             sidebar_min: 0.0,
+            cursor_owned: 0,
             dialog_dst: None,
             dialog_path: Default::default(),
             logo_large: None,
@@ -562,6 +566,24 @@ impl App {
     }
 
     /// The pane that "other panel" commands target, if there is more than one.
+    /// On X11 (and XWayland) winit never sets the window's cursor while it is the default
+    /// arrow, so the window shows the screen's cursor instead: the desktop's spinning
+    /// "starting" cursor while it waits for the app to say it has started, which eframe
+    /// never does. Hiding the cursor for one frame and showing it again makes winit set
+    /// the arrow on the window for good. Runs last, so no widget's cursor overrides it.
+    fn own_cursor(&mut self, ctx: &egui::Context) {
+        if !cfg!(target_os = "linux") || self.cursor_owned == 2 || !ctx.input(|i| i.pointer.has_pointer()) {
+            return;
+        }
+        if self.cursor_owned == 0 {
+            ctx.set_cursor_icon(egui::CursorIcon::None);
+            self.cursor_owned = 1;
+            ctx.request_repaint();
+        } else {
+            self.cursor_owned = 2;
+        }
+    }
+
     fn other(&self) -> Option<usize> {
         if self.panes.len() < 2 {
             return None;
@@ -6682,6 +6704,7 @@ impl eframe::App for App {
         self.drag_ghost(ctx);
         self.copy_prompts_ui(ctx);
         self.toasts_ui(ctx);
+        self.own_cursor(ctx);
         if let Some(text) = self.copy_text.take() {
             ctx.copy_text(text);
         }
