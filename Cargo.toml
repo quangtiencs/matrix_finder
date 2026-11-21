@@ -2,7 +2,7 @@
 name = "matrix_finder"
 description = "Matrix Finder: a cross-platform dual-panel file manager"
 license = "MIT"
-version = "0.11.0"
+version = "0.11.1"
 edition = "2021"
 rust-version = "1.85"
 
@@ -85,3 +85,10 @@ raw-window-handle = "0.6"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Startup notification on Wayland (src/activation.rs): the same crates winit uses.
+[target.'cfg(target_os = "linux")'.dependencies]
+raw-window-handle = "0.6"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-client = "0.31"
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }

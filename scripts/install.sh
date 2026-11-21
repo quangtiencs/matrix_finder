@@ -551,8 +551,8 @@ else
     # The dock matches the window to this entry: on Wayland by the file name (the
     # window's app id is $APP_ID), on X11 by StartupWMClass. winit keeps one name for
     # both, so the X11 window class is $APP_ID too (not the program's name).
-    # StartupNotify=false: eframe cannot tell the desktop the app has started, which
-    # left its spinning "starting" cursor up until it timed out.
+    # StartupNotify=true: the desktop hands the app a startup token, which the window
+    # uses (src/activation.rs) to end the desktop's "starting" cursor and take the focus.
     desktop=$(mktemp)
     cat >"$desktop" <<EOF
 [Desktop Entry]
@@ -563,7 +563,7 @@ Comment=Dual-panel file manager with tabs, a terminal and previews
 Exec="$bin_dir/$bin" %f
 Icon=$APP_ID
 Terminal=false
-StartupNotify=false
+StartupNotify=true
 StartupWMClass=$APP_ID
 Categories=System;FileTools;FileManager;
 Keywords=files;folders;file manager;dual panel;commander;terminal;

@@ -1,6 +1,7 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 //! Matrix Finder: a cross-platform dual-panel file manager.
 
+mod activation;
 mod agents;
 mod app;
 mod archive;
@@ -68,11 +69,8 @@ fn main() -> eframe::Result<()> {
             std::process::exit(code);
         }
     };
-    // The desktop's startup notification token: eframe cannot hand it to the window, so
-    // the desktop's "starting" cursor runs until it times out (the .desktop file asks for
-    // none now). Not passed on to terminals and programs started from here either.
-    std::env::remove_var("DESKTOP_STARTUP_ID");
-    std::env::remove_var("XDG_ACTIVATION_TOKEN");
+    // The desktop's startup token, for the window (and not for programs started from here).
+    activation::take_token();
     let cfg = config::Settings::load();
     let cwd = std::env::current_dir().ok();
     let from_terminal = std::io::IsTerminal::is_terminal(&std::io::stdin());

@@ -3317,7 +3317,7 @@ dependencies = [
 
 [[package]]
 name = "matrix_finder"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "alacritty_terminal",
  "apache-avro",
@@ -3375,6 +3375,9 @@ dependencies = [
  "unicode-normalization",
  "unrar",
  "walkdir",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
  "wuff",
  "x509-parser",
  "xz2",
