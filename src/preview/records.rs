@@ -3,7 +3,7 @@
 //! holds more records than the table shows.
 use crate::i18n::t;
 use crate::util::fmt_count;
-use crate::preview::table::{clip_cell, finish_sheet, Cell, TableData, MAX_ROWS};
+use crate::preview::sheet::{clip_cell, finish_sheet, Cell, TableData, MAX_ROWS};
 use crate::util::{ext_of, Res};
 
 pub const MAX_READ: u64 = 32 * 1024 * 1024;
@@ -25,7 +25,7 @@ fn text_of(bytes: &[u8]) -> String {
     }
 }
 
-fn sheet_of(title: String, columns: Vec<String>, rows: Vec<Vec<String>>, total: usize) -> crate::preview::table::Sheet {
+fn sheet_of(title: String, columns: Vec<String>, rows: Vec<Vec<String>>, total: usize) -> crate::preview::sheet::Sheet {
     let total = total as u64;
     let types = Some(vec!["text".to_string(); columns.len()]);
     let rows: Vec<Vec<Cell>> = rows.into_iter().take(MAX_ROWS).map(|r| r.into_iter().map(|c| (!c.is_empty()).then(|| clip_cell(c))).collect()).collect();

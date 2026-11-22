@@ -496,7 +496,7 @@ impl ModelView {
         if self.mesh.truncated {
             facts.push_str(&format!(" · {}", t("(truncated)")));
         }
-        crate::preview::header_row(ui, th, name, &[(facts, th.weak)], |ui| {
+        crate::preview::widgets::header_row(ui, th, name, &[(facts, th.weak)], |ui| {
             if ui.button(t("Reset view")).clicked() {
                 self.cam = Camera::default();
             }
@@ -535,7 +535,7 @@ impl ModelView {
             let image = egui::ColorImage::from_rgba_premultiplied(size, &rgba);
             match &mut self.texture {
                 Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
-                None => self.texture = Some(crate::preview::upload_texture(ui.ctx(), format!("model:{key}"), image)),
+                None => self.texture = Some(crate::preview::widgets::upload_texture(ui.ctx(), format!("model:{key}"), image)),
             }
             self.drawn = Some(state);
         }

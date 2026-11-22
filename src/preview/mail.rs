@@ -2,7 +2,7 @@
 //! of the message (its plain part, or its HTML part as text) and the attachments by
 //! name and size. Attachments are never decoded, and HTML is read as text: nothing in
 //! a message is loaded from the network or run.
-use crate::preview::{MdBlock, Span};
+use crate::preview::markdown::{MdBlock, Span};
 use crate::preview::textdocs::{Document, Section};
 use crate::util::Res;
 use base64::Engine;

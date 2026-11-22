@@ -1,7 +1,7 @@
 //! Readable previews of RTF, EPUB, ODF, Word and PowerPoint documents: text and its
 //! structure (headings, lists, tables, emphasis, slides), not page layout, shown by the
 //! Markdown view.
-use crate::preview::{clip_block_text, plain_code_block, MdBlock, Span, MAX_BLOCK_TEXT};
+use crate::preview::markdown::{clip_block_text, plain_code_block, MdBlock, Span, MAX_BLOCK_TEXT};
 use crate::util::{ext_of, Res};
 use quick_xml::events::Event;
 use quick_xml::Reader;
@@ -559,7 +559,7 @@ fn parse_epub<R: Read + Seek>(reader: R, syntax_theme: &str) -> Res<Document> {
     let mut budget = MAX_TOTAL;
     if let Ok(encryption) = zip_text(&mut zip, "META-INF/encryption.xml", &mut budget) {
         if epub_is_protected(&encryption) {
-            return Err(crate::preview::LOCKED.to_string());
+            return Err(crate::preview::widgets::LOCKED.to_string());
         }
     }
     let container = zip_text(&mut zip, "META-INF/container.xml", &mut budget)?;
@@ -650,7 +650,7 @@ fn parse_odt<R: Read + Seek>(reader: R) -> Res<Document> {
     let mut budget = MAX_TOTAL;
     // An encrypted document says so in its manifest; its content.xml is then not XML at all.
     if zip_text(&mut zip, "META-INF/manifest.xml", &mut budget).is_ok_and(|m| m.contains("encryption-data")) {
-        return Err(crate::preview::LOCKED.to_string());
+        return Err(crate::preview::widgets::LOCKED.to_string());
     }
     let content = zip_text(&mut zip, "content.xml", &mut budget)?;
     let meta = zip_text(&mut zip, "meta.xml", &mut budget).unwrap_or_default();
@@ -955,7 +955,7 @@ const MAX_SLIDES: usize = 2000;
 fn office_zip<R: Read + Seek>(mut reader: R, format: &str) -> Res<zip::ZipArchive<R>> {
     let mut magic = [0u8; 8];
     if reader.read_exact(&mut magic).is_ok() && magic == OLE_MAGIC {
-        return Err(crate::preview::LOCKED.to_string());
+        return Err(crate::preview::widgets::LOCKED.to_string());
     }
     reader.seek(std::io::SeekFrom::Start(0)).map_err(|e| e.to_string())?;
     zip::ZipArchive::new(reader).map_err(|e| format!("{format}: {e}"))
@@ -1331,7 +1331,7 @@ fn parse_odp<R: Read + Seek>(reader: R) -> Res<Document> {
     let mut zip = zip::ZipArchive::new(reader).map_err(|e| format!("ODP: {e}"))?;
     let mut budget = MAX_TOTAL;
     if zip_text(&mut zip, "META-INF/manifest.xml", &mut budget).is_ok_and(|m| m.contains("encryption-data")) {
-        return Err(crate::preview::LOCKED.to_string());
+        return Err(crate::preview::widgets::LOCKED.to_string());
     }
     let content = zip_text(&mut zip, "content.xml", &mut budget)?;
     let meta = zip_text(&mut zip, "meta.xml", &mut budget).unwrap_or_default();
@@ -1567,11 +1567,11 @@ c</pre><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>
     fn protected_documents_are_recognised() {
         let manifest = r#"<manifest:manifest><manifest:file-entry manifest:full-path="content.xml"><manifest:encryption-data/></manifest:file-entry></manifest:manifest>"#;
         let e = load("a.odt", package(&[("META-INF/manifest.xml", manifest), ("content.xml", "scrambled")]), "InspiredGitHub").err().unwrap();
-        assert_eq!(e, crate::preview::LOCKED);
+        assert_eq!(e, crate::preview::widgets::LOCKED);
         let method = |algorithm: &str| format!(r#"<encryption><EncryptedData><EncryptionMethod Algorithm="{algorithm}"/></EncryptedData></encryption>"#);
         let drm = method("http://www.w3.org/2001/04/xmlenc#aes128-cbc");
         let e = load("a.epub", package(&[("META-INF/encryption.xml", &drm)]), "InspiredGitHub").err().unwrap();
-        assert_eq!(e, crate::preview::LOCKED);
+        assert_eq!(e, crate::preview::widgets::LOCKED);
         // Obfuscated fonts are not protection: the book still reads.
         assert!(!epub_is_protected(&method("http://www.idpf.org/2008/embedding")));
         assert!(!epub_is_protected(&method("http://ns.adobe.com/pdf/enc#RC")));

@@ -1,12 +1,14 @@
 //! File previews: images (raster + SVG), Markdown, syntax-highlighted code,
 //! plain text and a hex dump for binaries, and the views of formats read elsewhere.
 pub mod audio;
+pub mod code;
 pub mod certview;
 pub mod datameta;
 pub mod docview;
 pub mod fontview;
 pub mod geoview;
 pub mod jsonview;
+pub mod markdown;
 pub mod mail;
 pub mod media;
 pub mod model3d;
@@ -16,34 +18,27 @@ pub mod rawphoto;
 pub mod rdata;
 pub mod records;
 pub mod scidata;
+pub mod sheet;
 pub mod table;
 pub mod tensors;
 pub mod textdocs;
+pub mod widgets;
 use crate::style::theme::Theme;
+use crate::preview::code::{code_view, highlight, Styled};
+use crate::preview::markdown::{markdown_ui, parse_markdown, MdBlock};
+use crate::preview::widgets::{header_row, locked_ui, upload_texture, LOCKED};
 use crate::util::{ext_of, human_size, Res};
-use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, TextureHandle};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::{Arc, LazyLock};
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, ThemeSet};
-use syntect::parsing::{SyntaxReference, SyntaxSet};
-use syntect::util::LinesWithEndings;
-
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
-static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+use std::sync::Arc;
 
 const MAX_TEXT: usize = 2 * 1024 * 1024;
 const MAX_LINES: usize = 20_000;
 pub const MAX_IMAGE: usize = 80 * 1024 * 1024;
 /// Most memory one decoded image may take. Larger ones are refused before decoding.
 const MAX_DECODED_IMAGE: u64 = 384 * 1024 * 1024;
-/// Laying out text takes about 200 bytes per character, kept while it is on screen. One
-/// block of Markdown is limited to this much text, and one document to `MAX_MARKDOWN`.
-pub const MAX_BLOCK_TEXT: usize = 64 * 1024;
-const MAX_MARKDOWN: usize = 1024 * 1024;
 /// How many previews may load at the same time. The cursor can cross a folder of huge
 /// files far faster than they can be read, and each may need hundreds of megabytes.
 const MAX_LOADING: usize = 3;
@@ -178,28 +173,6 @@ pub fn too_large(name: &str, size: u64, readable: Option<u64>) -> bool {
     size > size_limit(name) || (!start_is_enough && readable.is_some_and(|r| size > r))
 }
 
-pub type Styled = Vec<(Color32, String, bool)>; // colour, text, italic
-
-#[derive(Clone)]
-pub struct Span {
-    pub text: String,
-    pub bold: bool,
-    pub italic: bool,
-    pub code: bool,
-    pub strike: bool,
-    pub link: bool,
-}
-
-pub enum MdBlock {
-    Heading(u8, Vec<Span>),
-    Para(Vec<Span>),
-    Quote(Vec<Span>),
-    Item { depth: usize, marker: String, spans: Vec<Span> },
-    Code { lines: Vec<Styled>, bg: Color32 },
-    Table { rows: Vec<Vec<Vec<Span>>>, has_header: bool },
-    Rule,
-}
-
 enum Loaded {
     /// `details` are the photo's EXIF facts, if it has any.
     Image { rgba: Vec<u8>, w: usize, h: usize, orig: (u32, u32), premultiplied: bool, fmt: String, more_frames: Vec<AnimFrame>, first_delay: f32, details: Vec<crate::preview::certview::Row> },
@@ -207,7 +180,7 @@ enum Loaded {
     Markdown { blocks: Vec<MdBlock>, source: Vec<Styled>, bg: Color32 },
     /// `total` is how much was read; `more` when the file goes on past it.
     Hex { bytes: Vec<u8>, total: usize, more: bool },
-    Table { data: crate::preview::table::TableData, source: Option<(Vec<Styled>, Color32)> },
+    Table { data: crate::preview::sheet::TableData, source: Option<(Vec<Styled>, Color32)> },
     Pdf(Box<crate::preview::docview::PdfView>),
     Notebook(Box<crate::preview::docview::NotebookView>),
     Model(Box<crate::preview::model3d::ModelView>),
@@ -291,27 +264,6 @@ impl Drop for Preview {
 
 pub type Loader = Box<dyn FnOnce() -> Res<Vec<u8>> + Send>;
 
-/// The error of a document protected by a password or DRM, which only its own app can open.
-pub const LOCKED: &str = "\u{1}locked";
-
-/// The small message for a protected file. `Enter password` is offered if this app can
-/// open it, which it can for archives; returns whether it was pressed.
-pub fn locked_ui(ui: &mut egui::Ui, theme: &Theme, t: &dyn Fn(&str) -> String, can_enter_password: bool) -> bool {
-    let mut pressed = false;
-    let room = ui.available_height();
-    ui.vertical_centered(|ui| {
-        ui.add_space((room * 0.5 - 40.0).max(0.0));
-        ui.label(egui::RichText::new(format!("🔒 {}", t("Password protected"))).size(13.5).color(theme.text));
-        if can_enter_password {
-            ui.add_space(4.0);
-            pressed = ui.button(t("Enter password…")).clicked();
-        } else {
-            ui.label(egui::RichText::new(t("Press Enter to open it in its own app.")).size(12.0).color(theme.weak));
-        }
-    });
-    pressed
-}
-
 /// A turn to load a preview; the next one in line starts when it is dropped.
 struct LoadingTurn;
 
@@ -374,27 +326,6 @@ fn in_background_waking(cancel: Option<crate::preview::media::Cancel>, wake: Wak
         }
     });
     rx
-}
-
-/// Upload an image as a texture. The graphics card has a maximum size, and going over
-/// it is a fatal error, so anything larger is scaled down first.
-pub fn upload_texture(ctx: &egui::Context, name: impl Into<String>, image: egui::ColorImage) -> TextureHandle {
-    let max = ctx.input(|i| i.max_texture_side).max(1);
-    let [w, h] = image.size;
-    let image = if w.max(h) > max {
-        let scale = max as f64 / w.max(h) as f64;
-        let (nw, nh) = (((w as f64 * scale) as usize).max(1), ((h as f64 * scale) as usize).max(1));
-        let mut pixels = Vec::with_capacity(nw * nh);
-        for y in 0..nh {
-            for x in 0..nw {
-                pixels.push(image.pixels[(y * h / nh) * w + x * w / nw]);
-            }
-        }
-        egui::ColorImage { size: [nw, nh], pixels }
-    } else {
-        image
-    };
-    ctx.load_texture(name, image, egui::TextureOptions::LINEAR)
 }
 
 impl Preview {
@@ -863,58 +794,6 @@ impl Preview {
     }
 }
 
-/// Below this much room beside its buttons, the name of a preview gets a line of its own.
-const NAME_ROOM: f32 = 220.0;
-
-/// The title row of a preview: the file name and its facts on the left, cut with "…"
-/// when they do not fit (the whole text shows on hover), and the buttons that `buttons`
-/// adds, right to left, on the right. The buttons always keep their room; when they
-/// leave too little for the name, it goes on a line of its own above them.
-pub fn header_row(ui: &mut egui::Ui, theme: &Theme, name: &str, facts: &[(String, Color32)], buttons: impl FnOnce(&mut egui::Ui)) {
-    // How wide the buttons were last time: they are drawn before the name.
-    let id = ui.id().with("preview-header-buttons");
-    let buttons_w: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
-    let own_line = ui.available_width() - buttons_w < NAME_ROOM;
-    let name_label = || egui::Label::new(egui::RichText::new(name).strong().color(theme.accent)).truncate();
-    if own_line {
-        ui.add(name_label());
-    }
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let before = ui.available_width();
-            buttons(ui);
-            let used = before - ui.available_width();
-            if (used - buttons_w).abs() > 0.5 {
-                ui.data_mut(|d| d.insert_temp(id, used));
-                ui.ctx().request_repaint();
-            }
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let font = egui::TextStyle::Body.resolve(ui.style());
-                let gap = ui.spacing().item_spacing.x;
-                let room = ui.available_width();
-                let text: Vec<&str> = facts.iter().map(|(s, _)| s.as_str()).collect();
-                let facts_w = if facts.is_empty() { 0.0 } else { ui.fonts(|f| f.layout_no_wrap(text.join(" "), font.clone(), theme.weak).size().x) + gap };
-                if !own_line {
-                    // The name gets what the facts leave, and at least half the row.
-                    let name_room = (room - facts_w).max(room * 0.5).max(24.0);
-                    ui.allocate_ui_with_layout(egui::vec2(name_room, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name_label()));
-                }
-                if !facts.is_empty() {
-                    let mut job = LayoutJob::default();
-                    for (i, (s, c)) in facts.iter().enumerate() {
-                        let format = TextFormat { font_id: font.clone(), color: *c, ..Default::default() };
-                        if i > 0 {
-                            job.append(" ", 0.0, format.clone());
-                        }
-                        job.append(s, 0.0, format);
-                    }
-                    ui.add(egui::Label::new(job).truncate());
-                }
-            });
-        });
-    });
-}
-
 fn summary_ui(ui: &mut egui::Ui, s: &Summary, texture: Option<&TextureHandle>, theme: &Theme) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         if let (Some(p), Some(tex)) = (&s.picture, texture) {
@@ -977,7 +856,7 @@ fn rows_ui(ui: &mut egui::Ui, rows: &[crate::preview::certview::Row], theme: &Th
 
 fn table_ui(
     ui: &mut egui::Ui,
-    data: &crate::preview::table::TableData,
+    data: &crate::preview::sheet::TableData,
     sheet_idx: &mut usize,
     filter: &mut String,
     theme: &Theme,
@@ -1019,7 +898,7 @@ fn table_ui(
             .filter(|&i| sheet.rows[i].iter().any(|c| c.as_deref().is_some_and(|v| v.to_lowercase().contains(&needle))))
             .collect()
     };
-    let shown_info = if sheet.total_rows.is_some_and(|n| n as usize > sheet.rows.len()) || sheet.total_rows.is_none() && sheet.rows.len() >= crate::preview::table::MAX_ROWS {
+    let shown_info = if sheet.total_rows.is_some_and(|n| n as usize > sheet.rows.len()) || sheet.total_rows.is_none() && sheet.rows.len() >= crate::preview::sheet::MAX_ROWS {
         format!("{} {} {}", t("Showing the first"), crate::util::fmt_count(sheet.rows.len() as u64), t("rows"))
     } else {
         String::new()
@@ -1131,131 +1010,6 @@ fn checkerboard(p: &egui::Painter, rect: egui::Rect, theme: &Theme) {
         }
         row += 1;
     }
-}
-
-pub fn code_view(ui: &mut egui::Ui, lines: &[Styled], bg: Color32, wrap: bool, theme: &Theme) {
-    let font = FontId::monospace(13.0);
-    let gutter = lines.len().to_string().len();
-    let mut job = LayoutJob::default();
-    for (i, line) in lines.iter().enumerate() {
-        job.append(
-            &format!("{:>w$}  ", i + 1, w = gutter),
-            0.0,
-            TextFormat { font_id: font.clone(), color: theme.weak, ..Default::default() },
-        );
-        for (c, s, italic) in line {
-            job.append(s, 0.0, TextFormat { font_id: font.clone(), color: *c, italics: *italic, ..Default::default() });
-        }
-        if !line.last().is_some_and(|l| l.1.ends_with('\n')) {
-            job.append("\n", 0.0, TextFormat { font_id: font.clone(), ..Default::default() });
-        }
-    }
-    job.wrap.max_width = if wrap { ui.available_width() - 16.0 } else { f32::INFINITY };
-    egui::Frame::NONE.fill(bg).inner_margin(6.0).show(ui, |ui| {
-        let sa = if wrap { egui::ScrollArea::vertical() } else { egui::ScrollArea::both() };
-        sa.auto_shrink([false, false]).show(ui, |ui| {
-            let label = egui::Label::new(job);
-            ui.add(if wrap { label.wrap() } else { label.extend() });
-        });
-    });
-}
-
-/// Highlight `code` (language name or extension) into styled lines + background.
-pub fn highlight_lines(code: &str, hint: &str, theme_name: &str) -> (Vec<Styled>, Color32, String, bool) {
-    highlight(code, hint, theme_name)
-}
-
-/// A code block without line numbers (Markdown / notebook cells).
-pub fn code_view_styled(ui: &mut egui::Ui, lines: &[Styled], bg: Color32, theme: &Theme, width: f32) {
-    let _ = theme;
-    let mut job = LayoutJob::default();
-    let font = FontId::monospace(12.5);
-    for (i, line) in lines.iter().enumerate() {
-        for (c, s, it) in line {
-            job.append(s, 0.0, TextFormat { font_id: font.clone(), color: *c, italics: *it, ..Default::default() });
-        }
-        if i + 1 < lines.len() && !line.last().is_some_and(|l| l.1.ends_with('\n')) {
-            job.append("\n", 0.0, TextFormat { font_id: font.clone(), ..Default::default() });
-        }
-    }
-    egui::Frame::NONE.fill(bg).corner_radius(6).inner_margin(8.0).show(ui, |ui| {
-        ui.set_min_width(width - 16.0);
-        ui.set_max_width(width - 16.0);
-        egui::ScrollArea::horizontal().id_salt(ui.next_auto_id()).show(ui, |ui| {
-            ui.add(egui::Label::new(job).extend());
-        });
-    });
-}
-
-fn find_syntax(hint: &str) -> &'static SyntaxReference {
-    let ss = &*SYNTAXES;
-    let h = hint.to_lowercase();
-    let alias = match h.as_str() {
-        "ts" | "tsx" | "typescript" | "mjs" | "cjs" | "jsx" | "vue" | "svelte" => "js",
-        "kt" | "kts" | "kotlin" | "groovy" | "gradle" | "dart" => "java",
-        "toml" | "ini" | "cfg" | "conf" | "properties" | "env" => "ini",
-        "zsh" | "fish" | "bash" | "shell" => "sh",
-        "jsonc" => "json",
-        "yml" => "yaml",
-        "htm" => "html",
-        "scss" | "sass" | "less" => "css",
-        "hpp" | "hh" | "cc" | "cxx" | "c++" => "cpp",
-        "ps1" | "bat" | "cmd" => "bat",
-        "dockerfile" | "justfile" => "sh",
-        "rust" => "rs",
-        "python" => "py",
-        "javascript" => "js",
-        "golang" => "go",
-        "ruby" => "rb",
-        "csharp" | "c#" => "cs",
-        "swift" | "zig" | "nim" => "rs",
-        "patch" => "diff",
-        "tsv" => "csv",
-        other => other,
-    };
-    ss.find_syntax_by_extension(alias)
-        .or_else(|| ss.find_syntax_by_token(alias))
-        .or_else(|| if alias == "ini" { ss.find_syntax_by_extension("yaml") } else { None })
-        .unwrap_or_else(|| ss.find_syntax_plain_text())
-}
-
-fn to_color(c: syntect::highlighting::Color) -> Color32 {
-    Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
-}
-
-fn highlight(code: &str, hint: &str, theme_name: &str) -> (Vec<Styled>, Color32, String, bool) {
-    let syntax = find_syntax(hint);
-    let th = THEMES
-        .themes
-        .get(theme_name)
-        .or_else(|| THEMES.themes.values().next())
-        .expect("syntect themes");
-    let bg = th.settings.background.map(to_color).unwrap_or(Color32::from_gray(30));
-    let fg = th.settings.foreground.map(to_color).unwrap_or(Color32::LIGHT_GRAY);
-    let mut h = HighlightLines::new(syntax, th);
-    let mut out = Vec::new();
-    let mut truncated = false;
-    for (i, line) in LinesWithEndings::from(code).enumerate() {
-        if i >= MAX_LINES {
-            truncated = true;
-            break;
-        }
-        // Very long lines (minified files) are not highlighted.
-        if line.len() > 4000 {
-            out.push(vec![(fg, line.chars().take(4000).collect::<String>() + "…\n", false)]);
-            continue;
-        }
-        match h.highlight_line(line, &SYNTAXES) {
-            Ok(ranges) => out.push(
-                ranges
-                    .into_iter()
-                    .map(|(st, s)| (to_color(st.foreground), s.replace('\t', "    "), st.font_style.contains(FontStyle::ITALIC)))
-                    .collect(),
-            ),
-            Err(_) => out.push(vec![(fg, line.to_string(), false)]),
-        }
-    }
-    (out, bg, syntax.name.clone(), truncated)
 }
 
 #[cfg(test)]
@@ -1443,20 +1197,6 @@ mod animation_tests {
         let cancel = Arc::new(AtomicBool::new(false));
         assert!(decode_animation("gif", &bytes, &cancel).is_none());
         assert!(decode_oriented(&bytes).is_err());
-    }
-
-    #[test]
-    fn long_text_is_clipped_for_layout() {
-        let blocks = parse_markdown(&"word ".repeat(100_000), "InspiredGitHub");
-        let MdBlock::Para(spans) = &blocks[0] else { panic!() };
-        assert!(spans.iter().map(|s| s.text.len()).sum::<usize>() <= MAX_BLOCK_TEXT + 8);
-        // Over the whole document's limit: cut, and it says so.
-        let many = "para\n\n".repeat(400_000);
-        let blocks = parse_markdown(&many, "InspiredGitHub");
-        assert!(matches!(blocks.last(), Some(MdBlock::Para(s)) if s[0].text.contains("truncated")));
-        let mut spans = vec![Span { text: "é".repeat(10), bold: false, italic: false, code: false, strike: false, link: false }];
-        clip_spans(&mut spans, 5);
-        assert_eq!(spans[0].text, "éé…", "cut between characters");
     }
 
     #[test]
@@ -2075,352 +1815,7 @@ fn render_svg(bytes: &[u8], max_texture: usize) -> Loaded {
     }
 }
 
-/// Plain text as a code block, for documents that have preformatted text.
-pub fn plain_code_block(code: &str, syntax_theme: &str) -> MdBlock {
-    let code = &code[..floor_char(code, MAX_MARKDOWN / 4)];
-    let (lines, bg, _, _) = highlight(code, "txt", syntax_theme);
-    MdBlock::Code { lines, bg }
-}
-
-/// The largest length at most `max` that ends between two characters of `s`.
-fn floor_char(s: &str, max: usize) -> usize {
-    if s.len() <= max {
-        return s.len();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
-}
-
-/// Keep at most `max` bytes of text across these spans.
-fn clip_spans(spans: &mut Vec<Span>, max: usize) {
-    let mut left = max;
-    let mut cut = false;
-    spans.retain_mut(|s| {
-        if cut {
-            return false;
-        }
-        if s.text.len() > left {
-            s.text.truncate(floor_char(&s.text, left));
-            s.text.push('…');
-            cut = true;
-        } else {
-            left -= s.text.len();
-        }
-        true
-    });
-}
-
-/// Limit how much text each block holds (see `MAX_BLOCK_TEXT`).
-pub fn clip_block_text(blocks: &mut [MdBlock]) {
-    for b in blocks {
-        match b {
-            MdBlock::Heading(_, spans) | MdBlock::Para(spans) | MdBlock::Quote(spans) | MdBlock::Item { spans, .. } => clip_spans(spans, MAX_BLOCK_TEXT),
-            MdBlock::Table { rows, .. } => rows.iter_mut().flatten().for_each(|cell| clip_spans(cell, MAX_BLOCK_TEXT / 16)),
-            MdBlock::Code { .. } | MdBlock::Rule => {}
-        }
-    }
-}
-
 // ---------------------------------------------------------------- markdown
-
-pub fn parse_markdown(src: &str, syntax_theme: &str) -> Vec<MdBlock> {
-    let end = floor_char(src, MAX_MARKDOWN);
-    let mut blocks = parse_markdown_blocks(&src[..end], syntax_theme);
-    clip_block_text(&mut blocks);
-    if end < src.len() {
-        blocks.push(MdBlock::Para(vec![Span { text: crate::i18n::t("(truncated)"), bold: false, italic: true, code: false, strike: false, link: false }]));
-    }
-    blocks
-}
-
-fn parse_markdown_blocks(src: &str, syntax_theme: &str) -> Vec<MdBlock> {
-    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
-    let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-    let mut blocks = Vec::new();
-    let mut buf: Vec<Span> = Vec::new();
-    let (mut bold, mut italic, mut strike, mut link) = (0, 0, 0, 0);
-    let mut lists: Vec<Option<u64>> = Vec::new();
-    let mut marker: Option<String> = None;
-    let mut quote = 0;
-    let mut code: Option<(String, String)> = None;
-    let mut heading: Option<u8> = None;
-    let mut table: Option<(Vec<Vec<Vec<Span>>>, Vec<Vec<Span>>, bool)> = None;
-    let mut in_head = false;
-    let mut image_alt: Option<String> = None;
-
-    macro_rules! push_span {
-        ($text:expr, $code:expr) => {{
-            let s = Span {
-                text: $text,
-                bold: bold > 0 || heading.is_some(),
-                italic: italic > 0,
-                code: $code,
-                strike: strike > 0,
-                link: link > 0,
-            };
-            buf.push(s);
-        }};
-    }
-
-    let flush_item = |buf: &mut Vec<Span>, marker: &mut Option<String>, lists: &Vec<Option<u64>>, blocks: &mut Vec<MdBlock>| {
-        if !buf.is_empty() || marker.is_some() {
-            blocks.push(MdBlock::Item {
-                depth: lists.len().saturating_sub(1),
-                marker: marker.take().unwrap_or_default(),
-                spans: std::mem::take(buf),
-            });
-        }
-    };
-
-    for ev in Parser::new_ext(src, opts) {
-        match ev {
-            Event::Start(tag) => match tag {
-                Tag::Heading { level, .. } => heading = Some(level as u8),
-                Tag::BlockQuote { .. } => quote += 1,
-                Tag::CodeBlock(kind) => {
-                    let lang = match kind {
-                        CodeBlockKind::Fenced(l) => l.split(|c: char| c == ',' || c.is_whitespace()).next().unwrap_or("").to_string(),
-                        CodeBlockKind::Indented => String::new(),
-                    };
-                    code = Some((lang, String::new()));
-                }
-                Tag::List(start) => {
-                    if !lists.is_empty() {
-                        flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                    }
-                    lists.push(start);
-                }
-                Tag::Item => {
-                    flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                    let m = match lists.last_mut() {
-                        Some(Some(n)) => {
-                            let s = format!("{n}.");
-                            *n += 1;
-                            s
-                        }
-                        _ => ["•", "–", "▪"][(lists.len().saturating_sub(1)) % 3].to_string(),
-                    };
-                    marker = Some(m);
-                }
-                Tag::Table(_) => table = Some((Vec::new(), Vec::new(), false)),
-                Tag::TableHead => in_head = true,
-                Tag::TableRow | Tag::TableCell => {}
-                Tag::Emphasis => italic += 1,
-                Tag::Strong => bold += 1,
-                Tag::Strikethrough => strike += 1,
-                Tag::Link { .. } => link += 1,
-                Tag::Image { .. } => image_alt = Some(String::new()),
-                _ => {}
-            },
-            Event::End(tag) => match tag {
-                TagEnd::Paragraph => {
-                    if !lists.is_empty() {
-                        flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                        marker = None;
-                    } else if quote > 0 {
-                        blocks.push(MdBlock::Quote(std::mem::take(&mut buf)));
-                    } else if !buf.is_empty() {
-                        blocks.push(MdBlock::Para(std::mem::take(&mut buf)));
-                    }
-                }
-                TagEnd::Heading { .. } => {
-                    blocks.push(MdBlock::Heading(heading.take().unwrap_or(1), std::mem::take(&mut buf)));
-                }
-                TagEnd::BlockQuote { .. } => quote -= 1,
-                TagEnd::CodeBlock => {
-                    if let Some((lang, mut text)) = code.take() {
-                        while text.ends_with('\n') {
-                            text.pop();
-                        }
-                        let (lines, bg, _, _) = highlight(&text, if lang.is_empty() { "txt" } else { &lang }, syntax_theme);
-                        blocks.push(MdBlock::Code { lines, bg });
-                    }
-                }
-                TagEnd::List { .. } => {
-                    flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                    lists.pop();
-                }
-                TagEnd::Item => {
-                    if !buf.is_empty() {
-                        flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                    }
-                    marker = None;
-                }
-                TagEnd::TableCell => {
-                    if let Some((_, row, _)) = &mut table {
-                        row.push(std::mem::take(&mut buf));
-                    }
-                }
-                TagEnd::TableHead => {
-                    in_head = false;
-                    if let Some((rows, row, has)) = &mut table {
-                        rows.push(std::mem::take(row));
-                        *has = true;
-                    }
-                }
-                TagEnd::TableRow => {
-                    if let Some((rows, row, _)) = &mut table {
-                        rows.push(std::mem::take(row));
-                    }
-                }
-                TagEnd::Table => {
-                    if let Some((rows, _, has_header)) = table.take() {
-                        blocks.push(MdBlock::Table { rows, has_header });
-                    }
-                }
-                TagEnd::Emphasis => italic -= 1,
-                TagEnd::Strong => bold -= 1,
-                TagEnd::Strikethrough => strike -= 1,
-                TagEnd::Link => link -= 1,
-                TagEnd::Image => {
-                    if let Some(alt) = image_alt.take() {
-                        push_span!(format!("[🖼 {}]", if alt.is_empty() { "image" } else { &alt }), false);
-                    }
-                }
-                _ => {}
-            },
-            Event::Text(t) => {
-                if let Some((_, c)) = &mut code {
-                    c.push_str(&t);
-                } else if let Some(alt) = &mut image_alt {
-                    alt.push_str(&t);
-                } else {
-                    push_span!(t.to_string(), false);
-                }
-            }
-            Event::Code(t) => push_span!(t.to_string(), true),
-            Event::SoftBreak => push_span!(" ".to_string(), false),
-            Event::HardBreak => push_span!("\n".to_string(), false),
-            Event::Rule => blocks.push(MdBlock::Rule),
-            Event::TaskListMarker(done) => {
-                marker = Some(if done { "☑" } else { "☐" }.to_string());
-            }
-            _ => {}
-        }
-    }
-    let _ = in_head;
-    if !buf.is_empty() {
-        blocks.push(MdBlock::Para(buf));
-    }
-    blocks
-}
-
-fn spans_job(spans: &[Span], size: f32, theme: &Theme, base: Color32, width: f32) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    for s in spans {
-        // Reading view: Source Sans (or Source Serif, see Settings → Fonts) for prose,
-        // Source Code Pro for code.
-        let (family, slanted) = crate::style::fonts::reading_font(s.bold, s.italic);
-        let mut fmt = TextFormat {
-            font_id: if s.code { FontId::monospace(size * 0.88) } else { FontId::new(size, family) },
-            color: if s.link {
-                theme.accent
-            } else {
-                base
-            },
-            italics: s.italic && (s.code || slanted),
-            ..Default::default()
-        };
-        if s.code {
-            fmt.background = theme.surface;
-            fmt.color = theme.marked;
-        }
-        if s.link {
-            fmt.underline = egui::Stroke::new(1.0_f32, theme.accent);
-        }
-        if s.strike {
-            fmt.strikethrough = egui::Stroke::new(1.0_f32, base);
-        }
-        job.append(&s.text, 0.0, fmt);
-    }
-    job.wrap.max_width = width;
-    job
-}
-
-pub fn markdown_ui(ui: &mut egui::Ui, blocks: &[MdBlock], theme: &Theme) {
-    let width = ui.available_width() - 8.0;
-    for b in blocks {
-        match b {
-            MdBlock::Heading(level, spans) => {
-                let size = match level {
-                    1 => 26.0,
-                    2 => 21.0,
-                    3 => 18.0,
-                    4 => 16.0,
-                    _ => 15.0,
-                };
-                ui.add_space(6.0);
-                ui.label(spans_job(spans, size, theme, theme.accent, width));
-                if *level <= 2 {
-                    let r = ui.available_rect_before_wrap();
-                    ui.painter().hline(r.x_range(), r.top(), egui::Stroke::new(1.0_f32, theme.border));
-                    ui.add_space(4.0);
-                }
-            }
-            MdBlock::Para(spans) => {
-                ui.label(spans_job(spans, 14.0, theme, theme.text, width));
-                ui.add_space(6.0);
-            }
-            MdBlock::Quote(spans) => {
-                egui::Frame::NONE
-                    .stroke(egui::Stroke::new(0.0_f32, theme.border))
-                    .inner_margin(egui::Margin { left: 10, right: 4, top: 2, bottom: 2 })
-                    .show(ui, |ui| {
-                        let r = ui.label(spans_job(spans, 14.0, theme, theme.weak, width - 20.0)).rect;
-                        ui.painter().vline(r.left() - 7.0, r.y_range(), egui::Stroke::new(3.0_f32, theme.accent));
-                    });
-                ui.add_space(6.0);
-            }
-            MdBlock::Item { depth, marker, spans } => {
-                ui.horizontal_top(|ui| {
-                    ui.add_space(12.0 + *depth as f32 * 18.0);
-                    ui.label(egui::RichText::new(marker).color(theme.accent));
-                    let w = ui.available_width();
-                    ui.label(spans_job(spans, 14.0, theme, theme.text, w));
-                });
-            }
-            MdBlock::Code { lines, bg } => {
-                let mut job = LayoutJob::default();
-                let font = FontId::monospace(12.5);
-                for line in lines {
-                    for (c, s, it) in line {
-                        job.append(s, 0.0, TextFormat { font_id: font.clone(), color: *c, italics: *it, ..Default::default() });
-                    }
-                }
-                egui::Frame::NONE.fill(*bg).inner_margin(8.0).show(ui, |ui| {
-                    ui.set_min_width(width - 16.0);
-                    egui::ScrollArea::horizontal().id_salt(ui.next_auto_id()).show(ui, |ui| {
-                        ui.add(egui::Label::new(job).extend());
-                    });
-                });
-                ui.add_space(6.0);
-            }
-            MdBlock::Table { rows, has_header } => {
-                egui::Grid::new(ui.next_auto_id()).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
-                    for (i, row) in rows.iter().enumerate() {
-                        for cell in row {
-                            let mut c = cell.clone();
-                            if i == 0 && *has_header {
-                                for s in &mut c {
-                                    s.bold = true;
-                                }
-                            }
-                            ui.label(spans_job(&c, 13.5, theme, theme.text, 400.0));
-                        }
-                        ui.end_row();
-                    }
-                });
-                ui.add_space(6.0);
-            }
-            MdBlock::Rule => {
-                ui.separator();
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -2433,31 +1828,6 @@ mod tests {
         assert_eq!(classify("main.rs"), Kind::Code);
         assert_eq!(classify("Makefile"), Kind::Code);
         assert_eq!(classify("x.bin"), Kind::Other);
-    }
-
-    #[test]
-    fn markdown_blocks() {
-        let md = "# Title\n\nSome **bold** and `code`.\n\n- a\n- b\n  1. nested\n\n```rust\nfn main() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> quote\n\n---\n- [x] done\n";
-        let blocks = parse_markdown(md, "base16-ocean.dark");
-        assert!(matches!(blocks[0], MdBlock::Heading(1, _)));
-        assert!(blocks.iter().any(|b| matches!(b, MdBlock::Code { .. })));
-        assert!(blocks.iter().any(|b| matches!(b, MdBlock::Table { .. })));
-        assert!(blocks.iter().any(|b| matches!(b, MdBlock::Quote(_))));
-        assert!(blocks.iter().any(|b| matches!(b, MdBlock::Rule)));
-        let items: Vec<_> = blocks
-            .iter()
-            .filter_map(|b| if let MdBlock::Item { depth, marker, .. } = b { Some((*depth, marker.clone())) } else { None })
-            .collect();
-        assert_eq!(items[0], (0, "•".into()));
-        assert_eq!(items[2], (1, "1.".into()));
-        assert!(items.iter().any(|i| i.1.contains('☑')));
-    }
-
-    #[test]
-    fn highlight_rust() {
-        let (lines, _, lang, _) = highlight("fn main() {}\n", "rs", "base16-ocean.dark");
-        assert_eq!(lang, "Rust");
-        assert!(lines[0].len() > 1);
     }
 
     #[test]

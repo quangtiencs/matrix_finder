@@ -4,7 +4,7 @@
 //! arrays of an `.npz` are shown too.
 use crate::i18n::t;
 use crate::util::fmt_count;
-use crate::preview::table::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_ROWS};
+use crate::preview::sheet::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_ROWS};
 use crate::util::{es, human_size, Res};
 use std::io::{Read, Seek, SeekFrom};
 

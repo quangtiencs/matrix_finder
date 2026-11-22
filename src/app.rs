@@ -205,7 +205,7 @@ pub struct App {
     /// An update check under way, and whether the user asked for it (the menu).
     update_check: Option<(std::sync::mpsc::Receiver<crate::util::Res<crate::system::update::Outcome>>, bool)>,
     /// A newer release found, with its notes ready to show.
-    update_found: Option<(crate::system::update::Release, Vec<crate::preview::MdBlock>)>,
+    update_found: Option<(crate::system::update::Release, Vec<crate::preview::markdown::MdBlock>)>,
     toasts: Vec<Toast>,
     connecting: Option<(ConnectionProfile, bool, Receiver<ConnectResult>)>,
     languages: Vec<(String, String)>,
@@ -530,7 +530,7 @@ impl App {
             Ok(Outcome::Newer(r)) => {
                 self.cfg.update_checked = chrono::Utc::now().timestamp();
                 if manual || r.tag != self.cfg.update_skip {
-                    let notes = crate::preview::parse_markdown(&r.notes, self.theme.syntax);
+                    let notes = crate::preview::markdown::parse_markdown(&r.notes, self.theme.syntax);
                     self.update_found = Some((r, notes));
                 }
             }

@@ -190,7 +190,7 @@ impl App {
                 ui.add_space(6.0);
                 egui::Frame::NONE.fill(th.surface).corner_radius(6).inner_margin(8.0).show(ui, |ui| {
                     egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
-                        crate::preview::markdown_ui(ui, notes, th);
+                        crate::preview::markdown::markdown_ui(ui, notes, th);
                     });
                 });
             }

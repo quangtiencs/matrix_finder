@@ -1,7 +1,7 @@
 //! JSON previews: the document as a tree to open and close, whose rows give their path
 //! (`j['data'][0]['name']`, or as JavaScript, jq or JSONPath) and value to copy.
 use crate::i18n::t;
-use crate::preview::Styled;
+use crate::preview::code::Styled;
 use crate::style::theme::Theme;
 use crate::util::ext_of;
 use egui::{Color32, FontId, Sense};
@@ -423,7 +423,7 @@ impl JsonView {
     pub fn ui(&mut self, ui: &mut egui::Ui, name: &str, key: &str, th: &Theme) {
         let facts = self.facts();
         let mut action = None;
-        crate::preview::header_row(ui, th, name, &[(facts, th.weak)], |ui| {
+        crate::preview::widgets::header_row(ui, th, name, &[(facts, th.weak)], |ui| {
             if self.source.is_some() && ui.selectable_label(self.show_source, t("Source")).clicked() {
                 self.show_source = !self.show_source;
             }
@@ -444,7 +444,7 @@ impl JsonView {
         ui.separator();
         if let (true, Some((lines, bg))) = (self.show_source, &self.source) {
             // Its scroll position belongs to this file.
-            ui.push_id(("source", key), |ui| crate::preview::code_view(ui, lines, *bg, false, th));
+            ui.push_id(("source", key), |ui| crate::preview::code::code_view(ui, lines, *bg, false, th));
             return;
         }
         self.path_bar(ui, key, th);

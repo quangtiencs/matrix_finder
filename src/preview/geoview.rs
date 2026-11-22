@@ -2,7 +2,7 @@
 //! file holds, drawn on a plain grid with x and y at the same scale. There is no map
 //! under them and nothing is fetched.
 use crate::i18n::t;
-use crate::preview::Styled;
+use crate::preview::code::Styled;
 use crate::style::theme::Theme;
 use crate::util::{ext_of, Res};
 use egui::Color32;
@@ -1223,7 +1223,7 @@ impl GeoView {
     pub fn ui(&mut self, ui: &mut egui::Ui, name: &str, key: &str, th: &Theme) {
         // The extent goes with the facts: it is in their tooltip when they are cut.
         let facts = format!("{} · {}", self.facts(), self.bbox_text());
-        crate::preview::header_row(ui, th, name, &[(facts, th.weak)], |ui| {
+        crate::preview::widgets::header_row(ui, th, name, &[(facts, th.weak)], |ui| {
             if self.source.is_some() && ui.selectable_label(self.show_source, t("Source")).clicked() {
                 self.show_source = !self.show_source;
             }
@@ -1234,7 +1234,7 @@ impl GeoView {
         ui.separator();
         if let (true, Some((lines, bg))) = (self.show_source, &self.source) {
             // Its scroll position belongs to this file.
-            ui.push_id(("source", key), |ui| crate::preview::code_view(ui, lines, *bg, false, th));
+            ui.push_id(("source", key), |ui| crate::preview::code::code_view(ui, lines, *bg, false, th));
             return;
         }
         let (rect, resp) = ui.allocate_exact_size(ui.available_size(), egui::Sense::click_and_drag());
@@ -1294,7 +1294,7 @@ impl GeoView {
             let image = egui::ColorImage::from_rgba_premultiplied(size, &pixels);
             match &mut self.texture {
                 Some(tex) => tex.set(image, egui::TextureOptions::LINEAR),
-                None => self.texture = Some(crate::preview::upload_texture(ui.ctx(), format!("geo:{key}"), image)),
+                None => self.texture = Some(crate::preview::widgets::upload_texture(ui.ctx(), format!("geo:{key}"), image)),
             }
             self.drawn = Some(state);
         }

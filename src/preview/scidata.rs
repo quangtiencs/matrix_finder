@@ -1,7 +1,7 @@
 //! More table previews: SQLite, JSON Lines, NumPy, Arrow/Feather and HDF5. Each
 //! shows the first rows of each table or dataset through the same table view.
 use crate::i18n::t;
-use crate::preview::table::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_COLS, MAX_ROWS};
+use crate::preview::sheet::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_COLS, MAX_ROWS};
 use crate::util::{es, Res};
 use std::io::{BufRead, Read, Seek, SeekFrom};
 use std::path::Path;

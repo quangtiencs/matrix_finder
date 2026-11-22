@@ -943,10 +943,10 @@ impl App {
             }
             ui.add_space(4.0);
             crate::style::fonts::set_reading_serif(self.cfg.reading_font == crate::config::ReadingFont::Serif);
-            let sample = crate::preview::parse_markdown("**Quick View** reads *Markdown* like this: plain words, `code` and [links](https://example.com).\n\nThư mục tiếng Việt · Ăă Đđ Ơơ Ưư", th.syntax);
+            let sample = crate::preview::markdown::parse_markdown("**Quick View** reads *Markdown* like this: plain words, `code` and [links](https://example.com).\n\nThư mục tiếng Việt · Ăă Đđ Ơơ Ưư", th.syntax);
             egui::Frame::new().fill(th.bg).stroke(Stroke::new(1.0_f32, th.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
-                crate::preview::markdown_ui(ui, &sample, th);
+                crate::preview::markdown::markdown_ui(ui, &sample, th);
             });
             ui.add_space(4.0);
         });

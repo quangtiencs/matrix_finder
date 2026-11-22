@@ -1,6 +1,7 @@
 //! Document previews: PDF pages (rendered with hayro, pure Rust) and
 //! Jupyter notebooks (.ipynb: markdown, highlighted code, text/image outputs).
-use crate::preview::{code_view_styled, highlight_lines, markdown_ui, parse_markdown, MdBlock, Styled};
+use crate::preview::code::{code_view_styled, highlight_lines, Styled};
+use crate::preview::markdown::{markdown_ui, parse_markdown, MdBlock};
 use crate::style::theme::Theme;
 use egui::{vec2, Color32, RichText};
 use std::sync::mpsc::{channel, Receiver};
@@ -47,7 +48,7 @@ pub fn start_pdf(bytes: Vec<u8>, max_texture: usize) -> PdfView {
             Err(e) => {
                 // Files with an empty user password (print or copy limits only) do open here.
                 let locked = format!("{e:?}").contains("Decryption");
-                let _ = tx.send(PdfMsg::Error(if locked { crate::preview::LOCKED.to_string() } else { format!("Cannot open PDF: {e:?}") }));
+                let _ = tx.send(PdfMsg::Error(if locked { crate::preview::widgets::LOCKED.to_string() } else { format!("Cannot open PDF: {e:?}") }));
                 return;
             }
         };
@@ -105,7 +106,7 @@ impl PdfView {
                 Ok(PdfMsg::Total(n)) => self.total = Some(n),
                 Ok(PdfMsg::Page(img)) => {
                     let name = format!("{key}#p{}", self.pages.len());
-                    self.pages.push(crate::preview::upload_texture(ctx, name, img));
+                    self.pages.push(crate::preview::widgets::upload_texture(ctx, name, img));
                 }
                 Ok(PdfMsg::Error(e)) => self.error = Some(e),
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
@@ -127,7 +128,7 @@ impl PdfView {
             Some(n) => format!("PDF · {n} {}", t("pages")),
             None => "PDF".into(),
         };
-        crate::preview::header_row(ui, th, name, &[(info, th.weak)], |ui| {
+        crate::preview::widgets::header_row(ui, th, name, &[(info, th.weak)], |ui| {
             if ui.button("+").clicked() {
                 self.zoom = (self.zoom * 1.2).min(4.0);
             }
@@ -139,8 +140,8 @@ impl PdfView {
             }
         });
         ui.separator();
-        if self.error.as_deref() == Some(crate::preview::LOCKED) {
-            crate::preview::locked_ui(ui, th, t, false);
+        if self.error.as_deref() == Some(crate::preview::widgets::LOCKED) {
+            crate::preview::widgets::locked_ui(ui, th, t, false);
             return;
         }
         if let Some(e) = &self.error {
@@ -314,12 +315,12 @@ impl NotebookView {
         for (i, img) in self.images.iter_mut().enumerate() {
             if let Some((rgba, w, h)) = img.take() {
                 let ci = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
-                self.textures[i] = Some(crate::preview::upload_texture(ui.ctx(), format!("{key}#img{i}"), ci));
+                self.textures[i] = Some(crate::preview::widgets::upload_texture(ui.ctx(), format!("{key}#img{i}"), ci));
             }
         }
         let code_cells = self.cells.iter().filter(|c| matches!(c, Cell::Code { .. })).count();
         let facts = format!("Jupyter · {} · {} {} · {code_cells} {}", self.kernel, self.cells.len(), t("cells"), t("code"));
-        crate::preview::header_row(ui, th, name, &[(facts, th.weak)], |_| {});
+        crate::preview::widgets::header_row(ui, th, name, &[(facts, th.weak)], |_| {});
         ui.separator();
         let gutter = 58.0;
         egui::ScrollArea::vertical().id_salt(("notebook", key)).auto_shrink([false, false]).show(ui, |ui| {

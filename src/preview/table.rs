@@ -1,12 +1,10 @@
 //! Tabular previews: Parquet, Avro, Excel/ODS, CSV/TSV and (in `scidata`) more.
 //! Every format is turned into the same `TableData` (first `MAX_ROWS` rows).
+use crate::preview::sheet::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_COLS, MAX_ROWS};
 use crate::util::{es, ext_of, Res};
 use std::io::{Read, Seek};
 use std::path::Path;
 
-pub const MAX_ROWS: usize = 1000;
-pub const MAX_COLS: usize = 300;
-const MAX_CELL: usize = 300;
 /// A CSV file is read at most this far: enough for `MAX_ROWS` rows of any sensible
 /// file, and it keeps a "line" without an end from filling the memory.
 const MAX_CSV_BYTES: u64 = 128 * 1024 * 1024;
@@ -19,7 +17,7 @@ const MAX_WORKBOOK_UNPACKED: u64 = 128 * 1024 * 1024;
 /// The spreadsheet readers' errors, with the one for a password turned into ours.
 fn workbook_err(e: calamine::Error) -> String {
     let text = e.to_string();
-    if text.contains("password protected") { crate::preview::LOCKED.to_string() } else { text }
+    if text.contains("password protected") { crate::preview::widgets::LOCKED.to_string() } else { text }
 }
 
 fn is_streamed_workbook(name: &str) -> bool {
@@ -45,24 +43,6 @@ fn check_workbook<R: Read + Seek>(mut r: R, streamed: bool) -> Res<()> {
         }
     }
     Ok(())
-}
-
-pub type Cell = Option<String>;
-
-pub struct Sheet {
-    pub name: String,
-    pub columns: Vec<String>,
-    pub types: Vec<String>,
-    pub numeric: Vec<bool>,
-    pub rows: Vec<Vec<Cell>>,
-    /// Total number of data rows when known cheaply.
-    pub total_rows: Option<u64>,
-}
-
-pub struct TableData {
-    pub format: &'static str,
-    pub info: Vec<String>,
-    pub sheets: Vec<Sheet>,
 }
 
 pub fn is_table(name: &str) -> bool {
@@ -197,64 +177,7 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Res<TableData> {
     }
 }
 
-pub fn clip_cell(s: String) -> String {
-    if s.len() > MAX_CELL {
-        let mut end = MAX_CELL;
-        while !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}…", &s[..end])
-    } else {
-        s
-    }
-}
 
-// ---------------------------------------------------------------- type inference
-
-/// Infer a column type from sample values (used for CSV and spreadsheets).
-pub fn infer_type<'a>(values: impl Iterator<Item = &'a str>) -> &'static str {
-    let (mut ints, mut floats, mut bools, mut dates, mut total) = (0, 0, 0, 0, 0);
-    for v in values.map(str::trim).filter(|v| !v.is_empty()).take(200) {
-        total += 1;
-        if v.parse::<i64>().is_ok() {
-            ints += 1;
-        } else if v.parse::<f64>().is_ok() {
-            floats += 1;
-        } else if matches!(v.to_ascii_lowercase().as_str(), "true" | "false") {
-            bools += 1;
-        } else if chrono::NaiveDate::parse_from_str(v.get(..10).unwrap_or(v), "%Y-%m-%d").is_ok() {
-            dates += 1;
-        }
-    }
-    if total == 0 {
-        "empty"
-    } else if ints == total {
-        "integer"
-    } else if ints + floats == total {
-        "number"
-    } else if bools == total {
-        "bool"
-    } else if dates == total {
-        "date"
-    } else {
-        "text"
-    }
-}
-
-fn is_numeric_type(t: &str) -> bool {
-    let t = t.to_ascii_lowercase();
-    ["int", "long", "float", "double", "number", "decimal", "integer"].iter().any(|k| t.starts_with(k))
-}
-
-pub fn finish_sheet(name: String, columns: Vec<String>, types: Option<Vec<String>>, rows: Vec<Vec<Cell>>, total: Option<u64>) -> Sheet {
-    let types = types.unwrap_or_else(|| {
-        (0..columns.len())
-            .map(|c| infer_type(rows.iter().filter_map(|r| r.get(c).and_then(|v| v.as_deref()))).to_string())
-            .collect()
-    });
-    let numeric = types.iter().map(|t| is_numeric_type(t)).collect();
-    Sheet { name, columns, types, numeric, rows, total_rows: total }
-}
 
 // ---------------------------------------------------------------- CSV
 
