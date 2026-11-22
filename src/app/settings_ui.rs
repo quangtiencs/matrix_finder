@@ -1282,3 +1282,171 @@ impl App {
 fn typing(ctx: &egui::Context) -> bool {
     ctx.memory(|m| m.focused()).is_some_and(|id| egui::TextEdit::load_state(ctx, id).is_some())
 }
+
+impl App {
+    /// Icon set picker with live previews. Returns true when the choice changed.
+    pub(super) fn icon_settings(&mut self, ui: &mut egui::Ui) -> bool {
+        let th = self.theme;
+        if self.icon_themes.is_none() {
+            self.icon_themes = Some((crate::sysicons::installed_themes(), crate::sysicons::current_theme_name()));
+        }
+        let (installed, current) = self.icon_themes.clone().unwrap_or_default();
+        let mut options: Vec<(String, String)> = vec![
+            ("theme".into(), format!("{} ({})", t("Match theme"), self.theme.icons.label())),
+        ];
+        if !cfg!(any(target_os = "macos", windows)) {
+            let cur = current.clone().map(|c| format!(" ({c})")).unwrap_or_default();
+            options.push(("system".into(), format!("{}{cur}", t("System icon theme"))));
+        }
+        for (k, v) in [("matrix", "Matrix Finder"), ("adwaita", "Adwaita (GNOME)"), ("breeze", "Breeze (KDE Plasma)"), ("macos", "macOS"), ("windows", "Windows 11")] {
+            options.push((k.into(), v.into()));
+        }
+        for n in installed {
+            let l = n.to_lowercase();
+            if !matches!(l.as_str(), "adwaita" | "breeze" | "breeze-dark" | "hicolor") && !l.contains("cursor") {
+                options.push((format!("icons:{n}"), n.clone()));
+            }
+        }
+        let samples: [(&str, bool, &str); 6] = [
+            ("Documents", true, ""),
+            ("main.rs", false, "rs"),
+            ("photo.jpg", false, "jpg"),
+            ("backup.zip", false, "zip"),
+            ("report.pdf", false, "pdf"),
+            ("sheet.xlsx", false, "xlsx"),
+        ];
+        let mut changed = false;
+        egui::Grid::new("icon-packs").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
+            for (key, label) in &options {
+                let selected = self.cfg.icon_pack == *key;
+                if ui.radio(selected, label.as_str()).clicked() && !selected {
+                    self.cfg.icon_pack = key.clone();
+                    changed = true;
+                }
+                let cache_key = if key == "theme" { format!("theme|{}", th.name) } else { key.clone() };
+                if !self.icon_previews.contains_key(&cache_key) {
+                    let set = self.make_icon_set(key);
+                    self.icon_previews.insert(cache_key.clone(), set);
+                }
+                let set = self.icon_previews[&cache_key].clone();
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(samples.len() as f32 * 26.0, 22.0), egui::Sense::hover());
+                for (i, (name, is_dir, ext)) in samples.iter().enumerate() {
+                    let r = egui::Rect::from_center_size(egui::pos2(rect.left() + 11.0 + i as f32 * 26.0, rect.center().y), egui::vec2(20.0, 20.0));
+                    icons::file_icon_with(&set, ui.painter(), r, name, *is_dir, ext, false, th);
+                }
+                ui.end_row();
+            }
+        });
+        changed
+    }
+
+    /// Settings → Quick filters: the categories and their extensions.
+    pub(super) fn quick_filter_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
+        let mut changed = false;
+        ui.label(RichText::new(t("The funnel button of a file window shows only the kinds of file you tick (one or several). Folders stay visible, and the filter stays on while you browse. Add your own lists here.")).size(12.0).color(th.weak));
+        ui.add_space(6.0);
+        let mut frame = card_frame(th).begin(ui);
+        {
+        let ui = &mut frame.content_ui;
+        ui.set_width(ui.available_width());
+        let n = self.cfg.quick_filters.len();
+        let mut edit: Option<(usize, i32)> = None; // -1 up, 1 down, 0 delete
+        // One width for every row (icon, name, count and buttons take ~310 px), so
+        // the rows line up and never widen the page.
+        let ext_w = (ui.available_width() - 310.0).max(160.0);
+        for i in 0..n {
+            let q = &mut self.cfg.quick_filters[i];
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let (r, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+                crate::pane::quick_filter_icon(ui.painter(), r.shrink(5.0), &q.ext_list(), th);
+                changed |= ui.add(egui::TextEdit::singleline(&mut q.name).desired_width(130.0).hint_text(t("Name"))).changed();
+                changed |= ui
+                    .add(egui::TextEdit::singleline(&mut q.exts).desired_width(ext_w).hint_text(t("Extensions, e.g. jpg png gif")))
+                    .on_hover_text(t("Extensions separated by spaces or commas (dots are optional)"))
+                    .changed();
+                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::hover());
+                ui.painter().text(cr.center(), egui::Align2::CENTER_CENTER, q.ext_list().len().to_string(), egui::FontId::proportional(11.5), th.weak);
+                cresp.on_hover_text(t("Extensions"));
+                if icons::icon_button(ui, 24.0, i > 0, th, |p, r, c| icons::chevron(p, r, 0, c)).on_hover_text(t("Move up")).clicked() {
+                    edit = Some((i, -1));
+                }
+                if icons::icon_button(ui, 24.0, i + 1 < n, th, |p, r, c| icons::chevron(p, r, 2, c)).on_hover_text(t("Move down")).clicked() {
+                    edit = Some((i, 1));
+                }
+                if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(t("Remove")).clicked() {
+                    edit = Some((i, 0));
+                }
+            });
+        }
+        match edit {
+            Some((i, -1)) => self.cfg.quick_filters.swap(i, i - 1),
+            Some((i, 1)) => self.cfg.quick_filters.swap(i, i + 1),
+            Some((i, _)) => {
+                self.cfg.quick_filters.remove(i);
+            }
+            None => {}
+        }
+        changed |= edit.is_some();
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui.button(format!("+ {}", t("New quick filter"))).clicked() {
+                let name = crate::config::unused_quick_filter_name(&self.cfg.quick_filters, &t("New filter"));
+                self.cfg.quick_filters.push(crate::config::QuickFilter::new(&name, ""));
+                changed = true;
+            }
+            if ui.button(t("Restore the built-in filters")).on_hover_text(t("Adds the built-in categories that are missing and resets their extensions")).clicked() {
+                for d in crate::config::default_quick_filters() {
+                    match self.cfg.quick_filters.iter_mut().find(|q| q.name == d.name) {
+                        Some(q) => q.exts = d.exts,
+                        None => self.cfg.quick_filters.push(d),
+                    }
+                }
+                changed = true;
+            }
+        });
+        }
+        frame.end(ui);
+        changed
+    }
+
+    pub(super) fn export_settings(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().set_file_name("matrix_finder-settings.json").save_file() {
+            match self.cfg.export_to(&p, false) {
+                Ok(()) => self.toast(format!("{} {}", t("Exported to"), p.display()), false),
+                Err(e) => self.toast(e, true),
+            }
+        }
+    }
+
+    /// Pick a settings file; replacing the settings with it is asked first.
+    pub(super) fn import_settings(&mut self) {
+        if let Some(p) = rfd::FileDialog::new().add_filter("JSON", &["json"]).pick_file() {
+            self.ask_import_settings(p);
+        }
+    }
+
+    fn ask_import_settings(&mut self, path: PathBuf) {
+        match Settings::import_from(&path) {
+            Ok(s) => self.show_dialog(Dialog::ImportSettings { path, settings: Box::new(s) }, false),
+            Err(e) => self.toast(e, true),
+        }
+    }
+
+    /// Replace the settings with imported ones, after keeping a copy of the current ones
+    /// (passwords included). Without that copy nothing is replaced.
+    pub(super) fn import_confirmed(&mut self, settings: Settings) {
+        // The open tabs too, as they are now.
+        self.save_cfg();
+        match self.store.backup_before_import(&self.cfg) {
+            Ok(copy) => {
+                self.cfg = settings;
+                let ctx = self.egui_ctx.clone();
+                self.apply_cfg(&ctx);
+                self.save_cfg();
+                self.toast(format!("{} {}", t("Settings imported. The previous settings are kept in"), copy.display()), false);
+            }
+            Err(e) => self.toast(format!("{}: {e}", t("Settings not imported: the current settings could not be backed up")), true),
+        }
+    }
+}

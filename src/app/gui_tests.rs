@@ -582,8 +582,8 @@ fn build_demo() -> Demo {
     write_parquet(&demo.join("data/orders.parquet"), &rows);
     write_avro(&demo.join("data/orders.avro"), &rows);
     write_xlsx(&demo.join("data/orders.xlsx"), &rows[..300]);
-    touch(&demo.join("src/filter.rs"), include_str!("filter.rs").as_bytes());
-    touch(&demo.join("src/theme.rs"), include_str!("theme.rs").as_bytes());
+    touch(&demo.join("src/filter.rs"), include_str!("../filter.rs").as_bytes());
+    touch(&demo.join("src/theme.rs"), include_str!("../theme.rs").as_bytes());
     for i in 1..=3 {
         touch(&demo.join(format!("images/photo-{i}.jpg")), &photo(640, 427, i, image::ImageFormat::Jpeg));
         touch(&demo.join(format!("big/video_{i}.mkv")), &noise[..4096]);
@@ -615,8 +615,8 @@ fn build_demo() -> Demo {
     // ~/demo/formats: one file for the newer Quick View formats.
     let formats = demo.join("formats");
     std::fs::create_dir_all(&formats).unwrap();
-    touch(&formats.join("Source Sans 3.otf"), include_bytes!("../assets/fonts/SourceSans3-Regular.otf"));
-    touch(&formats.join("server.pem"), include_bytes!("../assets/testdata/test-cert.pem"));
+    touch(&formats.join("Source Sans 3.otf"), include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts/SourceSans3-Regular.otf")));
+    touch(&formats.join("server.pem"), include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/testdata/test-cert.pem")));
     write_torus_stl(&formats.join("torus.stl"));
     write_snowflake_geojson(&formats.join("snowflake.geojson"));
     write_api_json(&formats.join("api-response.json"));
@@ -2242,8 +2242,8 @@ fn draw_header(out: &mut RgbaImage, mid: u32) {
         esc(REPO)
     );
     let mut opt = usvg::Options::default();
-    opt.fontdb_mut().load_font_data(include_bytes!("../assets/fonts/SourceSans3-Regular.otf").to_vec());
-    opt.fontdb_mut().load_font_data(include_bytes!("../assets/fonts/SourceSans3-Semibold.otf").to_vec());
+    opt.fontdb_mut().load_font_data(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts/SourceSans3-Regular.otf")).to_vec());
+    opt.fontdb_mut().load_font_data(include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/assets/fonts/SourceSans3-Semibold.otf")).to_vec());
     let tree = usvg::Tree::from_str(&svg, &opt).unwrap();
     let mut text = tiny_skia::Pixmap::new(1800, LOGO).unwrap();
     resvg::render(&tree, tiny_skia::Transform::default(), &mut text.as_mut());
