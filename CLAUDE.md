@@ -27,12 +27,13 @@ cargo test                          # unit tests (~340, a few seconds)
 cargo test system::instance::tests::round_trip   # a single test: module path + name
 cargo test -- --ignored <name>      # GUI/integration tests (see below)
 
+make fmt | make fmt-check           # cargo fmt / cargo fmt --check
 make icons                          # regenerate PNG icons, .icns, DMG background from SVGs
 make screenshots                    # re-render README screenshots (SHOTS=panels,palette for some)
 make app | make dmg | make dmg-universal   # macOS bundle/DMG in target/macos (scripts/macos/build-dmg.sh)
 ```
 
-- The code is **not** rustfmt-formatted (long lines, no `rustfmt.toml`). Do not run `cargo fmt` over files; match the surrounding style by hand.
+- The code is formatted with rustfmt (`rustfmt.toml`: `max_width = 160`, `use_small_heuristics = "Max"`). Run `cargo fmt` after editing Rust code and before committing; `cargo fmt --check` (`make fmt-check`) must pass. Use `#[rustfmt::skip]` only for data tables that read best one row per line (like `DEFS` in `ui/shortcuts.rs`). A commit that only reformats code is listed in `.git-blame-ignore-revs`.
 - Feature `sftp` (default) pulls in `ssh2`; `vendored-openssl` is used by the DMG script.
 - Ignored tests: `src/app/gui_tests.rs` drives the real `App` headlessly with `egui_kittest` + wgpu (keyboard, drag and drop, settings, Quick View stress, `export_screenshots`); they set `HOME` to a demo folder under the temp dir, so they don't touch real settings. `files/remote.rs` live tests need `MATRIX_FINDER_TEST_FTP` / `MATRIX_FINDER_TEST_SFTP`. `main.rs` has a test-only capped global allocator (`memcap`) used by memory-limit tests.
 

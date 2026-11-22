@@ -63,6 +63,21 @@ MATRIX_FINDER_TEST_SFTP=host:22:user:/path/to/private_key cargo test live_sftp -
 
 GUI tests drive the real app headlessly (`egui_kittest` + wgpu) and are ignored by default; run them one at a time, as they share a demo folder: `cargo test -- --ignored --test-threads=1 <name>`.
 
+## Code style
+
+The code is formatted with rustfmt, set up in `rustfmt.toml` (long lines: `max_width = 160`
+with `use_small_heuristics = "Max"`, stable options only):
+
+```bash
+cargo fmt            # or: make fmt
+cargo fmt --check    # or: make fmt-check, fails on unformatted code
+```
+
+Run it before every commit. `#[rustfmt::skip]` is kept for data tables that read best one
+row per line (the shortcut table in `ui/shortcuts.rs`). A commit that only reformats code is
+added to `.git-blame-ignore-revs`, so `git blame` looks past it
+(`git config blame.ignoreRevsFile .git-blame-ignore-revs`; GitHub does this by itself).
+
 ## Settings and translations
 
 - **Settings** are stored in `<config dir>/matrix_finder/settings.json`: `~/.config` on Linux, `~/Library/Application Support` on macOS and `%APPDATA%` on Windows. *File → Export settings…* writes a copy **without passwords**. Saves are atomic (temporary file, flush, rename); the version replaced is kept as `settings.json.bak`, a file that cannot be read is renamed `settings.json.broken-<date>` (never overwritten), a value that cannot be read resets only that setting, and the saves of two running Matrix Finders are merged (`config::Store`).

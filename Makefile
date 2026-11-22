@@ -1,11 +1,18 @@
 # Convenience targets. `cargo build --release` still works as usual.
-.PHONY: release test icons screenshots app dmg dmg-universal
+.PHONY: release test fmt fmt-check icons screenshots app dmg dmg-universal
 
 release:
 	cargo build --release
 
 test:
 	cargo test
+
+# Format the code (rustfmt.toml); fmt-check fails on unformatted code instead.
+fmt:
+	cargo fmt
+
+fmt-check:
+	cargo fmt --check
 
 # Regenerate PNG icons, the macOS .icns and the DMG background from the SVGs.
 icons:
