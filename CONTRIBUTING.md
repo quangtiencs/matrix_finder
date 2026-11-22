@@ -73,66 +73,102 @@ GUI tests drive the real app headlessly (`egui_kittest` + wgpu) and are ignored 
 
 ## Project layout
 
+Modules are grouped by area. A module depends on the ones it needs and not the other way
+round: helpers used in several places go into `util.rs`, not into the first module
+that needed them, and the viewers in `preview/` do not depend on the file manager's UI.
+
 ```text
 src/
-├── main.rs        entry point (window icon)
-├── app.rs         main window, menus, keyboard, dialogs, jobs
-├── pane.rs        a window: file view (breadcrumb, listing, sort, filter, selection, context menus) or terminal
-├── completion.rs  folder suggestions for the address bar and folder fields
-├── foldertree.rs  the folder tree popup, with OK / Cancel and arrow keys
-├── pathfield.rs   a folder field with suggestions and the folder tree button
-├── layout.rs      tiling split tree of a tab's windows (split, dock, detach, dividers)
-├── tabs.rs        the tab bar: tabs holding windows, tab groups, drag & drop of tabs and windows
-├── palette.rs     command palette (Ctrl+K) with fuzzy search
-├── checksum.rs    CRC32 / MD5 / SHA-1 / SHA-256 / SHA-512 / BLAKE3, compare, save and verify lists
-├── terminal.rs    terminal profiles (terminal + shell + startup script + colour theme), open-with
-├── termview.rs    built-in terminal widget (alacritty_terminal)
-├── vfs.rs         entries, locations (local / remote / archive), free space
-├── drives.rs      mounted drives, a watcher that keeps them current, eject
-├── remote.rs      FTP (suppaftp) and SFTP (ssh2) back-ends
-├── archive.rs     list / extract / create for all archive formats
-├── ops.rs         background copy/move/delete with progress, pause, queue and cancel
-├── tempcopy.rs    files from servers and archives opened through a local copy: edits uploaded or kept
-├── rename.rs      batch rename rules, validation, safe apply/undo and its tab
-├── safefs.rs      safe writes: temporary file, sync, no-replace rename into place by the conflict policy
-├── filter.rs      quick filter + SQL-like expression parser
-├── preview.rs     image / SVG / Markdown / code / text / hex / table previews
-├── docview.rs     PDF (hayro) and Jupyter notebook previews
-├── table.rs       Parquet, Avro, Excel/ODS and CSV readers
-├── diskusage.rs   disk usage window: depth-limited scan, treemap, table, CSV
-├── backup.rs      backup profiles, runner and UI
-├── icons.rs       icon packs and UI line icons  ·  sysicons.rs  freedesktop icon themes
-├── theme.rs       colour themes (default: Breeze Light) and terminal colour schemes
-├── fonts.rs       bundled and installed fonts, interface and terminal font settings
-├── settings_ui.rs the Settings tab
-├── shortcuts.rs   keyboard shortcuts: actions, defaults per system, terminal safety
-├── media.rs       HEIC/AVIF decoding, video details (MP4, Matroska, AVI) and thumbnails
-├── rawphoto.rs    camera RAW metadata and embedded previews
-├── scidata.rs     SQLite, JSON Lines, NumPy, Arrow and HDF5 tables
-├── tensors.rs     safetensors, NumPy archives, ONNX, GGUF and PyTorch models: their tensors
-├── pickle.rs      Python pickles read as data only (PyTorch checkpoints), never run
-├── datameta.rs    MATLAB, NetCDF, ORC, Stata, SPSS, SAS and DuckDB: variables from the header
-├── rdata.rs       R data files (RData, RDS)
-├── textdocs.rs    RTF, EPUB, ODF, Word and PowerPoint text
-├── mail.rs        e-mail messages and mailboxes
-├── records.rs     calendars, contacts and subtitles as tables
-├── audio.rs       audio tags, stream facts and cover pictures (lofty)
-├── psd.rs         Photoshop documents: the merged picture
-├── fontview.rs    font sample sheets
-├── model3d.rs     STL, OBJ and glTF models and their renderer
-├── gitinfo.rs     git folders in the list: branch from .git/HEAD, status from a hardened git
-├── geoview.rs     GeoJSON, WKT, WKB, GPX, KML, shapefile and GeoPackage geometry and its drawing
-├── jsonview.rs    JSON as a tree, with paths to copy
-├── update.rs      checking GitHub for a newer release (only when asked)
-├── certview.rs    X.509 certificates
-├── defaultapps.rs which app opens which file type, and the system's own choice
-├── chrome.rs      native-looking integrated title bar
-├── agents.rs      AI coding agents for the AI button: which are installed, their logos
-├── activation.rs  Linux startup notification: hands the desktop's token to the window
-└── i18n.rs        translations (+ i18n_data.rs: keys and Vietnamese)
+├── main.rs            entry point (command line, single instance, window icon)
+├── util.rs            small shared helpers: sizes, counts, natural sort, private temp folders, tools on PATH
+├── config.rs          settings: the JSON file, defaults, normalize, merged saves (`config::Store`)
+├── i18n.rs            translations (+ i18n_data.rs: keys and Vietnamese)
+├── app.rs             App: its state, start-up, session, themes and the per-frame update
+├── app/               impl App, by topic
+│   ├── bars.rs        application menu, top bar, sidebar, status bar, toasts
+│   ├── bookmarks.rs   sidebar bookmarks, the bookmarks bar, Settings → Bookmarks
+│   ├── commands.rs    `run_cmd`, the command palette, the Checksum and Batch rename tabs
+│   ├── connect.rs     server connections, drives and eject
+│   ├── dialogs.rs     Copy / Move, New, Rename, Delete, Pack, Unpack, … and what they do; Help, About
+│   ├── jobs.rs        background jobs, the Transfers window, dropped files
+│   ├── keys.rs        shortcuts, the file list's keys, the type-to-search box
+│   ├── opening.rs     opening the cursor's item, Open with, archive passwords, local copies, Quick View
+│   ├── settings_ui.rs the Settings tab
+│   ├── terminals.rs   terminals in folders or with a profile, their events, AI agents
+│   ├── windows.rs     tabs and windows: split, close, reopen, detach, merge, drag
+│   └── gui_tests.rs   GUI tests and screenshots, headless with egui_kittest (ignored by default)
+├── files/             files and where they live
+│   ├── vfs.rs         entries, locations (local / remote / archive), free space
+│   ├── archive.rs     list / extract / create for all archive formats
+│   ├── remote.rs      FTP (suppaftp) and SFTP (ssh2) back-ends
+│   ├── ops.rs         background copy/move/delete with progress, pause, queue and cancel
+│   ├── safefs.rs      safe writes: temporary file, sync, no-replace rename into place by the conflict policy
+│   ├── tempcopy.rs    files from servers and archives opened through a local copy: edits uploaded or kept
+│   ├── drives.rs      mounted drives, a watcher that keeps them current, eject
+│   └── gitinfo.rs     git folders in the list: branch from .git/HEAD, status from a hardened git
+├── tools/             tools that work on a selection
+│   ├── checksum.rs    CRC32 / MD5 / SHA-1 / SHA-256 / SHA-512 / BLAKE3, compare, save and verify lists
+│   ├── rename.rs      batch rename rules, validation, safe apply/undo and its tab
+│   ├── backup.rs      backup profiles, runner and UI
+│   └── diskusage.rs   disk usage window: depth-limited scan, treemap, table, CSV
+├── ui/                the file manager's own interface
+│   ├── pane.rs        a window: file view (breadcrumb, listing, sort, filter, selection, context menus) or terminal
+│   ├── tabs.rs        the tab bar: tabs holding windows, tab groups, drag & drop of tabs and windows
+│   ├── layout.rs      tiling split tree of a tab's windows (split, dock, detach, dividers)
+│   ├── palette.rs     command palette (Ctrl+K) with fuzzy search
+│   ├── completion.rs  folder suggestions for the address bar and folder fields
+│   ├── foldertree.rs  the folder tree popup, with OK / Cancel and arrow keys
+│   ├── pathfield.rs   a folder field with suggestions and the folder tree button
+│   ├── filter.rs      quick filter + SQL-like expression parser
+│   ├── chrome.rs      native-looking integrated title bar
+│   └── shortcuts.rs   keyboard shortcuts: actions, defaults per system, terminal safety
+├── style/             how the app looks
+│   ├── theme.rs       colour themes (default: Breeze Light) and terminal colour schemes
+│   ├── icons.rs       icon packs and UI line icons
+│   ├── sysicons.rs    freedesktop icon themes
+│   ├── fonts.rs       bundled and installed fonts, interface and terminal font settings
+│   ├── fontfallback.rs system fonts loaded on demand for characters the bundled ones cannot draw
+│   └── logo.rs        the logo, drawn from its SVG
+├── terminal.rs        terminal profiles (terminal + shell + startup script + colour theme), open-with
+├── terminal/view.rs   built-in terminal widget (alacritty_terminal)
+├── preview.rs         Quick View: file kinds, size limits, loading in the background, images and text
+├── preview/           the viewers, one per family of formats
+│   ├── code.rs        syntax highlighting (syntect)
+│   ├── markdown.rs    Markdown parsing and drawing
+│   ├── widgets.rs     pieces the viewers share: header row, locked-file note, textures
+│   ├── sheet.rs       the table every tabular format is read into (Sheet, Cell, TableData)
+│   ├── table.rs       Parquet, Avro, Excel/ODS and CSV readers, and which reader opens a file
+│   ├── scidata.rs     SQLite, JSON Lines, NumPy, Arrow and HDF5 tables
+│   ├── tensors.rs     safetensors, NumPy archives, ONNX, GGUF and PyTorch models: their tensors
+│   ├── pickle.rs      Python pickles read as data only (PyTorch checkpoints), never run
+│   ├── datameta.rs    MATLAB, NetCDF, ORC, Stata, SPSS, SAS and DuckDB: variables from the header
+│   ├── rdata.rs       R data files (RData, RDS)
+│   ├── records.rs     calendars, contacts and subtitles as tables
+│   ├── docview.rs     PDF (hayro) and Jupyter notebook previews
+│   ├── textdocs.rs    RTF, EPUB, ODF, Word and PowerPoint text
+│   ├── mail.rs        e-mail messages and mailboxes
+│   ├── media.rs       HEIC/AVIF decoding, video details (MP4, Matroska, AVI) and thumbnails
+│   ├── rawphoto.rs    camera RAW metadata and embedded previews
+│   ├── psd.rs         Photoshop documents: the merged picture
+│   ├── audio.rs       audio tags, stream facts and cover pictures (lofty)
+│   ├── fontview.rs    font sample sheets
+│   ├── model3d.rs     STL, OBJ and glTF models and their renderer
+│   ├── geoview.rs     GeoJSON, WKT, WKB, GPX, KML, shapefile and GeoPackage geometry and its drawing
+│   ├── jsonview.rs    JSON as a tree, with paths to copy
+│   └── certview.rs    X.509 certificates
+└── system/            the app and the system around it
+    ├── instance.rs    single instance: later launches hand their folder over (localhost + token)
+    ├── activation.rs  Linux startup notification: hands the desktop's token to the window
+    ├── defaultapps.rs which app opens which file type, and the system's own choice
+    ├── agents.rs      AI coding agents for the AI button: which are installed, their logos
+    └── update.rs      checking GitHub for a newer release (only when asked)
 assets/agents/     logos of the AI coding agents (LobeHub Icons, MIT)
 assets/fonts/      Source Sans 3, Source Serif 4, Source Code Pro (SIL OFL 1.1)
 assets/logo/       Matrix Finder logo: a folder made of a matrix (SVG source + PNG exports)
+assets/macos/      the .icns icon and the DMG background
+assets/testdata/   small files the tests read (certificates, encrypted archives)
+scripts/           install script, macOS bundle and DMG builder
+docs/              README screenshots (light and dark)
 ```
 
 ## Commit messages

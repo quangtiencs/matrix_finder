@@ -23,8 +23,8 @@ These come before features, convenience and speed. A change that breaks one of t
 ```bash
 cargo build                         # debug build
 cargo run -- [--new-tab|--new-window] [FOLDER]
-cargo test                          # unit tests (~180, a few seconds)
-cargo test instance::tests::round_trip   # a single test: module path + name
+cargo test                          # unit tests (~340, a few seconds)
+cargo test system::instance::tests::round_trip   # a single test: module path + name
 cargo test -- --ignored <name>      # GUI/integration tests (see below)
 
 make icons                          # regenerate PNG icons, .icns, DMG background from SVGs
@@ -34,33 +34,35 @@ make app | make dmg | make dmg-universal   # macOS bundle/DMG in target/macos (s
 
 - The code is **not** rustfmt-formatted (long lines, no `rustfmt.toml`). Do not run `cargo fmt` over files; match the surrounding style by hand.
 - Feature `sftp` (default) pulls in `ssh2`; `vendored-openssl` is used by the DMG script.
-- Ignored tests: `src/screenshots.rs` drives the real `App` headlessly with `egui_kittest` + wgpu (keyboard, drag and drop, settings, Quick View stress, `export_screenshots`); they set `HOME` to a demo folder under the temp dir, so they don't touch real settings. `remote.rs` live tests need `MATRIX_FINDER_TEST_FTP` / `MATRIX_FINDER_TEST_SFTP`. `main.rs` has a test-only capped global allocator (`memcap`) used by memory-limit tests.
+- Ignored tests: `src/app/gui_tests.rs` drives the real `App` headlessly with `egui_kittest` + wgpu (keyboard, drag and drop, settings, Quick View stress, `export_screenshots`); they set `HOME` to a demo folder under the temp dir, so they don't touch real settings. `files/remote.rs` live tests need `MATRIX_FINDER_TEST_FTP` / `MATRIX_FINDER_TEST_SFTP`. `main.rs` has a test-only capped global allocator (`memcap`) used by memory-limit tests.
 
 ## Architecture
 
-**`App` (`src/app.rs`, very large)** owns everything: settings (`cfg`), the tab strip, dialogs, toasts, background jobs, remote connections, and the per-frame `update` that polls terminals/jobs/connections and draws the UI. Settings pages live in `settings_ui.rs` as `impl App` methods (it does `use super::*`).
+**Module layout:** `src/` holds `main`, `util`, `config`, `i18n` and `app`; everything else is grouped in folders: `files/` (vfs, archive, remote, ops, safefs, tempcopy, drives, gitinfo), `tools/` (checksum, rename, backup, diskusage), `ui/` (pane, tabs, layout, palette, completion, foldertree, pathfield, filter, chrome, shortcuts), `style/` (theme, icons, sysicons, fonts, fontfallback, logo), `system/` (instance, activation, defaultapps, agents, update), `terminal.rs` + `terminal/view.rs`, and `preview.rs` + `preview/` (every viewer). Paths are written in full from the crate root (`crate::files::vfs::Location`). A helper that several modules use goes into `util.rs` (or the lowest module that owns the concept, like `safefs::Conflict`), never into a UI module or a viewer; the viewers in `preview/` share `preview::{code, markdown, widgets, sheet}` and do not depend on `ui/` or `app`. `CONTRIBUTING.md` lists every module.
+
+**`App` (`src/app.rs` + `src/app/`)** owns everything: settings (`cfg`), the tab strip, dialogs, toasts, background jobs, remote connections, and the per-frame `update` that polls terminals/jobs/connections and draws the UI. `app.rs` keeps the struct, its state types, start-up, session, themes and `update`; the `impl App` methods are split by topic into `src/app/*.rs` (`bars`, `bookmarks`, `commands`, `connect`, `dialogs`, `jobs`, `keys`, `opening`, `settings_ui`, `terminals`, `windows`), each doing `use super::*`. Methods called from another of these files are `pub(super)`. Put new methods in the file of their topic rather than back into `app.rs`.
 
 **Tabs, windows, panes:** `tabs::Strip` holds `Workspace`s (tabs); each workspace has a `Vec<Pane>` tiled by a `layout::Layout` split tree (max 2 × 2). The *shown* workspace's panes are **moved out** into `app.panes` / `app.layout` / `app.active` and its slot in the strip is left empty (`app.live` is its uid); `sync_tab()` swaps them back when the active tab changes. So code touching "the current windows" uses `self.panes[self.active]`, while code that must reach every window uses the `all_panes!` macro. After inserting a tab (`insert_workspace`), `sync_tab` makes it current.
 
-**`Pane` → `Tab` (`pane.rs`):** a `Pane` wraps one `Tab`, which is either a file view (`loc: vfs::Location`, entries, cursor, filter, search), a terminal (`term: Option<Box<termview::TermSession>>`), or a special window (`settings`, `transfers`, `du`). Check `is_files()` / `is_terminal()` before assuming. `Tab::navigate` + `reload` take a `ListCtx`, built with the `lc!(self)` macro in `app.rs`.
+**`Pane` → `Tab` (`ui/pane.rs`):** a `Pane` wraps one `Tab`, which is either a file view (`loc: vfs::Location`, entries, cursor, filter, search), a terminal (`term: Option<Box<terminal::view::TermSession>>`), or a special window (`settings`, `transfers`, `du`). Check `is_files()` / `is_terminal()` before assuming. `Tab::navigate` + `reload` take a `ListCtx`, built with the `lc!(self)` macro in `app.rs`.
 
-**Locations (`vfs.rs`):** `Location::{Local, Archive { file, inner }, Remote { id, path }}`. Archives (`archive.rs`) and FTP/SFTP (`remote.rs`, ids into `app.remotes`) are browsed like folders. `App::parse_location_text` turns user text (`~`, `file.zip::inner`, `sftp://…`) into a `Location`.
+**Locations (`files/vfs.rs`):** `Location::{Local, Archive { file, inner }, Remote { id, path }}`. Archives (`files/archive.rs`) and FTP/SFTP (`files/remote.rs`, ids into `app.remotes`) are browsed like folders. `App::parse_location_text` turns user text (`~`, `file.zip::inner`, `sftp://…`) into a `Location`.
 
-**Commands and shortcuts:** `shortcuts::Action` is the rebindable key action (per-OS defaults; terminal-safe combos when a terminal has focus); `pane::Cmd` is the command set run by `App::run_cmd`, shared by menus, the command palette (`palette.rs`) and shortcuts. A new command is usually a `Cmd` variant, plus an `Action` if it needs a key.
+**Commands and shortcuts:** `shortcuts::Action` is the rebindable key action (per-OS defaults; terminal-safe combos when a terminal has focus); `pane::Cmd` is the command set run by `App::run_cmd`, shared by menus, the command palette (`ui/palette.rs`, entries in `app/commands.rs`) and shortcuts. A new command is usually a `Cmd` variant, plus an `Action` if it needs a key.
 
-**Long work runs off the UI thread:** file operations (`ops.rs`) are jobs with progress/pause/cancel shown in the Transfers window; previews, connections, disk usage and checksums use threads + channels polled each frame. Threads wake the UI with `ctx.request_repaint()`.
+**Long work runs off the UI thread:** file operations (`files/ops.rs`, writes through `files/safefs.rs`) are jobs with progress/pause/cancel shown in the Transfers window; previews, connections, disk usage and checksums use threads + channels polled each frame. Threads wake the UI with `ctx.request_repaint()`.
 
 **Settings (`config.rs`):** `Settings` is `#[serde(default)]` JSON at `<config dir>/matrix_finder/settings.json` (`config::config_dir()`). A new field needs a value in `impl Default for Settings` and loads fine from older files; `normalize()` cleans values after loading. `App::save_cfg` also stores the session (tabs, groups, splits). Enum settings use `#[derive(Default)]` with a `#[default]` variant.
 
-**Single instance (`instance.rs`):** the running app listens on a localhost TCP port. The port and a random token are in `config_dir()/instance.json` (mode 0600). A later launch in `NewTab` mode hands its folder over and exits (`main.rs`). The listener is not started under `cfg(test)`.
+**Single instance (`system/instance.rs`):** the running app listens on a localhost TCP port. The port and a random token are in `config_dir()/instance.json` (mode 0600). A later launch in `NewTab` mode hands its folder over and exits (`main.rs`). The listener is not started under `cfg(test)`.
 
-**Terminal:** `termview.rs` is the built-in terminal (alacritty_terminal + egui renderer); `terminal.rs` handles terminal profiles, shell detection, `startup_argv`, `sh_quote` and external terminal launching.
+**Terminal:** `terminal/view.rs` is the built-in terminal (alacritty_terminal + egui renderer); `terminal.rs` handles terminal profiles, shell detection, `startup_argv`, `sh_quote` and external terminal launching.
 
-**Previews / Quick View:** `preview.rs` dispatches by file type to the viewers (`docview`, `table`, `scidata`, `media`, `rawphoto`, `textdocs`, `fontview`, `model3d`, `certview`); size limits keep huge files from being opened.
+**Previews / Quick View:** `preview.rs` dispatches by file type to the viewers in `preview/` (`docview`, `table`, `scidata`, `media`, `rawphoto`, `textdocs`, `fontview`, `model3d`, `certview`, …); size limits keep huge files from being opened. Tabular formats all read into `preview::sheet::TableData`; `preview::table::load_path` picks the reader.
 
 ## Translations (enforced by tests)
 
-UI strings are English text passed to `i18n::t("…")`; the text itself is the key. Every new `t("…")` string must be added to **both** `KEYS` and the Vietnamese `VI` table in `src/i18n_data.rs`, or `i18n::tests::keys_cover_sources` / `vietnamese_covers_all_keys` fail. (`keys_cover_sources` scans a fixed list of source files in `i18n.rs`; add a new UI module there.)
+UI strings are English text passed to `i18n::t("…")`; the text itself is the key. Every new `t("…")` string must be added to **both** `KEYS` and the Vietnamese `VI` table in `src/i18n_data.rs`, or `i18n::tests::keys_cover_sources` / `vietnamese_covers_all_keys` fail. (`keys_cover_sources` scans a fixed list of source files in `i18n.rs`, paths relative to `src/`; add every new module that calls `t(…)` there.)
 
 ## Conventions
 
