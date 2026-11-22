@@ -67,13 +67,13 @@ impl App {
         }
     }
 
-    pub(super) fn handle_term_response(&mut self, side: usize, r: crate::termview::TermResponse) {
+    pub(super) fn handle_term_response(&mut self, side: usize, r: crate::terminal::view::TermResponse) {
         if r.focus && self.active != side {
             self.active = side;
             self.quick = None;
         }
         if r.font_delta != 0.0 {
-            let (sizes, old) = (crate::fonts::TERM_SIZES, self.cfg.term_font_size);
+            let (sizes, old) = (crate::style::fonts::TERM_SIZES, self.cfg.term_font_size);
             self.cfg.term_font_size = (old + r.font_delta).clamp(sizes.start().min(old), sizes.end().max(old));
             self.term_font_saved_at = Some(Instant::now());
         }
@@ -107,7 +107,7 @@ impl App {
 
     /// The agent the AI button in the terminals' info bars starts (`None`: no button),
     /// and every agent found. Starts looking for them the first time a terminal is shown.
-    pub(super) fn ai_button(&mut self) -> (Option<crate::agents::Found>, Vec<crate::agents::Found>) {
+    pub(super) fn ai_button(&mut self) -> (Option<crate::system::agents::Found>, Vec<crate::system::agents::Found>) {
         if !self.cfg.term_agents {
             return (None, Vec::new());
         }
@@ -115,7 +115,7 @@ impl App {
             self.find_agents(false);
         }
         let found = self.agents.clone().unwrap_or_default();
-        (crate::agents::pick(&found, &self.cfg.term_agent).cloned(), found)
+        (crate::system::agents::pick(&found, &self.cfg.term_agent).cloned(), found)
     }
 
     /// Look for the installed AI coding agents (again, when `again`).
@@ -128,7 +128,7 @@ impl App {
             self.agents.get_or_insert_with(Vec::new);
             return;
         }
-        self.agents_rx = Some(crate::agents::detect_in_background(&self.egui_ctx));
+        self.agents_rx = Some(crate::system::agents::detect_in_background(&self.egui_ctx));
     }
 
     pub(super) fn poll_agents(&mut self) {
@@ -138,8 +138,8 @@ impl App {
         }
     }
 
-    pub(super) fn agent_act(&mut self, side: usize, act: crate::agents::AgentAct) {
-        use crate::agents::AgentAct;
+    pub(super) fn agent_act(&mut self, side: usize, act: crate::system::agents::AgentAct) {
+        use crate::system::agents::AgentAct;
         match act {
             AgentAct::Run(id) => {
                 let Some(run) = self.agents.as_ref().and_then(|v| v.iter().find(|f| f.id == id)).map(|f| f.run.clone()) else { return };

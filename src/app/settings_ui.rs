@@ -1,6 +1,6 @@
 //! The Settings tab: the page list, the pages and their building blocks.
 use super::*;
-use crate::fonts;
+use crate::style::fonts;
 use egui::{pos2, vec2, Align2, FontFamily, FontId, Rect, Sense, Stroke};
 
 /// Width of a settings row's label column.
@@ -211,7 +211,7 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
     let installed = fonts::families(ui.ctx());
     egui::popup::popup_below_widget(ui, id, &btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         ui.set_width(W);
-        crate::pane::menu_style(ui);
+        crate::ui::pane::menu_style(ui);
         let field = ui.add(egui::TextEdit::singleline(search).desired_width(W - 12.0).background_color(th.bg).hint_text(RichText::new(t("Search fonts…")).color(th.weak)));
         field.request_focus();
         let needle = search.to_lowercase();
@@ -235,7 +235,7 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
                     }
                     Item::Font(value, name) => {
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, *name));
-                        crate::pane::menu_row_fill(ui, row, th, *value == current, resp.hovered());
+                        crate::ui::pane::menu_row_fill(ui, row, th, *value == current, resp.hovered());
                         ui.painter().with_clip_rect(row).text(pos2(row.left() + 8.0, row.center().y), Align2::LEFT_CENTER, name, FontId::proportional(14.0), th.text);
                         if resp.clicked() {
                             picked = Some(value.to_string());
@@ -309,7 +309,7 @@ impl App {
     /// Settings → Default apps: one row per file type. An empty field means the type
     /// opens with the system's default app, which the field names as its hint.
     fn default_app_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
-        use crate::defaultapps as apps;
+        use crate::system::defaultapps as apps;
         const ICON_W: f32 = 20.0;
         const TYPE_W: f32 = 70.0;
         const BROWSE_W: f32 = 84.0;
@@ -402,7 +402,7 @@ impl App {
 
     /// Settings → Keyboard shortcuts: every action with its keys, which can be changed one by one.
     fn shortcut_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
-        use crate::shortcuts::{self as sc, Action};
+        use crate::ui::shortcuts::{self as sc, Action};
         let mut changed = false;
         let keys = sc::active();
         let os = keys.os();
@@ -942,7 +942,7 @@ impl App {
                 changed |= ui.radio_value(&mut self.cfg.reading_font, font, label).changed();
             }
             ui.add_space(4.0);
-            crate::fonts::set_reading_serif(self.cfg.reading_font == crate::config::ReadingFont::Serif);
+            crate::style::fonts::set_reading_serif(self.cfg.reading_font == crate::config::ReadingFont::Serif);
             let sample = crate::preview::parse_markdown("**Quick View** reads *Markdown* like this: plain words, `code` and [links](https://example.com).\n\nThư mục tiếng Việt · Ăă Đđ Ơơ Ưư", th.syntax);
             egui::Frame::new().fill(th.bg).stroke(Stroke::new(1.0_f32, th.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -971,7 +971,7 @@ impl App {
             ui.add_space(4.0);
             let scheme = self.cfg.terminal_profiles.get(self.cfg.default_terminal).map(|p| p.theme.clone()).unwrap_or_default();
             let scheme = if scheme.is_empty() { self.theme } else { theme::term_by_name(&scheme) };
-            crate::termview::preview(ui, scheme, self.cfg.term_font_size, ui.available_width());
+            crate::terminal::view::preview(ui, scheme, self.cfg.term_font_size, ui.available_width());
             ui.add_space(4.0);
         });
         changed
@@ -980,7 +980,7 @@ impl App {
     /// Settings → Terminal → AI button: a button in the terminals' info bars that
     /// starts an AI coding agent, and which agent that is.
     fn agent_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
-        use crate::agents::{self, ALL};
+        use crate::system::agents::{self, ALL};
         let mut changed = false;
         settings_section(ui, th, &t("AI button"), &t("A button in the terminal's info bar starts an AI coding agent at the prompt. It works while the terminal is idle, with no program running."));
         if self.cfg.term_agents {
@@ -1226,7 +1226,7 @@ impl App {
             row_line(ui, th);
             ui.add_space(4.0);
             let shown = if current.is_empty() { self.theme } else { theme::term_by_name(&current) };
-            crate::termview::preview(ui, shown, self.cfg.term_font_size, width);
+            crate::terminal::view::preview(ui, shown, self.cfg.term_font_size, width);
             ui.add_space(6.0);
             ui.label(RichText::new(t("Colour theme")).font(bold(13.5)).color(th.strong()));
             let gap = 8.0;
@@ -1288,7 +1288,7 @@ impl App {
     pub(super) fn icon_settings(&mut self, ui: &mut egui::Ui) -> bool {
         let th = self.theme;
         if self.icon_themes.is_none() {
-            self.icon_themes = Some((crate::sysicons::installed_themes(), crate::sysicons::current_theme_name()));
+            self.icon_themes = Some((crate::style::sysicons::installed_themes(), crate::style::sysicons::current_theme_name()));
         }
         let (installed, current) = self.icon_themes.clone().unwrap_or_default();
         let mut options: Vec<(String, String)> = vec![
@@ -1359,7 +1359,7 @@ impl App {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 let (r, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
-                crate::pane::quick_filter_icon(ui.painter(), r.shrink(5.0), &q.ext_list(), th);
+                crate::ui::pane::quick_filter_icon(ui.painter(), r.shrink(5.0), &q.ext_list(), th);
                 changed |= ui.add(egui::TextEdit::singleline(&mut q.name).desired_width(130.0).hint_text(t("Name"))).changed();
                 changed |= ui
                     .add(egui::TextEdit::singleline(&mut q.exts).desired_width(ext_w).hint_text(t("Extensions, e.g. jpg png gif")))

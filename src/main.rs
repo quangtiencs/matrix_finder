@@ -1,65 +1,21 @@
 #![cfg_attr(all(not(debug_assertions), windows), windows_subsystem = "windows")]
 //! Matrix Finder: a cross-platform dual-panel file manager.
 
-mod activation;
-mod agents;
 mod app;
-mod archive;
-mod audio;
-mod checksum;
-mod certview;
-mod chrome;
-mod completion;
-mod backup;
 mod config;
-mod datameta;
-mod defaultapps;
-mod drives;
-mod diskusage;
-mod docview;
-mod filter;
-mod foldertree;
-mod fontfallback;
-mod fonts;
-mod fontview;
-mod geoview;
-mod gitinfo;
+mod files;
 mod i18n;
-mod jsonview;
-mod layout;
-mod logo;
-mod mail;
-mod media;
-mod model3d;
-mod icons;
-mod instance;
-mod ops;
-mod palette;
-mod pane;
-mod pickle;
-mod pathfield;
 mod preview;
-mod psd;
-mod rawphoto;
-mod rdata;
-mod records;
-mod remote;
-mod scidata;
-mod rename;
-mod safefs;
-mod shortcuts;
-mod sysicons;
-mod table;
-mod tensors;
+mod style;
+mod system;
 mod terminal;
-mod textdocs;
-mod termview;
-mod tabs;
-mod tempcopy;
-mod theme;
-mod update;
+mod tools;
+mod ui;
 mod util;
-mod vfs;
+
+use style::logo;
+use system::{activation, instance};
+use ui::chrome;
 
 fn main() -> eframe::Result<()> {
     let args = match instance::Args::parse(std::env::args().skip(1)) {

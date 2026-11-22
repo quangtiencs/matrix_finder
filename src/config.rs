@@ -1,5 +1,5 @@
 //! Persistent settings (JSON in the platform config directory).
-use crate::archive::ArchiveFormat;
+use crate::files::archive::ArchiveFormat;
 use crate::terminal::{TerminalKind, TerminalProfile};
 use crate::util::{es, Res};
 use serde::{Deserialize, Serialize};
@@ -506,7 +506,7 @@ pub struct SavedTab {
     pub title: Option<String>,
     /// A split tab: every window, how they are tiled, and the focused one.
     pub windows: Vec<SavedWindow>,
-    pub layout: Option<crate::layout::Layout>,
+    pub layout: Option<crate::ui::layout::Layout>,
     pub focus: usize,
 }
 
@@ -521,7 +521,7 @@ pub struct SavedWindow {
 #[serde(default)]
 pub struct SavedPane {
     pub tabs: Vec<SavedTab>,
-    pub groups: Vec<crate::tabs::TabGroup>,
+    pub groups: Vec<crate::ui::tabs::TabGroup>,
     pub active: usize,
 }
 
@@ -554,10 +554,10 @@ impl Default for Settings {
         }
         Self {
             language: "en".into(),
-            theme: crate::theme::DEFAULT.into(),
+            theme: crate::style::theme::DEFAULT.into(),
             ui_scale: 1.0,
             ui_font: String::new(),
-            ui_font_size: crate::fonts::DEFAULT_UI_SIZE,
+            ui_font_size: crate::style::fonts::DEFAULT_UI_SIZE,
             terminal: TerminalKind::Native,
             custom_terminal: String::new(),
             show_hidden: false,
@@ -601,7 +601,7 @@ impl Default for Settings {
             terminal_profiles: vec![TerminalProfile::default()],
             default_terminal: 0,
             term_font: String::new(),
-            term_font_size: crate::fonts::DEFAULT_TERM_SIZE,
+            term_font_size: crate::style::fonts::DEFAULT_TERM_SIZE,
             term_scrollback: 10_000,
             term_copy_on_select: false,
             term_scroll_trackpad: 1.0,
@@ -665,7 +665,7 @@ pub fn backup_file(path: &Path) -> PathBuf {
 fn stamped_file(path: &Path, what: &str) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
     name.push(format!(".{what}-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
-    crate::safefs::unique_path(&path.with_file_name(name))
+    crate::files::safefs::unique_path(&path.with_file_name(name))
 }
 
 /// Read settings, keeping every value that can be read: a bad or unknown value (a hand
@@ -979,7 +979,7 @@ impl Settings {
     pub fn normalize(&mut self) {
         self.default_apps = std::mem::take(&mut self.default_apps)
             .into_iter()
-            .map(|(ext, program)| (crate::defaultapps::normalize_ext(&ext), program))
+            .map(|(ext, program)| (crate::system::defaultapps::normalize_ext(&ext), program))
             .filter(|(ext, program)| !ext.is_empty() && !program.trim().is_empty())
             .collect();
         if self.terminal_profiles.is_empty() {
@@ -997,15 +997,15 @@ impl Settings {
         }
         self.default_terminal = self.default_terminal.min(self.terminal_profiles.len() - 1);
         if !(6.0..=40.0).contains(&self.term_font_size) {
-            self.term_font_size = crate::fonts::DEFAULT_TERM_SIZE;
+            self.term_font_size = crate::style::fonts::DEFAULT_TERM_SIZE;
         }
         for (v, default) in [(&mut self.term_scroll_trackpad, 1.0), (&mut self.term_scroll_wheel, 3.0)] {
             if !SCROLL_SPEEDS.contains(v) {
                 *v = default;
             }
         }
-        if !crate::fonts::UI_SIZES.contains(&self.ui_font_size) {
-            self.ui_font_size = crate::fonts::DEFAULT_UI_SIZE;
+        if !crate::style::fonts::UI_SIZES.contains(&self.ui_font_size) {
+            self.ui_font_size = crate::style::fonts::DEFAULT_UI_SIZE;
         }
         // The window size at start: within reach of the screen and big enough to use,
         // whatever was typed or read from a damaged file.

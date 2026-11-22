@@ -168,7 +168,7 @@ impl App {
             Cmd::Refresh => {
                 let tab = self.panes[a].tab_mut();
                 if let Location::Local(dir) = &tab.loc {
-                    crate::gitinfo::invalidate_children(dir);
+                    crate::files::gitinfo::invalidate_children(dir);
                 }
                 tab.invalidate_archive_cache();
                 tab.reload(&lc!(self));
@@ -589,9 +589,9 @@ impl App {
         if sel.is_empty() {
             return;
         }
-        let mut tool = crate::checksum::ChecksumUi::default();
+        let mut tool = crate::tools::checksum::ChecksumUi::default();
         match sel.as_slice() {
-            [one] if !one.is_dir && crate::checksum::is_checksum_file(&one.name) => {
+            [one] if !one.is_dir && crate::tools::checksum::is_checksum_file(&one.name) => {
                 if let Err(e) = tool.start_verify(&self.egui_ctx, dir.join(&one.name)) {
                     self.toast(e, true);
                     return;
@@ -706,7 +706,7 @@ impl App {
     /// Batch rename in `loc`: the pairs done and the errors.
     fn run_rename(&mut self, loc: &Location, pairs: &[(String, String)]) -> (Vec<(String, String)>, Vec<String>) {
         match loc {
-            Location::Local(dir) => ren::apply(pairs, |f, to| crate::safefs::rename_item(&dir.join(f), &dir.join(to)).map_err(es), |n| crate::safefs::exists(&dir.join(n))),
+            Location::Local(dir) => ren::apply(pairs, |f, to| crate::files::safefs::rename_item(&dir.join(f), &dir.join(to)).map_err(es), |n| crate::files::safefs::exists(&dir.join(n))),
             Location::Remote { id, path } => {
                 let Some(fs) = self.remotes.get(id).map(|r| r.1.clone()) else { return (vec![], vec![t("Connection closed")]) };
                 // Never waits for a transfer on this connection (the window would freeze).

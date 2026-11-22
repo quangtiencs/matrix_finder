@@ -545,7 +545,7 @@ fn build_demo() -> Demo {
         .iter()
         .map(|n| {
             let f = std::fs::File::open(downloads.join(n)).unwrap();
-            (n.to_string(), crate::checksum::hash_reader(f, crate::checksum::Algo::Sha256, |_| true).unwrap())
+            (n.to_string(), crate::tools::checksum::hash_reader(f, crate::tools::checksum::Algo::Sha256, |_| true).unwrap())
         })
         .collect();
     touch(&downloads.join("SHA256SUMS"), sums.iter().map(|(n, h)| format!("{h}  {n}\n")).collect::<String>().as_bytes());
@@ -582,8 +582,8 @@ fn build_demo() -> Demo {
     write_parquet(&demo.join("data/orders.parquet"), &rows);
     write_avro(&demo.join("data/orders.avro"), &rows);
     write_xlsx(&demo.join("data/orders.xlsx"), &rows[..300]);
-    touch(&demo.join("src/filter.rs"), include_str!("../filter.rs").as_bytes());
-    touch(&demo.join("src/theme.rs"), include_str!("../theme.rs").as_bytes());
+    touch(&demo.join("src/filter.rs"), include_str!("../ui/filter.rs").as_bytes());
+    touch(&demo.join("src/theme.rs"), include_str!("../style/theme.rs").as_bytes());
     for i in 1..=3 {
         touch(&demo.join(format!("images/photo-{i}.jpg")), &photo(640, 427, i, image::ImageFormat::Jpeg));
         touch(&demo.join(format!("big/video_{i}.mkv")), &noise[..4096]);
@@ -713,17 +713,17 @@ fn app_harness(cfg: &Settings, chrome: &str) -> Harness<'static, App> {
         .with_size(egui::vec2(W, H))
         .with_pixels_per_point(1.0)
         .wgpu()
-        .build_eframe(|cc| App::new(cc, crate::chrome::Chrome::detect(true), None));
+        .build_eframe(|cc| App::new(cc, crate::ui::chrome::Chrome::detect(true), None));
     let app = h.state_mut();
     // Only the root file system: the sidebar must not show this machine's volumes.
-    fn root() -> Vec<crate::drives::Drive> {
-        crate::drives::list().into_iter().filter(|d| d.mount == Path::new("/")).map(|mut d| {
+    fn root() -> Vec<crate::files::drives::Drive> {
+        crate::files::drives::list().into_iter().filter(|d| d.mount == Path::new("/")).map(|mut d| {
             d.label = "/".into();
             d
         }).collect()
     }
     app.drives = root();
-    app.drive_watch = crate::drives::Watcher::spawn_with(root, Duration::from_secs(3600), Duration::from_secs(3600), None);
+    app.drive_watch = crate::files::drives::Watcher::spawn_with(root, Duration::from_secs(3600), Duration::from_secs(3600), None);
     // macOS keeps the settings in ~/Library, which would show up in the demo home folder.
     if let Some(home) = dirs::home_dir() {
         let _ = std::fs::remove_dir_all(home.join("Library"));
@@ -1155,7 +1155,7 @@ fn terminal_close_asks_while_a_program_runs() {
 #[test]
 #[ignore]
 fn terminal_ai_button() {
-    use crate::agents::{AgentAct, Found};
+    use crate::system::agents::{AgentAct, Found};
     use egui::accesskit::Role;
     let d = demo_env();
     let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
@@ -1167,7 +1167,7 @@ fn terminal_ai_button() {
         std::fs::write(&p, "#!/bin/sh\npwd > \"$0.ran\"\nexec sleep 30\n").unwrap();
         std::fs::set_permissions(&p, <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755)).unwrap();
         let _ = std::fs::remove_file(bin.join(format!("{name}.ran")));
-        Found { id: crate::agents::get(name).unwrap().id, run: p.to_string_lossy().to_string() }
+        Found { id: crate::system::agents::get(name).unwrap().id, run: p.to_string_lossy().to_string() }
     };
     let found = vec![fake("claude"), fake("codex"), fake("gemini")];
     let term = h.state_mut().shot_terminal(&d.demo, None, None);
@@ -1294,8 +1294,8 @@ fn git_folders_show_badges_and_branches() {
     git(&notes, &["checkout", "-q", "--detach"]);
     std::fs::create_dir_all(root.join("photos")).unwrap();
     let ctx = egui::Context::default();
-    let look = |name: &str| crate::gitinfo::wait_for(&root.join(name), true, &ctx);
-    use crate::gitinfo::State;
+    let look = |name: &str| crate::files::gitinfo::wait_for(&root.join(name), true, &ctx);
+    use crate::files::gitinfo::State;
     assert!(matches!(look("matrix_finder"), Some(r) if r.branch == "main" && r.state == State::Clean && !r.detached));
     assert!(matches!(look("website"), Some(r) if r.branch.starts_with("feature/") && r.state == State::Dirty && r.untracked == 1));
     assert!(matches!(look("notes"), Some(r) if r.detached && r.branch.len() == 7));
@@ -1519,7 +1519,7 @@ fn settings_fonts_and_terminal_themes() {
     let ctx = h.ctx.clone();
     h.state_mut().apply_fonts(&ctx);
     assert_eq!(h.state().cfg.ui_font, "");
-    h.state_mut().cfg.ui_font_size = crate::fonts::DEFAULT_UI_SIZE;
+    h.state_mut().cfg.ui_font_size = crate::style::fonts::DEFAULT_UI_SIZE;
     i18n::set_language("en");
 }
 
@@ -1623,7 +1623,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         let mut cfg = settings(mode.theme, d);
         cfg.bookmarks = crate::config::system_bookmarks();
         let mut h = app_harness(&cfg, gnome);
-        let drive = |name: &str, mount: &str, total: u64, avail: u64, ejectable: bool| crate::drives::Drive {
+        let drive = |name: &str, mount: &str, total: u64, avail: u64, ejectable: bool| crate::files::drives::Drive {
             label: mount.into(),
             name: name.into(),
             system: false,
@@ -1639,7 +1639,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         let fixed = drives.clone();
         let app = h.state_mut();
         app.drives = drives;
-        app.drive_watch = crate::drives::Watcher::spawn_with(move || fixed.clone(), Duration::from_secs(3600), Duration::from_secs(3600), None);
+        app.drive_watch = crate::files::drives::Watcher::spawn_with(move || fixed.clone(), Duration::from_secs(3600), Duration::from_secs(3600), None);
         app.shot_pane(0, &d.demo.join("home").join("Documents"), None);
         settle(&mut h, 3);
         let b = h.get_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree")).next().unwrap().bounding_box().unwrap();
@@ -1745,7 +1745,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         app.shot_pane(0, &d.demo, Some(".."));
         app.open_disk_usage(d.demo.clone());
         if let Some(du) = app.panes[0].tab_mut().du.as_mut() {
-            du.view = crate::diskusage::DuView::Table;
+            du.view = crate::tools::diskusage::DuView::Table;
             du.set_depth(2);
         }
         wait_until(&mut h, 5.0, |a| !a.panes[0].tab().du.as_ref().is_some_and(|d| d.is_scanning()));
@@ -1813,7 +1813,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         // Rows are ROW_H apart below the column header: orders.parquet is row 3 on the
         // left, "images" row 5 on the right (row 0 is "..", 80 px below the window's top).
         let top = window_rect(&h, 0).top();
-        let row_y = |k: f32| top + 80.0 + crate::pane::ROW_H * k;
+        let row_y = |k: f32| top + 80.0 + crate::ui::pane::ROW_H * k;
         let from = pos2(330.0, row_y(3.0));
         let to = pos2(880.0, row_y(5.0));
         move_to(&mut h, from);
@@ -2088,7 +2088,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             settle(&mut h, 4);
         }
         let iso = std::fs::File::open(d.downloads.join("ubuntu-26.04-desktop.iso")).unwrap();
-        let hash = crate::checksum::hash_reader(iso, crate::checksum::Algo::Sha256, |_| true).unwrap();
+        let hash = crate::tools::checksum::hash_reader(iso, crate::tools::checksum::Algo::Sha256, |_| true).unwrap();
         type_into(&mut h, egui::Rect::from_min_max(pos2(W * 0.2, 80.0), pos2(W, H * 0.4)), &hash);
         settle(&mut h, 8);
         shot(&mut h, "checksum");
@@ -2156,7 +2156,7 @@ fn over(bottom: image::Rgba<u8>, top: [u8; 3], a: f32) -> image::Rgba<u8> {
 fn wait_for_git(h: &mut Harness<'static, App>, d: &Demo) {
     let ctx = h.ctx.clone();
     for name in ["docs", "papers", "src"] {
-        let _ = crate::gitinfo::wait_for(&d.demo.join(name), false, &ctx);
+        let _ = crate::files::gitinfo::wait_for(&d.demo.join(name), false, &ctx);
     }
     settle(h, 4);
 }
@@ -2249,7 +2249,7 @@ fn draw_header(out: &mut RgbaImage, mid: u32) {
     resvg::render(&tree, tiny_skia::Transform::default(), &mut text.as_mut());
     // The text's real width, so the group is centred.
     let text_w = (0..1800u32).rev().find(|&x| (0..LOGO).any(|y| text.pixel(x, y).unwrap().alpha() > 0)).unwrap() + 1;
-    let logo = crate::logo::render(crate::logo::LOGO_SVG, LOGO).unwrap();
+    let logo = crate::style::logo::render(crate::style::logo::LOGO_SVG, LOGO).unwrap();
     let left = (out.width() - (LOGO + SPACE + text_w)) / 2;
     let top = mid - LOGO / 2;
     for y in 0..LOGO {
@@ -2328,7 +2328,7 @@ fn key_press(h: &mut Harness<'static, App>, key: Key, physical: Option<Key>, m: 
 }
 
 fn press_chord(h: &mut Harness<'static, App>, text: &str) {
-    let c = crate::shortcuts::Chord::parse(text).unwrap();
+    let c = crate::ui::shortcuts::Chord::parse(text).unwrap();
     let m = Modifiers { ctrl: c.ctrl, alt: c.alt, shift: c.shift, mac_cmd: c.cmd, command: c.cmd || (c.ctrl && !cfg!(target_os = "macos")) };
     key_press(h, c.key, None, m);
 }
@@ -2793,7 +2793,7 @@ fn keyboard_closes_windows_and_tabs() {
 #[test]
 #[ignore]
 fn shortcuts_can_be_changed_in_settings() {
-    use crate::shortcuts::{self, Action, Chord};
+    use crate::ui::shortcuts::{self, Action, Chord};
     let d = demo_env();
     let cfg = settings("Breeze Light", &d);
     let mut h = app_harness(&cfg, "gnome");
@@ -3002,7 +3002,7 @@ fn broken_settings_are_kept_and_told() {
     std::env::set_var("MATRIX_FINDER_CHROME", "gnome");
     let broken = r#"{"connections":[{"name":"srv","protocol":"Sftp","host":"h","port":22,"user":"me","password":"pw"}"#;
     std::fs::write(&file, broken).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(W, H)).with_pixels_per_point(1.0).wgpu().build_eframe(|cc| App::new(cc, crate::chrome::Chrome::detect(true), None));
+    let mut h = Harness::builder().with_size(egui::vec2(W, H)).with_pixels_per_point(1.0).wgpu().build_eframe(|cc| App::new(cc, crate::ui::chrome::Chrome::detect(true), None));
     settle(&mut h, 3);
     assert!(matches!(&h.state().dialog, Some(Dialog::Message { title, .. }) if *title == t("The settings file could not be read")));
     let kept: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains("settings.json.broken-")).collect();
@@ -3026,7 +3026,7 @@ fn update_check_offers_a_newer_version() {
             r#"{{"tag_name": "v{v}", "name": "Matrix Finder {v}", "html_url": "https://github.com/quangtiencs/matrix_finder/releases/tag/v{v}", "published_at": "2026-12-01T08:00:00Z", "body": "- Faster previews\n- Fewer bugs", "assets": [{{"name": "MatrixFinder-{v}-macos-universal.dmg", "size": 39000000, "browser_download_url": "https://github.com/quangtiencs/matrix_finder/releases/download/v{v}/MatrixFinder-{v}-macos-universal.dmg"}}]}}"#
         )
     };
-    let answer = |a: crate::util::Res<String>| *crate::update::FAKE_ANSWER.lock().unwrap() = Some(a);
+    let answer = |a: crate::util::Res<String>| *crate::system::update::FAKE_ANSWER.lock().unwrap() = Some(a);
     let cfg = settings("Breeze Light", &d);
     assert!(!cfg.check_updates, "off by default");
     let mut h = app_harness(&cfg, "gnome");
@@ -3077,7 +3077,7 @@ fn update_check_offers_a_newer_version() {
     h.state_mut().check_for_updates(true);
     wait_until(&mut h, 5.0, |a| a.update_check.is_none());
     assert!(h.state().toasts.iter().any(|x| x.error && x.text.contains("offline")));
-    *crate::update::FAKE_ANSWER.lock().unwrap() = None;
+    *crate::system::update::FAKE_ANSWER.lock().unwrap() = None;
 }
 
 /// A tab under the pointer turns clearly darker, as in a browser, and fades back.
@@ -3470,8 +3470,8 @@ fn eject_drives_from_the_sidebar() {
     let mount = PathBuf::from("/Volumes").join(&name);
     let lister = {
         let mount = mount.clone();
-        move || -> Vec<crate::drives::Drive> {
-            crate::drives::list().into_iter().filter(|x| x.mount == Path::new("/") || x.mount == mount).map(|mut x| {
+        move || -> Vec<crate::files::drives::Drive> {
+            crate::files::drives::list().into_iter().filter(|x| x.mount == Path::new("/") || x.mount == mount).map(|mut x| {
                 if x.mount == Path::new("/") {
                     x.label = "/".into();
                 }
@@ -3479,7 +3479,7 @@ fn eject_drives_from_the_sidebar() {
             }).collect()
         }
     };
-    h.state_mut().drive_watch = crate::drives::Watcher::spawn_with(lister, Duration::from_millis(200), Duration::from_secs(3600), None);
+    h.state_mut().drive_watch = crate::files::drives::Watcher::spawn_with(lister, Duration::from_millis(200), Duration::from_secs(3600), None);
     let images = crate::util::TempDir::new().unwrap();
     assert_eq!(mount_test_image(images.path(), &name), mount);
     let home = d.home.clone();
@@ -3562,11 +3562,11 @@ fn drives_section_follows_the_setting() {
     use egui::accesskit::Role;
     let d = demo_env();
     let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
-    let root = crate::drives::list().into_iter().find(|x| x.mount == Path::new("/")).unwrap();
+    let root = crate::files::drives::list().into_iter().find(|x| x.mount == Path::new("/")).unwrap();
     let mut data = root.clone();
     data.mount = PathBuf::from("/System/Volumes/Data");
     data.system = true;
-    let usb = crate::drives::Drive {
+    let usb = crate::files::drives::Drive {
         label: "/Volumes/KINGSTON (KINGSTON)".into(),
         name: "KINGSTON".into(),
         system: false,
@@ -3580,7 +3580,7 @@ fn drives_section_follows_the_setting() {
     };
     let now = std::sync::Arc::new(std::sync::Mutex::new(vec![root.clone(), data.clone()]));
     let n2 = now.clone();
-    h.state_mut().drive_watch = crate::drives::Watcher::spawn_with(move || n2.lock().unwrap().clone(), Duration::from_millis(50), Duration::from_secs(3600), None);
+    h.state_mut().drive_watch = crate::files::drives::Watcher::spawn_with(move || n2.lock().unwrap().clone(), Duration::from_millis(50), Duration::from_secs(3600), None);
     let rows = |h: &Harness<'static, App>| h.state().drive_rows.iter().map(|r| r.1.clone()).collect::<Vec<_>>();
     let wait_rows = |h: &mut Harness<'static, App>, want: &[&str]| {
         for _ in 0..100 {
@@ -3801,7 +3801,7 @@ fn checksum_and_batch_rename_open_in_tabs() {
     assert!(!h.state().panes[0].tab().is_files());
     assert_eq!(h.state().panes[0].tab().title(), t("Checksum"));
     assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new("checksum-window"))).is_none(), "no floating window");
-    let want = crate::checksum::hash_reader(&b"alpha"[..], crate::checksum::Algo::Sha256, |_| true).unwrap();
+    let want = crate::tools::checksum::hash_reader(&b"alpha"[..], crate::tools::checksum::Algo::Sha256, |_| true).unwrap();
     for _ in 0..100 {
         if h.query_by_label(&want).is_some() {
             break;
@@ -4651,7 +4651,7 @@ fn terminal_in_selected_folders() {
     let d = demo_env();
     let row = |h: &Harness<'static, App>, k: f32| {
         let r = window_rect(h, 0);
-        pos2(r.left() + 120.0, r.top() + 80.0 + crate::pane::ROW_H * k)
+        pos2(r.left() + 120.0, r.top() + 80.0 + crate::ui::pane::ROW_H * k)
     };
     let menu_item = |h: &mut Harness<'static, App>, k: f32, label: &str| {
         right_click(h, row(h, k));

@@ -18,7 +18,7 @@ impl App {
             || ctx.memory(|m| m.any_popup_open())
             || focus_keeps_esc
             || self.palette.open
-            || crate::pane::drag_payload(ctx).is_some()
+            || crate::ui::pane::drag_payload(ctx).is_some()
             || self.backup.paths.tree.is_some()
         {
             return false;
@@ -99,12 +99,12 @@ impl App {
             let res = self.panes[side].tab_mut().tree.as_mut().and_then(|t| t.keys(ctx));
             let handled = res.is_some();
             match res {
-                Some(crate::foldertree::Popup::Picked(p)) => {
+                Some(crate::ui::foldertree::Popup::Picked(p)) => {
                     self.panes[side].tab_mut().tree = None;
                     self.active = side;
                     self.panes[side].tab_mut().navigate(Location::Local(p), &lc!(self));
                 }
-                Some(crate::foldertree::Popup::Closed) => self.panes[side].tab_mut().tree = None,
+                Some(crate::ui::foldertree::Popup::Closed) => self.panes[side].tab_mut().tree = None,
                 _ => {}
             }
             if handled {
@@ -517,7 +517,7 @@ impl App {
                 Key::Escape => {
                     // Esc that closes a menu (right-click, …) is that menu's alone.
                     if ctx.memory(|m| m.any_popup_open()) || self.panes[a].tab().menu_open {
-                    } else if crate::pane::drag_payload(ctx).is_some() {
+                    } else if crate::ui::pane::drag_payload(ctx).is_some() {
                         egui::DragAndDrop::clear_payload(ctx);
                     } else if self.viewer.is_some() {
                         self.viewer = None;

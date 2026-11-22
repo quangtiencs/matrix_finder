@@ -7,7 +7,7 @@ impl App {
         // Settings → Bookmarks: in a terminal window, `cd` the shell to a local folder.
         if self.cfg.bookmark_action == crate::config::BookmarkAction::FilesAndTerminal {
             if let (Location::Local(dir), Some(term)) = (&loc, self.panes[self.active].tab_mut().term.as_mut()) {
-                if !crate::termview::is_typeable(&dir.to_string_lossy()) {
+                if !crate::terminal::view::is_typeable(&dir.to_string_lossy()) {
                     self.toast(t("This folder's name has control characters: it is not typed into the terminal"), true);
                 } else if !term.cd(dir) {
                     self.toast(t("The terminal is busy: quit the running program first"), true);
@@ -434,7 +434,7 @@ impl App {
                         ui.set_min_width(170.0);
                         for choice in BookmarkIcon::CHOICES {
                             let (r, resp) = ui.allocate_exact_size(egui::vec2(170.0, 24.0), egui::Sense::click());
-                            crate::pane::menu_row_fill(ui, r, th, b.icon == choice, resp.hovered());
+                            crate::ui::pane::menu_row_fill(ui, r, th, b.icon == choice, resp.hovered());
                             let draw = choice.resolve(&b.path, sys);
                             icons::bookmark_icon(ui.painter(), egui::Rect::from_center_size(egui::pos2(r.left() + 14.0, r.center().y), egui::vec2(15.0, 15.0)), draw, th);
                             ui.painter().text(egui::pos2(r.left() + 30.0, r.center().y), egui::Align2::LEFT_CENTER, t(choice.label()), egui::FontId::proportional(13.0), th.text);
@@ -453,7 +453,7 @@ impl App {
                 }
                 *changed |= name.changed();
                 if !b.folder {
-                    let o = crate::pathfield::Opts { base: home.as_deref(), show_hidden, drives, width: path_w, hint: Some(t("Location")) };
+                    let o = crate::ui::pathfield::Opts { base: home.as_deref(), show_hidden, drives, width: path_w, hint: Some(t("Location")) };
                     *changed |= paths.show(ui, &mut b.path, egui::Id::new(("bm-path", at)), o, th).changed();
                     // Folder to keep it in.
                     let cur = at.1.and_then(|_| folders.iter().find(|(i, _)| *i == at.0)).map(|(_, n)| n.clone()).unwrap_or_else(|| "—".into());

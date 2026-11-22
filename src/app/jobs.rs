@@ -324,8 +324,8 @@ impl App {
     }
 
     /// Items dropped onto a folder (panel, folder row, breadcrumb or sidebar).
-    pub(super) fn handle_drop(&mut self, payload: &crate::pane::DragPayload, target: Location) {
-        if !crate::pane::drop_allowed(payload, &target) {
+    pub(super) fn handle_drop(&mut self, payload: &crate::ui::pane::DragPayload, target: Location) {
+        if !crate::ui::pane::drop_allowed(payload, &target) {
             return;
         }
         let mv = self.shift_down;
@@ -344,8 +344,8 @@ impl App {
 
     /// Make a sidebar row a drop target for the current drag.
     pub(super) fn sidebar_drop_target(&mut self, ui: &egui::Ui, rect: egui::Rect, target: Location) {
-        let Some(pl) = crate::pane::drag_payload(ui.ctx()) else { return };
-        if !ui.rect_contains_pointer(rect) || !crate::pane::drop_allowed(&pl, &target) {
+        let Some(pl) = crate::ui::pane::drag_payload(ui.ctx()) else { return };
+        if !ui.rect_contains_pointer(rect) || !crate::ui::pane::drop_allowed(&pl, &target) {
             return;
         }
         let th = self.theme;
@@ -353,7 +353,7 @@ impl App {
         ui.painter().rect_stroke(rect, 7.0, egui::Stroke::new(1.5_f32, th.accent), egui::StrokeKind::Inside);
         self.drag_target = Some(target.clone());
         if ui.input(|i| i.pointer.any_released()) {
-            if let Some(pl) = egui::DragAndDrop::take_payload::<crate::pane::DragPayload>(ui.ctx()) {
+            if let Some(pl) = egui::DragAndDrop::take_payload::<crate::ui::pane::DragPayload>(ui.ctx()) {
                 self.handle_drop(&pl, target);
             }
         }
@@ -361,7 +361,7 @@ impl App {
 
     /// Floating label that follows the pointer while dragging files.
     pub(super) fn drag_ghost(&mut self, ctx: &egui::Context) {
-        let Some(pl) = crate::pane::drag_payload(ctx) else { return };
+        let Some(pl) = crate::ui::pane::drag_payload(ctx) else { return };
         let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) else { return };
         let th = self.theme;
         let what = if pl.items.len() == 1 { pl.items[0].name.clone() } else { format!("{} {}", pl.items.len(), t("item(s)")) };
@@ -416,7 +416,7 @@ impl App {
                 return;
             }
             let text = dropped.iter().map(|p| quote_dropped(&p.to_string_lossy())).collect::<Vec<_>>().join(" ");
-            if !crate::termview::is_typeable(&text) {
+            if !crate::terminal::view::is_typeable(&text) {
                 self.toast(t("A dropped name has control characters: it is not typed into the terminal"), true);
                 return;
             }

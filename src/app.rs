@@ -1,25 +1,25 @@
 //! The main application: layout, keyboard handling, dialogs and background jobs.
-use crate::archive::{self, ArchiveFormat};
-use crate::backup::{self, BackupAction, BackupUi};
+use crate::files::archive::{self, ArchiveFormat};
+use crate::tools::backup::{self, BackupAction, BackupUi};
 use crate::config::{Bookmark, ConnectionProfile, Protocol, Settings};
-use crate::diskusage::DuAction;
+use crate::tools::diskusage::DuAction;
 use crate::i18n::{self, t};
-use crate::icons;
-use crate::palette::{self, Act, PalItem, Palette};
-use crate::ops::{self, Endpoint, Job};
-use crate::safefs::Conflict;
-use crate::layout::{Layout, SplitDir};
-use crate::pane::{pane_ui, Cmd, ListCtx, Pane, PaneEvent, PaneUiCtx, Tab};
-use crate::tabs::{Strip, TabEvent, TabInfo, Workspace};
-use crate::termview::TermSession;
+use crate::style::icons;
+use crate::ui::palette::{self, Act, PalItem, Palette};
+use crate::files::ops::{self, Endpoint, Job};
+use crate::files::safefs::Conflict;
+use crate::ui::layout::{Layout, SplitDir};
+use crate::ui::pane::{pane_ui, Cmd, ListCtx, Pane, PaneEvent, PaneUiCtx, Tab};
+use crate::ui::tabs::{Strip, TabEvent, TabInfo, Workspace};
+use crate::terminal::view::TermSession;
 use crate::preview::{self, Preview};
-use crate::shortcuts::{self, hint, Action, Chord};
-use crate::rename::{self as ren, BatchRename, RenameAction};
-use crate::remote::{self, RemoteFs, SharedRemote};
+use crate::ui::shortcuts::{self, hint, Action, Chord};
+use crate::tools::rename::{self as ren, BatchRename, RenameAction};
+use crate::files::remote::{self, RemoteFs, SharedRemote};
 use crate::terminal::{self, TerminalKind};
-use crate::theme::{self, Theme};
+use crate::style::theme::{self, Theme};
 use crate::util::{es, human_size, join_slash, Res};
-use crate::vfs::{Entry, Location};
+use crate::files::vfs::{Entry, Location};
 use egui::{Key, Modifiers, RichText};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -77,7 +77,7 @@ enum After {
     OpenFile(PathBuf),
     OpenWithDialog(PathBuf),
     /// The changes of temporary copy (id) were uploaded, as they were then.
-    Uploaded(u64, crate::tempcopy::Stamp),
+    Uploaded(u64, crate::files::tempcopy::Stamp),
 }
 
 struct RunningJob {
@@ -183,9 +183,9 @@ pub struct App {
     active: usize,
     remotes: HashMap<u64, (String, SharedRemote)>,
     next_remote: u64,
-    drives: Vec<crate::drives::Drive>,
+    drives: Vec<crate::files::drives::Drive>,
     /// Keeps `drives` up to date off the UI thread.
-    drive_watch: crate::drives::Watcher,
+    drive_watch: crate::files::drives::Watcher,
     ejecting: Vec<Ejecting>,
     jobs: Vec<RunningJob>,
     dialog: Option<Dialog>,
@@ -203,9 +203,9 @@ pub struct App {
     show_help: bool,
     show_about: bool,
     /// An update check under way, and whether the user asked for it (the menu).
-    update_check: Option<(std::sync::mpsc::Receiver<crate::util::Res<crate::update::Outcome>>, bool)>,
+    update_check: Option<(std::sync::mpsc::Receiver<crate::util::Res<crate::system::update::Outcome>>, bool)>,
     /// A newer release found, with its notes ready to show.
-    update_found: Option<(crate::update::Release, Vec<crate::preview::MdBlock>)>,
+    update_found: Option<(crate::system::update::Release, Vec<crate::preview::MdBlock>)>,
     toasts: Vec<Toast>,
     connecting: Option<(ConnectionProfile, bool, Receiver<ConnectResult>)>,
     languages: Vec<(String, String)>,
@@ -251,9 +251,9 @@ pub struct App {
     dialog_dst: Option<Location>,
     /// The suggestions and folder tree of a dialog's folder field (Copy / Move to,
     /// Compress's Save to, Extract to).
-    dialog_path: crate::pathfield::PathField,
+    dialog_path: crate::ui::pathfield::PathField,
     /// The folder tree shown in Copy / Move when the tab has one window.
-    dialog_tree: Option<crate::foldertree::FolderTree>,
+    dialog_tree: Option<crate::ui::foldertree::FolderTree>,
     /// Copy / Move in a split tab: "Another folder" is chosen (rather than a window).
     /// None until the dialog's first frame decides it.
     dialog_custom: Option<bool>,
@@ -267,8 +267,8 @@ pub struct App {
     closed_tabs: Vec<ClosedTab>,
     /// AI coding agents found on this computer (`None`: not looked for yet), and
     /// the search under way.
-    agents: Option<Vec<crate::agents::Found>>,
-    agents_rx: Option<Receiver<Vec<crate::agents::Found>>>,
+    agents: Option<Vec<crate::system::agents::Found>>,
+    agents_rx: Option<Receiver<Vec<crate::system::agents::Found>>>,
     /// Live filter while typing in the search box: (pane, tab uid, filter before, the
     /// cursor's entry before).
     pal_filter: Option<(usize, u64, String, Option<String>)>,
@@ -280,7 +280,7 @@ pub struct App {
     /// Text in that page's "add a file type" field.
     default_app_new: String,
     /// Suggestions and the folder tree of the bookmarks' Location fields.
-    bookmark_paths: crate::pathfield::PathField,
+    bookmark_paths: crate::ui::pathfield::PathField,
     /// That page is asking whether to reset all its choices.
     confirm_reset_apps: bool,
     /// The shortcut Settings waits for a key press for: the action, and which of its keys to replace.
@@ -298,16 +298,16 @@ pub struct App {
     /// Text in the font dropdown's search field.
     font_search: String,
     /// The font settings in use (see `apply_fonts`).
-    fonts_applied: crate::fonts::FontPrefs,
-    chrome: crate::chrome::Chrome,
+    fonts_applied: crate::style::fonts::FontPrefs,
+    chrome: crate::ui::chrome::Chrome,
     /// Width of the toolbar's right-hand group last frame (keeps the search box clear of it).
     toolbar_right_w: f32,
     /// Listens for later launches (single instance); `None` when another Matrix Finder does.
-    instance: Option<crate::instance::Server>,
+    instance: Option<crate::system::instance::Server>,
     /// The settings file: saves merge with what another Matrix Finder saved meanwhile.
     store: crate::config::Store,
     /// Files from servers and archives opened in other apps through a temporary copy.
-    temp_copies: crate::tempcopy::Copies,
+    temp_copies: crate::files::tempcopy::Copies,
     /// Edited copies (ids) asked about: upload the changes, or keep the copy.
     copy_prompts: Vec<u64>,
 }
@@ -339,7 +339,7 @@ enum SettingsPage {
 
 impl App {
     /// `open`: a folder given on the command line, shown first.
-    pub fn new(cc: &eframe::CreationContext, chrome: crate::chrome::Chrome, open: Option<String>) -> Self {
+    pub fn new(cc: &eframe::CreationContext, chrome: crate::ui::chrome::Chrome, open: Option<String>) -> Self {
         let (cfg, store) = crate::config::Store::open();
         i18n::set_language(&cfg.language);
         // Previews' temporary folders left by a Matrix Finder that crashed.
@@ -351,7 +351,7 @@ impl App {
         }
         shortcuts::install(&cfg.shortcuts);
         // A font that is no longer installed leaves the bundled default in its place.
-        let _ = crate::fonts::apply(&cc.egui_ctx, &crate::fonts::FontPrefs::of(&cfg));
+        let _ = crate::style::fonts::apply(&cc.egui_ctx, &crate::style::fonts::FontPrefs::of(&cfg));
         theme::apply(&cc.egui_ctx, theme);
         cc.egui_ctx.set_zoom_factor(cfg.ui_scale.clamp(0.6, 2.5));
         // Zooming by keys is the app's own (saved, and rebindable): egui's would not be
@@ -395,8 +395,8 @@ impl App {
             last_active: 0,
             remotes: HashMap::new(),
             next_remote: 1,
-            drives: crate::drives::list(),
-            drive_watch: crate::drives::Watcher::spawn(&cc.egui_ctx),
+            drives: crate::files::drives::list(),
+            drive_watch: crate::files::drives::Watcher::spawn(&cc.egui_ctx),
             ejecting: Vec::new(),
             jobs: vec![],
             dialog: None,
@@ -427,7 +427,7 @@ impl App {
             window_radius: 0.0,
             last_files_loc: None,
             bm_focus_last: false,
-            activation: crate::activation::startup_token().into_iter().collect(),
+            activation: crate::system::activation::startup_token().into_iter().collect(),
             windows: Vec::new(),
             keys_to_window: false,
             keys_at: (usize::MAX, 0),
@@ -462,11 +462,11 @@ impl App {
             confirm_reset_apps: false,
             profile_sel: 0,
             font_search: String::new(),
-            fonts_applied: crate::fonts::FontPrefs::of(&cfg),
+            fonts_applied: crate::style::fonts::FontPrefs::of(&cfg),
             chrome,
             toolbar_right_w: 300.0,
             // Not in tests: they must not take over the running Matrix Finder's instance file.
-            instance: if cfg!(test) { None } else { crate::instance::Server::start(cc.egui_ctx.clone()) },
+            instance: if cfg!(test) { None } else { crate::system::instance::Server::start(cc.egui_ctx.clone()) },
             cfg,
             store,
             temp_copies: Default::default(),
@@ -488,7 +488,7 @@ impl App {
                 p.tab_mut().reload(&lc);
             }
         }
-        if app.cfg.check_updates && !cfg!(test) && chrono::Utc::now().timestamp() - app.cfg.update_checked >= crate::update::AUTO_EVERY_SECS {
+        if app.cfg.check_updates && !cfg!(test) && chrono::Utc::now().timestamp() - app.cfg.update_checked >= crate::system::update::AUTO_EVERY_SECS {
             app.check_for_updates(false);
         }
         app
@@ -503,7 +503,7 @@ impl App {
         }
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::update::check());
+            let _ = tx.send(crate::system::update::check());
         });
         self.update_check = Some((rx, manual));
         if manual {
@@ -525,7 +525,7 @@ impl App {
         self.update_check = None;
         let checking = t("Checking for updates…");
         self.toasts.retain(|x| x.text != checking);
-        use crate::update::{version_text, Outcome};
+        use crate::system::update::{version_text, Outcome};
         match result {
             Ok(Outcome::Newer(r)) => {
                 self.cfg.update_checked = chrono::Utc::now().timestamp();
@@ -791,7 +791,7 @@ impl App {
             let tab = p.tab_mut();
             // An edited category applies at once; a deleted one turns off.
             if let Some(names) = tab.quick.as_ref().map(|q| q.names.clone()) {
-                tab.quick = crate::pane::QuickActive::from_names(&names, quick);
+                tab.quick = crate::ui::pane::QuickActive::from_names(&names, quick);
             }
             tab.rebuild_view(&c);
         }
@@ -805,7 +805,7 @@ impl App {
             return;
         }
         let q = match i.and_then(|i| self.cfg.quick_filters.get(i)) {
-            Some(f) => crate::pane::QuickActive::toggle(self.panes[a].tab().quick.as_ref(), &f.name, &self.cfg.quick_filters),
+            Some(f) => crate::ui::pane::QuickActive::toggle(self.panes[a].tab().quick.as_ref(), &f.name, &self.cfg.quick_filters),
             None => None,
         };
         let c = lc!(self);
@@ -816,9 +816,9 @@ impl App {
         let mut ids = HashMap::new();
         let mut strip = Strip { tabs: Vec::new(), active: 0, groups: Vec::new() };
         for g in &s.groups {
-            let id = crate::tabs::next_group_id();
+            let id = crate::ui::tabs::next_group_id();
             ids.insert(g.id, id);
-            strip.groups.push(crate::tabs::TabGroup { id, ..g.clone() });
+            strip.groups.push(crate::ui::tabs::TabGroup { id, ..g.clone() });
         }
         let mut active_uid = None;
         for (i, st) in s.tabs.iter().enumerate() {
@@ -879,7 +879,7 @@ impl App {
     /// per frame, before input is used.
     fn quit_step(&mut self, ctx: &egui::Context) {
         let close = ctx.input(|i| i.viewport().close_requested());
-        let asked = crate::chrome::take_native_quit_request();
+        let asked = crate::ui::chrome::take_native_quit_request();
         let jobs = !self.jobs.is_empty();
         let terms = self.cfg.term_confirm_close && all_panes!(self).any(|p| p.tab().term.as_ref().is_some_and(|t| t.foreground_pid().is_some()));
         if close || asked {
@@ -917,7 +917,7 @@ impl App {
             ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Ime(_))));
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        crate::chrome::set_quit_guard(busy && self.quit != Quit::Go);
+        crate::ui::chrome::set_quit_guard(busy && self.quit != Quit::Go);
     }
 
     fn refresh_location(&mut self, loc: &Location) {
@@ -941,7 +941,7 @@ impl App {
     /// Build the icon set for an icon setting value.
     fn make_icon_set(&self, choice: &str) -> icons::IconSet {
         use icons::{IconPack as P, IconSet};
-        let open = |name: &str| crate::sysicons::IconTheme::open(name).map(Arc::new);
+        let open = |name: &str| crate::style::sysicons::IconTheme::open(name).map(Arc::new);
         let breeze = || if self.theme.dark { open("breeze-dark").or_else(|| open("breeze")) } else { open("breeze") };
         match choice {
             "matrix" => IconSet { pack: P::Matrix, system: None },
@@ -955,7 +955,7 @@ impl App {
                 } else if cfg!(windows) {
                     IconSet { pack: P::Windows, system: None }
                 } else {
-                    let name = crate::sysicons::current_theme_name().unwrap_or_else(|| "Adwaita".into());
+                    let name = crate::style::sysicons::current_theme_name().unwrap_or_else(|| "Adwaita".into());
                     let pack = if name.to_lowercase().contains("breeze") { P::Breeze } else { P::Adwaita };
                     IconSet { pack, system: open(&name).or_else(|| open("Adwaita")) }
                 }
@@ -1011,15 +1011,15 @@ impl App {
             full.min.y = r.bottom() + 4.0;
         }
         // The one tab bar, above the windows of the shown tab.
-        let bar = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), crate::tabs::TAB_H));
+        let bar = egui::Rect::from_min_size(full.min, egui::vec2(full.width(), crate::ui::tabs::TAB_H));
         let profiles: Vec<String> = self.cfg.terminal_profiles.iter().map(|p| p.name.clone()).collect();
         let infos = self.tab_infos();
-        let dragged_window = egui::DragAndDrop::payload::<crate::tabs::WinDrag>(ui.ctx()).map(|d| (d.uid, self.panes.len()));
+        let dragged_window = egui::DragAndDrop::payload::<crate::ui::tabs::WinDrag>(ui.ctx()).map(|d| (d.uid, self.panes.len()));
         let mut tab_events = Vec::new();
         {
             let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar).layout(egui::Layout::top_down(egui::Align::Min)));
-            let bctx = crate::tabs::BarCtx { theme: self.theme, terminal_profiles: &profiles, can_reopen: !self.closed_tabs.is_empty(), dragged_window };
-            crate::tabs::tab_bar(&mut bar_ui, &mut self.strip, &infos, &bctx, &mut tab_events);
+            let bctx = crate::ui::tabs::BarCtx { theme: self.theme, terminal_profiles: &profiles, can_reopen: !self.closed_tabs.is_empty(), dragged_window };
+            crate::ui::tabs::tab_bar(&mut bar_ui, &mut self.strip, &infos, &bctx, &mut tab_events);
         }
         self.sync_tab();
         let rect = egui::Rect::from_min_max(egui::pos2(full.left(), bar.bottom() + 6.0), full.max);
@@ -1137,7 +1137,7 @@ impl App {
             PaneEvent::NavigateText(text) => {
                 self.active = side;
                 // A relative path is taken from the window's folder.
-                let text = crate::pathfield::resolve_typed(&text, dirs::home_dir().as_deref(), self.panes[side].tab().loc.local_path());
+                let text = crate::ui::pathfield::resolve_typed(&text, dirs::home_dir().as_deref(), self.panes[side].tab().loc.local_path());
                 if let Some(loc) = self.parse_location_text(&text) {
                     self.navigate_active(loc);
                 }
@@ -1206,7 +1206,7 @@ impl eframe::App for App {
         if !self.activation.is_empty() {
             if self.frames > 2 {
                 for token in std::mem::take(&mut self.activation) {
-                    crate::activation::activate(frame, &token);
+                    crate::system::activation::activate(frame, &token);
                 }
             } else {
                 ctx.request_repaint();
@@ -1214,7 +1214,7 @@ impl eframe::App for App {
         }
         self.max_texture = ctx.input(|i| i.max_texture_side).max(1024);
         // Follow the OS (theme "System") and keep the icon set in sync.
-        crate::chrome::install_quit_guard(frame);
+        crate::ui::chrome::install_quit_guard(frame);
         let wanted = self.resolve_theme(ctx);
         if !std::ptr::eq(wanted, self.theme) {
             self.theme = wanted;
@@ -1227,7 +1227,7 @@ impl eframe::App for App {
             self.icon_key = icon_key;
         }
         self.shift_down = ctx.input(|i| i.modifiers.shift);
-        crate::fonts::set_reading_serif(self.cfg.reading_font == crate::config::ReadingFont::Serif);
+        crate::style::fonts::set_reading_serif(self.cfg.reading_font == crate::config::ReadingFont::Serif);
         self.drag_target = None;
         self.sync_tab();
         self.active = self.active.min(self.panes.len() - 1);
@@ -1501,7 +1501,7 @@ impl eframe::App for App {
         // Copies opened from servers and archives: edited ones are kept (moved where the
         // quit confirmation said), the others removed. One that cannot be moved stays in
         // its temporary folder, which is not cleaned up.
-        for r in self.temp_copies.finish(&crate::tempcopy::recovered_dir()) {
+        for r in self.temp_copies.finish(&crate::files::tempcopy::recovered_dir()) {
             match r {
                 Ok(p) => eprintln!("matrix_finder: kept an edited copy at {}", p.display()),
                 Err(e) => eprintln!("matrix_finder: could not move an edited copy: {e}"),
@@ -1643,7 +1643,7 @@ fn side_row_with(ui: &mut egui::Ui, th: &Theme, selected: bool, label: &str, bar
 /// from there), as the folder fields fill it in.
 fn bookmark_target(path: &str) -> String {
     let home = dirs::home_dir();
-    crate::pathfield::resolve_typed(path, home.as_deref(), home.as_deref())
+    crate::ui::pathfield::resolve_typed(path, home.as_deref(), home.as_deref())
 }
 
 /// The local file or folder behind a location: the folder, or the archive file.

@@ -479,7 +479,7 @@ impl App {
                 ui.add_space(12.0);
             }
             // Drives: by the "Drives in the sidebar" setting, without the system's own mounts.
-            let shown: Vec<crate::drives::Drive> = crate::drives::sidebar(&self.drives, self.cfg.sidebar_drives).into_iter().cloned().collect();
+            let shown: Vec<crate::files::drives::Drive> = crate::files::drives::sidebar(&self.drives, self.cfg.sidebar_drives).into_iter().cloned().collect();
             if !shown.is_empty() {
                 section_title(ui, th, &t("Drives"));
             }

@@ -121,13 +121,13 @@ impl App {
 
     /// Ejects a drive in the background. Refused while a transfer uses it; previews of
     /// its files are closed first, and windows showing it go home once it is gone.
-    pub(super) fn eject_drive(&mut self, d: crate::drives::Drive) {
+    pub(super) fn eject_drive(&mut self, d: crate::files::drives::Drive) {
         let mount = d.mount.clone();
         if !d.ejectable || self.ejecting.iter().any(|e| e.0 == mount) {
             return;
         }
         let name = d.name.clone();
-        if self.jobs.iter().any(|j| j.paths.iter().any(|p| crate::drives::on_drive(p, &mount))) {
+        if self.jobs.iter().any(|j| j.paths.iter().any(|p| crate::files::drives::on_drive(p, &mount))) {
             self.toast(format!("{} {name}: {}", t("Could not eject"), t("A task is using this drive. Wait for it to finish, or cancel it.")), true);
             return;
         }
@@ -146,13 +146,13 @@ impl App {
         }
         for p in all_panes!(self) {
             let tab = p.tab_mut();
-            if local_file_of(&tab.loc).is_some_and(|p| crate::drives::on_drive(&p, &mount)) {
+            if local_file_of(&tab.loc).is_some_and(|p| crate::files::drives::on_drive(&p, &mount)) {
                 tab.dir_sizes = None;
             }
         }
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(crate::drives::eject(&d));
+            let _ = tx.send(crate::files::drives::eject(&d));
         });
         self.ejecting.push((mount, name, rx));
     }
@@ -168,7 +168,7 @@ impl App {
                 continue;
             }
             let Some(path) = local_file_of(&tab.loc) else { continue };
-            if crate::drives::on_drive(&path, mount) && (!only_gone || !path.exists()) {
+            if crate::files::drives::on_drive(&path, mount) && (!only_gone || !path.exists()) {
                 tab.navigate(home.clone(), &lc);
             }
         }
@@ -177,7 +177,7 @@ impl App {
     /// New drive lists from the watcher, and ejects that finished.
     pub(super) fn poll_drives(&mut self, ctx: &egui::Context) {
         if let Some(new) = self.drive_watch.poll() {
-            let gone = crate::drives::removed(&self.drives, &new);
+            let gone = crate::files::drives::removed(&self.drives, &new);
             self.drives = new;
             for mount in gone {
                 self.leave_drive(&mount, true);

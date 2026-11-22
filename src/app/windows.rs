@@ -291,7 +291,7 @@ impl App {
                     }),
                     bell,
                     activity,
-                    cells: if panes.len() > 1 { crate::tabs::layout_cells(layout, active) } else { Vec::new() },
+                    cells: if panes.len() > 1 { crate::ui::tabs::layout_cells(layout, active) } else { Vec::new() },
                 }
             })
             .collect()
@@ -623,8 +623,8 @@ impl App {
     /// the middle of a window swaps the two, its edges dock beside it.
     pub(super) fn window_drop_zones(&mut self, ui: &egui::Ui, rects: &[(usize, egui::Rect)]) {
         let ctx = ui.ctx().clone();
-        let win = egui::DragAndDrop::payload::<crate::tabs::WinDrag>(&ctx);
-        let tab = egui::DragAndDrop::payload::<crate::tabs::TabDrag>(&ctx).map(|d| d.uid).filter(|u| *u != self.live);
+        let win = egui::DragAndDrop::payload::<crate::ui::tabs::WinDrag>(&ctx);
+        let tab = egui::DragAndDrop::payload::<crate::ui::tabs::TabDrag>(&ctx).map(|d| d.uid).filter(|u| *u != self.live);
         let src = win.and_then(|w| self.panes.iter().position(|p| p.tab().uid == w.uid));
         let Some(pointer) = ctx.input(|i| i.pointer.hover_pos()) else { return };
         if src.is_none() && tab.is_none() {

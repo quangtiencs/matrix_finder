@@ -22,7 +22,7 @@ impl App {
                 let path = dir.join(&e.name);
                 // An app chosen for archives takes over from browsing inside them.
                 // Only a regular file is browsed as an archive (a named pipe would block).
-                if archive::is_archive(&path) && path.is_file() && crate::defaultapps::program_for(&self.cfg.default_apps, &e.name).is_none() {
+                if archive::is_archive(&path) && path.is_file() && crate::system::defaultapps::program_for(&self.cfg.default_apps, &e.name).is_none() {
                     if archive::lock_state(&path) == archive::Lock::Everything {
                         self.ask_archive_password(path.clone(), AfterPassword::Browse(path));
                         return;
@@ -39,7 +39,7 @@ impl App {
     /// Open a file with the app chosen for its type, or else the system's default app.
     pub(super) fn open_file(&mut self, path: &Path) {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let opened = match crate::defaultapps::program_for(&self.cfg.default_apps, &name) {
+        let opened = match crate::system::defaultapps::program_for(&self.cfg.default_apps, &name) {
             Some(program) => terminal::open_with(program, path).map_err(|e| format!("{} {program}: {e}", t("Could not open the file with"))),
             None => terminal::open_default(path),
         };
@@ -51,7 +51,7 @@ impl App {
     /// The "Open with…" dialog, starting from the app chosen for this type.
     pub(super) fn open_with_dialog(&mut self, path: PathBuf) {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        let program = crate::defaultapps::program_for(&self.cfg.default_apps, &name).unwrap_or_default().to_string();
+        let program = crate::system::defaultapps::program_for(&self.cfg.default_apps, &name).unwrap_or_default().to_string();
         self.show_dialog(Dialog::OpenWith { path, program, always: false }, true);
     }
 
@@ -87,7 +87,7 @@ impl App {
         }
         let Some(src) = self.endpoint(&loc) else { return };
         // A new private folder each time: an earlier copy (maybe edited) is never written over.
-        let tmp = match crate::util::private_temp_dir(crate::tempcopy::TEMP_PREFIX) {
+        let tmp = match crate::util::private_temp_dir(crate::files::tempcopy::TEMP_PREFIX) {
             Ok(d) => d,
             Err(err) => {
                 self.toast(format!("{} {}: {err}", t("Could not open"), e.name), true);
@@ -124,7 +124,7 @@ impl App {
     fn upload_copy(&mut self, id: u64) {
         let Some(c) = self.temp_copies.list.iter().find(|c| c.id == id) else { return };
         let (src, name, dir, label) = (c.src.clone(), c.name.clone(), c.dir.clone(), c.label.clone());
-        let Some(stamp) = crate::tempcopy::stamp(&c.path) else { return };
+        let Some(stamp) = crate::files::tempcopy::stamp(&c.path) else { return };
         let Some(dst) = self.endpoint(&src) else {
             self.toast(format!("{}: {label}", t("Not connected any more; the edited copy is kept")), true);
             return;
@@ -188,9 +188,9 @@ impl App {
             }
             _ => {
                 if let Some(c) = self.temp_copies.get_mut(id) {
-                    c.asked = crate::tempcopy::stamp(&c.path);
+                    c.asked = crate::files::tempcopy::stamp(&c.path);
                 }
-                let dir = crate::tempcopy::recovered_dir();
+                let dir = crate::files::tempcopy::recovered_dir();
                 self.toast(format!("{} {}", t("Kept. When Matrix Finder quits, edited copies are moved to"), dir.display()), false);
             }
         }
@@ -264,7 +264,7 @@ impl App {
                 }
                 // The preview's cancel flag, once it exists: moving on stops the read. A
                 // transfer holds the connection for a whole file, so this does not wait for it.
-                let flag: Arc<std::sync::OnceLock<crate::media::Cancel>> = Arc::default();
+                let flag: Arc<std::sync::OnceLock<crate::preview::media::Cancel>> = Arc::default();
                 let f2 = flag.clone();
                 let loader: preview::Loader = Box::new(move || {
                     // It is set right after the preview is made.
@@ -362,7 +362,7 @@ fn summary_rest(left: usize, cut: bool) -> String {
     }
 }
 
-fn folder_summary(path: &Path, name: &str, cancel: &crate::media::Cancel) -> String {
+fn folder_summary(path: &Path, name: &str, cancel: &crate::preview::media::Cancel) -> String {
     let started = Instant::now();
     let mut files = 0;
     let mut dirs = 0;
@@ -407,7 +407,7 @@ fn folder_summary(path: &Path, name: &str, cancel: &crate::media::Cancel) -> Str
     )
 }
 
-fn archive_summary(path: &Path, cancel: &crate::media::Cancel) -> String {
+fn archive_summary(path: &Path, cancel: &crate::preview::media::Cancel) -> String {
     let started = Instant::now();
     let stop = || cancel.load(std::sync::atomic::Ordering::Relaxed) || started.elapsed() > SUMMARY_TIME;
     match archive::list_until(path, 200_000, &stop) {

@@ -47,15 +47,15 @@ impl App {
     /// changed in this frame); a click on a folder fills the address in.
     #[allow(clippy::too_many_arguments)]
     fn transfer_tree(&mut self, ui: &mut egui::Ui, th: &Theme, dst: &mut String, base: Option<&Path>, home: Option<&Path>, typed: bool, dst_id: egui::Id, max_h: f32) {
-        let typed_dir = |dst: &str| crate::pathfield::typed_dir(dst, home, base).filter(|p| p.is_dir());
+        let typed_dir = |dst: &str| crate::ui::pathfield::typed_dir(dst, home, base).filter(|p| p.is_dir());
         let tree = self.dialog_tree.get_or_insert_with(|| {
-            let roots = crate::foldertree::roots(home, &self.drives);
+            let roots = crate::ui::foldertree::roots(home, &self.drives);
             match typed_dir(dst) {
-                Some(d) => crate::foldertree::FolderTree::new(roots, Some(&d), self.cfg.show_hidden),
+                Some(d) => crate::ui::foldertree::FolderTree::new(roots, Some(&d), self.cfg.show_hidden),
                 // Nothing chosen yet: open at the folder copied from, for bearings, with
                 // nothing chosen in it.
                 None => {
-                    let mut t = crate::foldertree::FolderTree::new(roots, base.filter(|b| b.is_dir()), self.cfg.show_hidden);
+                    let mut t = crate::ui::foldertree::FolderTree::new(roots, base.filter(|b| b.is_dir()), self.cfg.show_hidden);
                     t.unselect();
                     t
                 }
@@ -82,7 +82,7 @@ impl App {
         if let Some(p) = picked.or(tree.clicked.take()) {
             *dst = p.display().to_string();
             self.dialog_path.reset();
-            crate::pathfield::cursor_to_end(ui.ctx(), dst_id, dst);
+            crate::ui::pathfield::cursor_to_end(ui.ctx(), dst_id, dst);
         }
     }
 
@@ -175,12 +175,12 @@ impl App {
         let mut open = true;
         let mut close = false;
         let mut skip = false;
-        let asset = crate::update::asset_for(r, std::env::consts::OS, std::env::consts::ARCH);
+        let asset = crate::system::update::asset_for(r, std::env::consts::OS, std::env::consts::ARCH);
         let title = t("Update available");
         let chrome = &self.chrome;
         chrome.dialog_window(ctx, &title, egui::Id::new("update")).open(&mut open).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
             close |= chrome.dialog_title(ui, th, &title);
-            ui.label(RichText::new(format!("Matrix Finder {}", crate::update::version_text(r.version))).size(18.0).strong().color(th.strong()));
+            ui.label(RichText::new(format!("Matrix Finder {}", crate::system::update::version_text(r.version))).size(18.0).strong().color(th.strong()));
             let mut line = format!("{} {}", t("You have"), env!("CARGO_PKG_VERSION"));
             if !r.date.is_empty() {
                 line.push_str(&format!(" · {} {}", t("released"), r.date));
@@ -256,7 +256,7 @@ impl App {
                     ui.label(t("Edited in other apps and not uploaded:"));
                     ui.label(RichText::new(edited.join(", ")).strong());
                 });
-                ui.label(RichText::new(format!("{}\n{}", t("They are not deleted: quitting moves them to"), crate::tempcopy::recovered_dir().display())).color(th.weak));
+                ui.label(RichText::new(format!("{}\n{}", t("They are not deleted: quitting moves them to"), crate::files::tempcopy::recovered_dir().display())).color(th.weak));
                 ui.add_space(4.0);
             }
             if n > 0 {
@@ -379,7 +379,7 @@ impl App {
                         egui::ScrollArea::vertical().id_salt("transfer-choices").max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
                             // A split tab: one list where exactly one place is chosen, a window
                             // or "Another folder"; the address shows only for the latter.
-                            let typed = crate::pathfield::resolve_typed(dst, home.as_deref(), base.as_deref());
+                            let typed = crate::ui::pathfield::resolve_typed(dst, home.as_deref(), base.as_deref());
                             // When no window is the destination (any more: a window may have moved
                             // on while the dialog is open), the address shows what will be used.
                             let custom = if choices.iter().any(|c| same_place(&typed, &c.text)) { *self.dialog_custom.get_or_insert(false) } else { true };
@@ -409,7 +409,7 @@ impl App {
                                             ui.add_space(CHOICE_TEXT_X - 8.0);
                                             ui.vertical(|ui| {
                                                 ui.set_width(ui.available_width() - 8.0);
-                                                let o = crate::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: ui.available_width(), hint: Some(t("Type a path, or pick one from the folder tree")) };
+                                                let o = crate::ui::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: ui.available_width(), hint: Some(t("Type a path, or pick one from the folder tree")) };
                                                 let r = self.dialog_path.show(ui, dst, dst_id, o, th);
                                                 // The tree in the choice, under its address: what a small window has room for.
                                                 let max_h = (ui.ctx().screen_rect().height() - 470.0).clamp(96.0, 220.0);
@@ -430,11 +430,11 @@ impl App {
                                 self.dialog_custom = Some(true);
                                 // The address is drawn from the next frame on: it takes the keyboard then.
                                 self.dialog_focus = true;
-                                crate::pathfield::cursor_to_end(ui.ctx(), dst_id, dst);
+                                crate::ui::pathfield::cursor_to_end(ui.ctx(), dst_id, dst);
                             }
                         });
                     } else {
-                        let o = crate::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: Some(t("Type a path, or pick one from the folder tree")) };
+                        let o = crate::ui::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: Some(t("Type a path, or pick one from the folder tree")) };
                         let r = self.dialog_path.show(ui, dst, dst_id, o, th);
                         focus_edit(&r);
                         // One window: the folder tree right under the address, following it.
@@ -531,7 +531,7 @@ impl App {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         row_label(ui, t("Save to"));
-                        let o = crate::pathfield::Opts { base: Some(src_dir.as_path()), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
+                        let o = crate::ui::pathfield::Opts { base: Some(src_dir.as_path()), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
                         self.dialog_path.show(ui, dest_dir, dst_id, o, th);
                     });
                     if format.compresses() {
@@ -580,7 +580,7 @@ impl App {
                         ui.label(format!("{} {}", selection.len(), t("selected item(s)")));
                     }
                     ui.label(t("Extract to:"));
-                    let o = crate::pathfield::Opts { base: archive.parent(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
+                    let o = crate::ui::pathfield::Opts { base: archive.parent(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: f32::INFINITY, hint: None };
                     let r = self.dialog_path.show(ui, dest, dst_id, o, th);
                     focus_edit(&r);
                     ui.horizontal(|ui| {
@@ -609,7 +609,7 @@ impl App {
                 Dialog::OpenWith { path, program, always } => {
                     ui.heading(t("Open with…"));
                     ui.label(path.to_string_lossy());
-                    let file_type = path.file_name().and_then(|n| crate::defaultapps::type_of(&n.to_string_lossy()));
+                    let file_type = path.file_name().and_then(|n| crate::system::defaultapps::type_of(&n.to_string_lossy()));
                     let hint = if cfg!(target_os = "macos") { "TextEdit.app / code / open -a Preview" } else if cfg!(windows) { "notepad.exe / code" } else { "gedit / code / gimp" };
                     let r = ui.add(egui::TextEdit::singleline(program).hint_text(hint).desired_width(f32::INFINITY));
                     focus_edit(&r);
@@ -631,7 +631,7 @@ impl App {
                         ui.checkbox(always, format!("{} .{ext}", t("Always use this app to open")));
                         let chosen = self.cfg.default_apps.contains_key(ext);
                         ui.horizontal_wrapped(|ui| {
-                            let current = match (chosen, crate::defaultapps::system_app(ui.ctx(), ext)) {
+                            let current = match (chosen, crate::system::defaultapps::system_app(ui.ctx(), ext)) {
                                 (true, _) => format!("{}: {}", t("Default now"), self.cfg.default_apps[ext]),
                                 (false, Some(Some(app))) => format!("{}: {app} ({})", t("Default now"), t("system default")),
                                 (false, _) => format!("{}: {}", t("Default now"), t("system default")),
@@ -885,7 +885,7 @@ impl App {
                 let dst_loc = match known.into_iter().find(|l| l.display(|id| self.remote_label(id)) == dst) {
                     Some(l) => l,
                     // A relative path is taken from the folder copied from.
-                    None => match self.parse_location_text(&crate::pathfield::resolve_typed(&dst, dirs::home_dir().as_deref(), src.local_path())) {
+                    None => match self.parse_location_text(&crate::ui::pathfield::resolve_typed(&dst, dirs::home_dir().as_deref(), src.local_path())) {
                         Some(l) => l,
                         None => return Some(Dialog::Transfer { src, mv, items, dst, policy }),
                     },
@@ -902,7 +902,7 @@ impl App {
                         let p = d.join(&name);
                         if file {
                             std::fs::OpenOptions::new().write(true).create_new(true).open(&p).map(|_| ()).map_err(es)
-                        } else if crate::safefs::exists(&p) {
+                        } else if crate::files::safefs::exists(&p) {
                             Err(format!("{}: {name}", t("Already exists")))
                         } else {
                             std::fs::create_dir_all(&p).map_err(es)
@@ -943,11 +943,11 @@ impl App {
                     Location::Local(d) => {
                         let target = d.join(&new);
                         // Only the same file may be there: the name changes case on a disk that ignores it.
-                        if crate::safefs::exists(&target) && !same_entry(&d.join(&old), &target, &old, &new) {
+                        if crate::files::safefs::exists(&target) && !same_entry(&d.join(&old), &target, &old, &new) {
                             Err(format!("{}: {new}", t("Already exists")))
                         } else {
                             // Never over a file that appeared since.
-                            crate::safefs::rename_item(&d.join(&old), &target).map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { format!("{}: {new}", t("Already exists")) } else { es(e) })
+                            crate::files::safefs::rename_item(&d.join(&old), &target).map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { format!("{}: {new}", t("Already exists")) } else { es(e) })
                         }
                     }
                     Location::Remote { id, path } => match self.remotes.get(id) {
@@ -977,7 +977,7 @@ impl App {
                 let Some(dest) = pack_dest(&dest_dir, &name, format, dirs::home_dir().as_deref(), &src_dir) else {
                     return Some(Dialog::Pack { items, src_dir, name, dest_dir, format, level });
                 };
-                if crate::safefs::exists(&dest) {
+                if crate::files::safefs::exists(&dest) {
                     self.toast(format!("{}: {}", t("Already exists"), dest.display()), true);
                     return Some(Dialog::Pack { items, src_dir, name, dest_dir, format, level });
                 }
@@ -991,7 +991,7 @@ impl App {
             }
             Dialog::Unpack { archive, dest, selection, strip, policy } => {
                 // `~` and relative paths, as the field suggests them (relative: from the archive's folder).
-                let Some(dest) = crate::pathfield::typed_dir(&dest, dirs::home_dir().as_deref(), archive.parent()) else {
+                let Some(dest) = crate::ui::pathfield::typed_dir(&dest, dirs::home_dir().as_deref(), archive.parent()) else {
                     return Some(Dialog::Unpack { archive, dest, selection, strip, policy });
                 };
                 let title = format!("{} {}", t("Extracting"), archive.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default());
@@ -1003,7 +1003,7 @@ impl App {
             Dialog::OpenWith { path, program, always } => {
                 let program = program.trim();
                 if always {
-                    if let Some(ext) = path.file_name().and_then(|n| crate::defaultapps::type_of(&n.to_string_lossy())) {
+                    if let Some(ext) = path.file_name().and_then(|n| crate::system::defaultapps::type_of(&n.to_string_lossy())) {
                         // "Always" with no app given means the system's default from now on.
                         if program.is_empty() {
                             self.cfg.default_apps.remove(&ext);
@@ -1125,7 +1125,7 @@ impl App {
                     }
                 });
                 ui.separator();
-                ui.label(RichText::new(crate::pane::filter_help()).monospace());
+                ui.label(RichText::new(crate::ui::pane::filter_help()).monospace());
                 ui.separator();
                 ui.label(t("Tip: drop files from your OS file manager onto the window to copy them into the active panel."));
             });
@@ -1139,7 +1139,7 @@ impl App {
     pub(super) fn about_window(&mut self, ctx: &egui::Context) {
         let mut open = self.show_about;
         if self.logo_large.is_none() {
-            self.logo_large = crate::logo::texture(ctx, false, 256);
+            self.logo_large = crate::style::logo::texture(ctx, false, 256);
         }
         let title = t("About");
         let chrome = self.chrome.clone();
@@ -1234,7 +1234,7 @@ fn other_folder_head(ui: &mut egui::Ui, th: &Theme, chosen: bool) -> egui::Respo
     if chosen {
         p.circle_filled(c, 4.0, th.accent);
     }
-    crate::icons::folder_icon(p, egui::Rect::from_center_size(egui::pos2(rect.left() + 55.0, rect.center().y), egui::vec2(24.0, 24.0)), th);
+    crate::style::icons::folder_icon(p, egui::Rect::from_center_size(egui::pos2(rect.left() + 55.0, rect.center().y), egui::vec2(24.0, 24.0)), th);
     let x = rect.left() + CHOICE_TEXT_X;
     let title = t("Another folder");
     let title_y = if chosen { rect.center().y - 9.0 } else { rect.top() + 6.0 };
@@ -1302,7 +1302,7 @@ fn pack_dest(dir: &str, name: &str, fmt: ArchiveFormat, home: Option<&Path>, bas
     if name.trim().is_empty() {
         return None;
     }
-    let dir = crate::pathfield::typed_dir(dir, home, Some(base))?;
+    let dir = crate::ui::pathfield::typed_dir(dir, home, Some(base))?;
     Some(dir.join(archive::archive_file_name(name, fmt)))
 }
 
