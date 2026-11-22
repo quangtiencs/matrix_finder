@@ -119,7 +119,14 @@ fn cert_rows(c: &X509Certificate, der: &[u8], now: i64, rows: &mut Vec<Row>) {
     }
     if let Ok(Some(k)) = c.extended_key_usage() {
         let e = k.value;
-        let uses = [(e.server_auth, "server"), (e.client_auth, "client"), (e.code_signing, "code signing"), (e.email_protection, "email"), (e.time_stamping, "time stamping"), (e.ocsp_signing, "OCSP")];
+        let uses = [
+            (e.server_auth, "server"),
+            (e.client_auth, "client"),
+            (e.code_signing, "code signing"),
+            (e.email_protection, "email"),
+            (e.time_stamping, "time stamping"),
+            (e.ocsp_signing, "OCSP"),
+        ];
         let list: Vec<&str> = uses.iter().filter(|(on, _)| *on).map(|(_, n)| *n).collect();
         if !list.is_empty() {
             rows.push(Row::Field(t("Used for"), list.join(", ")));

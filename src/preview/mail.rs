@@ -76,7 +76,10 @@ fn quoted_printable(b: &[u8], header: bool) -> Vec<u8> {
 /// Base64 as mail has it: in lines, with or without padding, sometimes with stray bytes.
 fn base64_lenient(b: &[u8]) -> Vec<u8> {
     use base64::engine::{DecodePaddingMode, GeneralPurpose, GeneralPurposeConfig};
-    const LENIENT: GeneralPurpose = GeneralPurpose::new(&base64::alphabet::STANDARD, GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::RequireNone).with_decode_allow_trailing_bits(true));
+    const LENIENT: GeneralPurpose = GeneralPurpose::new(
+        &base64::alphabet::STANDARD,
+        GeneralPurposeConfig::new().with_decode_padding_mode(DecodePaddingMode::RequireNone).with_decode_allow_trailing_bits(true),
+    );
     let mut clean: Vec<u8> = b.iter().copied().filter(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/')).collect();
     // One character past a whole group holds no byte.
     if clean.len() % 4 == 1 {

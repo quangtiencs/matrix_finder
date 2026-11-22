@@ -80,7 +80,9 @@ pub fn header_row(ui: &mut egui::Ui, theme: &Theme, name: &str, facts: &[(String
                 if !own_line {
                     // The name gets what the facts leave, and at least half the row.
                     let name_room = (room - facts_w).max(room * 0.5).max(24.0);
-                    ui.allocate_ui_with_layout(egui::vec2(name_room, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name_label()));
+                    ui.allocate_ui_with_layout(egui::vec2(name_room, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(name_label())
+                    });
                 }
                 if !facts.is_empty() {
                     let mut job = LayoutJob::default();

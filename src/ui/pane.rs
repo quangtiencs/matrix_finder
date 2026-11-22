@@ -1,13 +1,13 @@
 //! A file panel: tabs, listing, sorting, filtering, selection and rendering.
 use crate::files::archive::{self, ArchEntry};
-use crate::ui::filter::Filter;
+use crate::files::remote::SharedRemote;
+use crate::files::vfs::{list_local, Entry, Location};
 use crate::i18n::t;
 use crate::style::icons;
-use crate::ui::layout::SplitDir;
-use crate::files::remote::SharedRemote;
 use crate::style::theme::Theme;
+use crate::ui::filter::Filter;
+use crate::ui::layout::SplitDir;
 use crate::util::{format_time, human_size, natural_cmp, Res};
-use crate::files::vfs::{list_local, Entry, Location};
 use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
@@ -407,11 +407,7 @@ impl Tab {
                 let fs = fs.clone();
                 let (tx, rx) = channel();
                 std::thread::spawn(move || {
-                    let r = fs
-                        .lock()
-                        .map_err(|e| e.to_string())
-                        .and_then(|mut g| g.list(&path))
-                        .map(Loaded::Entries);
+                    let r = fs.lock().map_err(|e| e.to_string()).and_then(|mut g| g.list(&path)).map(Loaded::Entries);
                     let _ = tx.send(r);
                 });
                 self.loading = Some(rx);
@@ -881,13 +877,7 @@ impl Tab {
 
     pub fn invert_marks(&mut self) {
         self.end_range();
-        let names: Vec<String> = self
-            .view
-            .iter()
-            .map(|&i| &self.entries[i])
-            .filter(|e| !e.is_parent)
-            .map(|e| e.name.clone())
-            .collect();
+        let names: Vec<String> = self.view.iter().map(|&i| &self.entries[i]).filter(|e| !e.is_parent).map(|e| e.name.clone()).collect();
         for n in names {
             if !self.marked.remove(&n) {
                 self.marked.insert(n);
@@ -955,14 +945,23 @@ fn spawn_search(root: PathBuf, filter: Filter, show_hidden: bool) -> (Receiver<V
         let mut batch = Vec::new();
         let mut last = std::time::Instant::now();
         let mut found = 0usize;
-        let walker = walkdir::WalkDir::new(&root).min_depth(1).follow_links(false).into_iter().filter_entry(|d| show_hidden || !d.file_name().to_string_lossy().starts_with('.'));
+        let walker = walkdir::WalkDir::new(&root)
+            .min_depth(1)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|d| show_hidden || !d.file_name().to_string_lossy().starts_with('.'));
         for d in walker.flatten() {
             if stop.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
             }
             let meta = d.metadata().ok();
             let is_dir = d.file_type().is_dir();
-            let mut e = Entry::new(d.file_name().to_string_lossy().to_string(), is_dir, meta.as_ref().filter(|_| !is_dir).map(|m| m.len()).unwrap_or(0), meta.and_then(|m| m.modified().ok()));
+            let mut e = Entry::new(
+                d.file_name().to_string_lossy().to_string(),
+                is_dir,
+                meta.as_ref().filter(|_| !is_dir).map(|m| m.len()).unwrap_or(0),
+                meta.and_then(|m| m.modified().ok()),
+            );
             e.is_link = d.path_is_symlink();
             if !filter.matches_at(&e, Some(d.path()), &stop) {
                 continue;
@@ -1350,7 +1349,15 @@ pub fn pane_ui(ui: &mut egui::Ui, pane: &mut Pane, side: usize, c: &PaneUiCtx) -
 /// overflowing header is clipped instead of pushing the file list wider.
 /// The title row of a window whose content the app draws (Settings, Transfers).
 /// Returns the area left for that content.
-fn tool_window_header(ui: &mut egui::Ui, uid: u64, card: Rect, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>, icon: fn(&egui::Painter, Rect, egui::Color32), title: &str) -> Rect {
+fn tool_window_header(
+    ui: &mut egui::Ui,
+    uid: u64,
+    card: Rect,
+    c: &PaneUiCtx,
+    ev: &mut Vec<PaneEvent>,
+    icon: fn(&egui::Painter, Rect, egui::Color32),
+    title: &str,
+) -> Rect {
     let th = c.theme;
     fixed_width(ui, |ui| {
         ui.horizontal(|ui| {
@@ -1376,7 +1383,8 @@ fn tool_window_header(ui: &mut egui::Ui, uid: u64, card: Rect, c: &PaneUiCtx, ev
 fn fixed_width(ui: &mut egui::Ui, f: impl FnOnce(&mut egui::Ui)) {
     let top = ui.cursor().min;
     let w = ui.available_width();
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(top, vec2(w, ui.available_height()))).layout(egui::Layout::top_down(egui::Align::Min)));
+    let mut child = ui
+        .new_child(egui::UiBuilder::new().max_rect(Rect::from_min_size(top, vec2(w, ui.available_height()))).layout(egui::Layout::top_down(egui::Align::Min)));
     child.set_clip_rect(child.max_rect().intersect(ui.clip_rect()));
     f(&mut child);
     let h = child.min_rect().height();
@@ -1394,15 +1402,13 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         }
         // Narrow pane: keep only "parent folder" so the bookmark/close buttons fit.
         let compact = ui.available_width() < 380.0;
-        if !compact && icons::icon_button(ui, 26.0, !tab.back.is_empty(), th, |p, r, col| icons::chevron(p, r, -1, col))
-            .on_hover_text(t("Back (Alt+←)"))
-            .clicked()
+        if !compact
+            && icons::icon_button(ui, 26.0, !tab.back.is_empty(), th, |p, r, col| icons::chevron(p, r, -1, col)).on_hover_text(t("Back (Alt+←)")).clicked()
         {
             ev.push(PaneEvent::Back);
         }
-        if !compact && icons::icon_button(ui, 26.0, !tab.fwd.is_empty(), th, |p, r, col| icons::chevron(p, r, 1, col))
-            .on_hover_text(t("Forward (Alt+→)"))
-            .clicked()
+        if !compact
+            && icons::icon_button(ui, 26.0, !tab.fwd.is_empty(), th, |p, r, col| icons::chevron(p, r, 1, col)).on_hover_text(t("Forward (Alt+→)")).clicked()
         {
             ev.push(PaneEvent::Forward);
         }
@@ -1419,7 +1425,19 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         // Filter / search mode: a chip at the end of the address bar; click it to turn it off.
         let chip = match &tab.search {
             Some(s) => Some((
-                format!("{}: {} · {}{}", t("Subfolders"), s.query, tab.entries.iter().filter(|e| !e.is_parent).count(), if s.running { "…" } else if s.truncated { "+" } else { "" }),
+                format!(
+                    "{}: {} · {}{}",
+                    t("Subfolders"),
+                    s.query,
+                    tab.entries.iter().filter(|e| !e.is_parent).count(),
+                    if s.running {
+                        "…"
+                    } else if s.truncated {
+                        "+"
+                    } else {
+                        ""
+                    }
+                ),
                 true,
             )),
             None => {
@@ -1435,7 +1453,9 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         let room = ui.available_width() - 54.0 - extra - SIDE_PAD - 8.0;
         let chip_w = chip
             .as_ref()
-            .map(|(text, _)| (ui.fonts(|f| f.layout_no_wrap(text.clone(), FontId::proportional(12.5), th.text).size().x) + 46.0).min(300.0).min((room - 80.0).max(60.0)))
+            .map(|(text, _)| {
+                (ui.fonts(|f| f.layout_no_wrap(text.clone(), FontId::proportional(12.5), th.text).size().x) + 46.0).min(300.0).min((room - 80.0).max(60.0))
+            })
             .unwrap_or(0.0);
         let crumb_w = (room - chip_w).max(30.0);
         ui.allocate_ui(vec2(crumb_w, 28.0), |ui| breadcrumb(ui, tab, side, c, ev));
@@ -1710,7 +1730,13 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
         }
         let exited = term.exited;
         let (ir, _) = ui.allocate_exact_size(vec2(18.0, 26.0), Sense::hover());
-        let icon_col = if exited.is_some() { th.danger } else if c.active { th.accent } else { th.weak };
+        let icon_col = if exited.is_some() {
+            th.danger
+        } else if c.active {
+            th.accent
+        } else {
+            th.weak
+        };
         crate::ui::tabs::terminal_glyph(ui.painter(), Rect::from_center_size(ir.center(), vec2(14.0, 14.0)), icon_col);
         ui.add_space(4.0);
 
@@ -1852,7 +1878,10 @@ fn du_header(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneE
         if c.pane_count > 1 {
             window_grip(ui, uid, c, ev);
         }
-        if icons::icon_button(ui, 26.0, du.path.parent().is_some(), th, |p, r, col| icons::chevron(p, r, 0, col)).on_hover_text(t("Parent folder (Backspace)")).clicked() {
+        if icons::icon_button(ui, 26.0, du.path.parent().is_some(), th, |p, r, col| icons::chevron(p, r, 0, col))
+            .on_hover_text(t("Parent folder (Backspace)"))
+            .clicked()
+        {
             du.go_up();
         }
         let (ir, _) = ui.allocate_exact_size(vec2(20.0, 26.0), Sense::hover());
@@ -1869,7 +1898,11 @@ fn du_header(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneE
         let sum_w = ui.fonts(|f| f.layout_no_wrap(summary.clone(), small.clone(), th.weak).size().x).min(room * 0.5);
         let path_room = (room - sum_w - 12.0).max(20.0);
         let cands = crate::util::short_path_candidates(&full);
-        let pick = cands.iter().find(|s| ui.fonts(|f| f.layout_no_wrap((*s).clone(), bold.clone(), th.strong()).size().x) <= path_room).unwrap_or_else(|| cands.last().unwrap()).clone();
+        let pick = cands
+            .iter()
+            .find(|s| ui.fonts(|f| f.layout_no_wrap((*s).clone(), bold.clone(), th.strong()).size().x) <= path_room)
+            .unwrap_or_else(|| cands.last().unwrap())
+            .clone();
         let mut job = egui::text::LayoutJob::simple_singleline(pick, bold, th.strong());
         job.wrap = egui::text::TextWrapping::truncate_at_width(path_room);
         let g = ui.fonts(|f| f.layout_job(job));
@@ -1887,13 +1920,16 @@ fn du_header(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneE
         // Depth of the scan.
         let label = |d: usize| if d == usize::MAX { t("All levels") } else { format!("{} {d}", t("Depth")) };
         let mut depth = du.depth;
-        egui::ComboBox::from_id_salt(("du-depth", uid)).width(70.0).selected_text(label(depth)).show_ui(ui, |ui| {
-            for d in DEPTHS {
-                ui.selectable_value(&mut depth, d, label(d));
-            }
-        })
-        .response
-        .on_hover_text(t("How many folder levels the analysis shows (sizes always include everything below)"));
+        egui::ComboBox::from_id_salt(("du-depth", uid))
+            .width(70.0)
+            .selected_text(label(depth))
+            .show_ui(ui, |ui| {
+                for d in DEPTHS {
+                    ui.selectable_value(&mut depth, d, label(d));
+                }
+            })
+            .response
+            .on_hover_text(t("How many folder levels the analysis shows (sizes always include everything below)"));
         if depth != du.depth {
             du.set_depth(depth);
         }
@@ -2065,7 +2101,11 @@ fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
                 }
             }
             let color = if i == last {
-                if c.active { th.strong() } else { th.text }
+                if c.active {
+                    th.strong()
+                } else {
+                    th.text
+                }
             } else if resp.hovered() {
                 th.text
             } else {
@@ -2196,34 +2236,35 @@ pub fn suggestion_popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, comp: &mu
         // Inside a dialog: keep the list above it.
         parent.ctx().set_sublayer(parent.layer_id(), egui::LayerId::new(egui::Order::Foreground, id));
     }
-    egui::Area::new(id)
-        .order(egui::Order::Foreground)
-        .fixed_pos(anchor.left_bottom() + vec2(0.0, 4.0))
-        .show(parent.ctx(), |ui| {
-            egui::Frame::popup(ui.style())
-                .fill(th.panel)
-                .corner_radius(8)
-                .inner_margin(egui::Margin::same(4))
-                .stroke(egui::Stroke::new(1.0_f32, th.border))
-                .show(ui, |ui| {
-                    ui.set_width(w - 8.0);
-                    ui.spacing_mut().item_spacing.y = 0.0;
-                    for (i, s) in comp.items.iter().enumerate() {
-                        let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
-                        let sel = comp.sel == Some(i);
-                        if sel {
-                            ui.painter().rect_filled(rect, 6.0, th.selection);
-                        } else if resp.hovered() {
-                            ui.painter().rect_filled(rect, 6.0, th.hover());
-                        }
-                        let p = ui.painter().with_clip_rect(rect);
-                        let ext = std::path::Path::new(&s.name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
-                        icons::file_icon(&p, Rect::from_center_size(pos2(rect.left() + 15.0, rect.center().y), vec2(16.0, 16.0)), &s.name, !s.archive, &ext, th);
-                        p.text(pos2(rect.left() + 32.0, rect.center().y), Align2::LEFT_CENTER, &s.name, FontId::proportional(14.0), if sel { th.strong() } else { th.text });
-                        comp.rows.push(rect);
+    egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(anchor.left_bottom() + vec2(0.0, 4.0)).show(parent.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).fill(th.panel).corner_radius(8).inner_margin(egui::Margin::same(4)).stroke(egui::Stroke::new(1.0_f32, th.border)).show(
+            ui,
+            |ui| {
+                ui.set_width(w - 8.0);
+                ui.spacing_mut().item_spacing.y = 0.0;
+                for (i, s) in comp.items.iter().enumerate() {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+                    let sel = comp.sel == Some(i);
+                    if sel {
+                        ui.painter().rect_filled(rect, 6.0, th.selection);
+                    } else if resp.hovered() {
+                        ui.painter().rect_filled(rect, 6.0, th.hover());
                     }
-                });
-        });
+                    let p = ui.painter().with_clip_rect(rect);
+                    let ext = std::path::Path::new(&s.name).extension().map(|e| e.to_string_lossy().to_lowercase()).unwrap_or_default();
+                    icons::file_icon(&p, Rect::from_center_size(pos2(rect.left() + 15.0, rect.center().y), vec2(16.0, 16.0)), &s.name, !s.archive, &ext, th);
+                    p.text(
+                        pos2(rect.left() + 32.0, rect.center().y),
+                        Align2::LEFT_CENTER,
+                        &s.name,
+                        FontId::proportional(14.0),
+                        if sel { th.strong() } else { th.text },
+                    );
+                    comp.rows.push(rect);
+                }
+            },
+        );
+    });
 }
 
 /// `text` on one line, cut with "…" to fit `width`; and whether it had to be cut.
@@ -2266,24 +2307,34 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
         let r = Rect::from_min_size(pos2(hrect.left() + x, hrect.top()), vec2(*w, hrect.height()));
         let resp = ui.interact(r, egui::Id::new(("hdr", side, *key as u8)), Sense::click());
         let sorted = tab.sort == *key;
-        let arrow = if sorted { if tab.desc { "  ⏷" } else { "  ⏶" } } else { "" };
+        let arrow = if sorted {
+            if tab.desc {
+                "  ⏷"
+            } else {
+                "  ⏶"
+            }
+        } else {
+            ""
+        };
         let pos = if *align == Align2::LEFT_CENTER { r.left_center() } else { r.right_center() };
         ui.painter().text(
             pos,
             *align,
             format!("{label}{arrow}"),
             FontId::proportional(11.5),
-            if resp.hovered() { th.text } else if sorted { th.accent } else { th.weak },
+            if resp.hovered() {
+                th.text
+            } else if sorted {
+                th.accent
+            } else {
+                th.weak
+            },
         );
         if resp.clicked() {
             ev.push(PaneEvent::Sort(*key));
         }
     }
-    ui.painter().hline(
-        (hrect.left() + SIDE_PAD)..=(hrect.right() - SIDE_PAD),
-        hrect.bottom(),
-        egui::Stroke::new(1.0_f32, th.border),
-    );
+    ui.painter().hline((hrect.left() + SIDE_PAD)..=(hrect.right() - SIDE_PAD), hrect.bottom(), egui::Stroke::new(1.0_f32, th.border));
 
     // Rows
     let footer_h = 28.0;
@@ -2297,10 +2348,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
             tab.scroll_offset = y + ROW_H - list_h;
         }
     }
-    let mut sa = egui::ScrollArea::vertical()
-        .id_salt(("list", tab.uid, format!("{:?}", tab.loc)))
-        .auto_shrink([false, false])
-        .max_height(list_h);
+    let mut sa = egui::ScrollArea::vertical().id_salt(("list", tab.uid, format!("{:?}", tab.loc))).auto_shrink([false, false]).max_height(list_h);
     if tab.ensure_visible {
         sa = sa.vertical_scroll_offset(tab.scroll_offset);
         tab.ensure_visible = false;
@@ -2353,7 +2401,9 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 icons::entry_icon(p, icon_rect, e, th);
                 // A git folder: its branch after the name.
                 let git = match &tab.loc {
-                    Location::Local(dir) if c.git_branches && e.is_dir && !e.is_parent => crate::files::gitinfo::lookup(ui.ctx(), &dir.join(&e.name), c.git_status),
+                    Location::Local(dir) if c.git_branches && e.is_dir && !e.is_parent => {
+                        crate::files::gitinfo::lookup(ui.ctx(), &dir.join(&e.name), c.git_status)
+                    }
                     _ => None,
                 };
                 let is_arch = !e.is_dir && archive::is_archive(std::path::Path::new(&e.name));
@@ -2404,7 +2454,11 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 let size_txt = if e.is_parent {
                     String::new()
                 } else if e.is_dir {
-                    if e.size > 0 { human_size(e.size) } else { "—".into() }
+                    if e.size > 0 {
+                        human_size(e.size)
+                    } else {
+                        "—".into()
+                    }
                 } else {
                     human_size(e.size)
                 };
@@ -2486,7 +2540,13 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     }
                     ui.painter().text(pos2(r.center().x, top + 38.0), Align2::CENTER_CENTER, msg, FontId::proportional(15.0), th.weak);
                     if !hint.is_empty() {
-                        ui.painter().text(pos2(r.center().x, top + 60.0), Align2::CENTER_CENTER, hint, FontId::proportional(12.5), th.weak.gamma_multiply(0.75));
+                        ui.painter().text(
+                            pos2(r.center().x, top + 60.0),
+                            Align2::CENTER_CENTER,
+                            hint,
+                            FontId::proportional(12.5),
+                            th.weak.gamma_multiply(0.75),
+                        );
                     }
                 }
                 if bg.clicked() {
@@ -2619,12 +2679,8 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
         p.with_clip_rect(frect).text(left, Align2::LEFT_CENTER, format!("{} · {found} {}", t("Searching file contents…"), t("found")), small.clone(), th.weak);
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
     } else {
-        let (files, dirs) = tab
-            .view
-            .iter()
-            .map(|&i| &tab.entries[i])
-            .filter(|e| !e.is_parent)
-            .fold((0, 0), |(f, d), e| if e.is_dir { (f, d + 1) } else { (f + 1, d) });
+        let (files, dirs) =
+            tab.view.iter().map(|&i| &tab.entries[i]).filter(|e| !e.is_parent).fold((0, 0), |(f, d), e| if e.is_dir { (f, d + 1) } else { (f + 1, d) });
         let mut s = format!("{dirs} {} · {files} {}", t("folders"), t("files"));
         // Only the marks the filter shows: the ones commands act on.
         let marked = tab.marked_shown();
@@ -2694,7 +2750,14 @@ fn msub(ui: &mut egui::Ui, th: &Theme, icon: MenuIcon, label: &str, add: impl Fn
 fn layout_items(ui: &mut egui::Ui, c: &PaneUiCtx, dirs: &[String], out: &mut Option<Cmd>) {
     let th = c.theme;
     msub(ui, th, crate::ui::tabs::terminal_glyph, &t("Terminal"), |ui| {
-        if mitem(ui, th, crate::ui::tabs::terminal_glyph, &t("Open terminal here"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::OpenTerminal), false) {
+        if mitem(
+            ui,
+            th,
+            crate::ui::tabs::terminal_glyph,
+            &t("Open terminal here"),
+            crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::OpenTerminal),
+            false,
+        ) {
             *out = Some(Cmd::Terminal);
         }
         let label = match dirs {
@@ -2724,7 +2787,8 @@ pub fn split_items(ui: &mut egui::Ui, terminal: bool, c: &PaneUiCtx, out: &mut O
     let th = c.theme;
     let dirs = [SplitDir::Right, SplitDir::Left, SplitDir::Down, SplitDir::Up];
     use crate::ui::shortcuts::{hint, Action};
-    let splits = [(t("Split right"), Action::SplitRight), (t("Split left"), Action::SplitLeft), (t("Split down"), Action::SplitDown), (t("Split up"), Action::SplitUp)];
+    let splits =
+        [(t("Split right"), Action::SplitRight), (t("Split left"), Action::SplitLeft), (t("Split down"), Action::SplitDown), (t("Split up"), Action::SplitUp)];
     for (k, (label, action)) in splits.into_iter().enumerate() {
         if c.can_split[k] && mitem(ui, th, icons::mi_split, &label, hint(action), false) {
             *out = Some(Cmd::Split(dirs[k], terminal));
@@ -2786,7 +2850,11 @@ fn context_menu(ui: &mut egui::Ui, is_dir: bool, is_parent: bool, is_arch: bool,
     pick(mitem(ui, th, icons::mi_open, &t("Open"), "Enter", false), Cmd::Open, &mut out);
     if !is_dir {
         msub(ui, th, icons::mi_external, &t("Open with"), |ui| {
-            pick(mitem(ui, th, icons::mi_external, &t("Default app"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::OpenDefault), false), Cmd::OpenDefault, &mut out);
+            pick(
+                mitem(ui, th, icons::mi_external, &t("Default app"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::OpenDefault), false),
+                Cmd::OpenDefault,
+                &mut out,
+            );
             pick(mitem(ui, th, icons::mi_more, &t("Choose program…"), "", false), Cmd::OpenWith, &mut out);
             pick(mitem(ui, th, icons::mi_view, &t("View"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::View), false), Cmd::View, &mut out);
             ui.separator();
@@ -2804,12 +2872,20 @@ fn context_menu(ui: &mut egui::Ui, is_dir: bool, is_parent: bool, is_arch: bool,
         pick(mitem(ui, th, icons::mi_archive, &t("Compress…"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::Compress), false), Cmd::Pack, &mut out);
         if is_arch {
             pick(mitem(ui, th, icons::mi_open, &t("Extract here"), "", false), Cmd::ExtractHere, &mut out);
-            pick(mitem(ui, th, icons::mi_move, &t("Extract to other panel"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::ExtractOther), false), Cmd::ExtractOther, &mut out);
+            pick(
+                mitem(ui, th, icons::mi_move, &t("Extract to other panel"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::ExtractOther), false),
+                Cmd::ExtractOther,
+                &mut out,
+            );
         }
     });
     pick(mitem(ui, th, icons::mi_link, &t("Copy path"), "", false), Cmd::CopyPath, &mut out);
     msub(ui, th, icons::mi_more, &t("More"), |ui| {
-        pick(mitem(ui, th, icons::mi_rename, &t("Batch rename…"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::BatchRename), false), Cmd::BatchRename, &mut out);
+        pick(
+            mitem(ui, th, icons::mi_rename, &t("Batch rename…"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::BatchRename), false),
+            Cmd::BatchRename,
+            &mut out,
+        );
         let label = if is_sum { t("Verify checksums") } else { t("Checksum…") };
         pick(mitem(ui, th, icons::mi_checksum, &label, crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::Checksum), false), Cmd::Checksum, &mut out);
         pick(mitem(ui, th, icons::mi_external, &t("Show in system file manager"), "", false), Cmd::Reveal, &mut out);
@@ -2820,7 +2896,11 @@ fn context_menu(ui: &mut egui::Ui, is_dir: bool, is_parent: bool, is_arch: bool,
     if is_dir && !is_parent {
         pick(mitem(ui, th, icons::mi_disk, &t("Analyze disk usage"), "", false), Cmd::DiskUsage, &mut out);
     }
-    pick(mitem(ui, th, icons::mi_info, &t("Properties"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::Properties), false), Cmd::Properties, &mut out);
+    pick(
+        mitem(ui, th, icons::mi_info, &t("Properties"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::Properties), false),
+        Cmd::Properties,
+        &mut out,
+    );
     ui.separator();
     layout_items(ui, c, dirs, &mut out);
     out

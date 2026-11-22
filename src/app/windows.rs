@@ -80,7 +80,15 @@ impl App {
     fn remove_pane(&mut self, side: usize) -> Pane {
         self.layout.remove(side);
         let pane = self.panes.remove(side);
-        let fix = |i: usize| if i > side { i - 1 } else if i == side { usize::MAX } else { i };
+        let fix = |i: usize| {
+            if i > side {
+                i - 1
+            } else if i == side {
+                usize::MAX
+            } else {
+                i
+            }
+        };
         let leaves = self.layout.leaves();
         let prev = fix(self.prev_active);
         // Another window closing keeps the focus where it is; the focused one closing
@@ -258,7 +266,8 @@ impl App {
             .tabs
             .iter()
             .map(|w| {
-                let (panes, layout, active) = if w.uid == self.live { (&self.panes[..], &self.layout, self.active) } else { (&w.panes[..], &w.layout, w.active) };
+                let (panes, layout, active) =
+                    if w.uid == self.live { (&self.panes[..], &self.layout, self.active) } else { (&w.panes[..], &w.layout, w.active) };
                 let focused = panes.get(active).or(panes.first()).map(|p| p.tab());
                 let default_title = focused.map(|t| t.title()).unwrap_or_default();
                 let title = w.custom_title.clone().filter(|c| !c.trim().is_empty()).unwrap_or_else(|| default_title.clone());
@@ -355,7 +364,11 @@ impl App {
     pub(super) fn new_files_tab(&mut self, at: usize, group: Option<u32>, loc: Option<Location>) {
         let loc = loc.unwrap_or_else(|| {
             let tab = self.panes[self.active].tab();
-            if tab.is_terminal() { Location::Local(self.tab_dir(self.active)) } else { tab.loc.clone() }
+            if tab.is_terminal() {
+                Location::Local(self.tab_dir(self.active))
+            } else {
+                tab.loc.clone()
+            }
         });
         let pane = self.files_pane(loc);
         self.insert_workspace(at, Workspace::single(pane), group);
@@ -485,7 +498,15 @@ impl App {
                 return None;
             }
             let p = w.panes.remove(i);
-            let fix = |k: usize| if k > i { k - 1 } else if k == i { usize::MAX } else { k };
+            let fix = |k: usize| {
+                if k > i {
+                    k - 1
+                } else if k == i {
+                    usize::MAX
+                } else {
+                    k
+                }
+            };
             let prev = fix(w.prev_active);
             w.active = match fix(w.active) {
                 usize::MAX if prev != usize::MAX => prev,
@@ -634,11 +655,15 @@ impl App {
         // Ghost label for a dragged window.
         if let Some(s) = src {
             let title = self.panes[s].tab().title();
-            egui::Area::new(egui::Id::new("window-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(pointer + egui::vec2(12.0, 8.0)).interactable(false).show(&ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label(title);
+            egui::Area::new(egui::Id::new("window-drag-ghost"))
+                .order(egui::Order::Tooltip)
+                .fixed_pos(pointer + egui::vec2(12.0, 8.0))
+                .interactable(false)
+                .show(&ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label(title);
+                    });
                 });
-            });
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         let Some(&(target, r)) = rects.iter().find(|(i, r)| r.contains(pointer) && Some(*i) != src) else { return };

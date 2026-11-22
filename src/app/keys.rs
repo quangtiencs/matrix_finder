@@ -47,7 +47,9 @@ impl App {
                 _ => None,
             })
         });
-        ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_))));
+        ctx.input_mut(|i| {
+            i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_)))
+        });
         let Some((key, physical, m)) = pressed else { return };
         if key == Key::Escape && !m.any() {
             self.shortcut_capture = None;
@@ -124,7 +126,9 @@ impl App {
         let palette_key = ctx.input_mut(|i| {
             let before = i.events.len();
             i.events.retain(|e| match e {
-                egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => keys.action_for(*key, *physical_key, *modifiers, term_mode) != Some(Action::Palette),
+                egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
+                    keys.action_for(*key, *physical_key, *modifiers, term_mode) != Some(Action::Palette)
+                }
                 _ => true,
             });
             i.events.len() != before
@@ -310,7 +314,14 @@ impl App {
         self.sync_tab();
         if matches!(
             action,
-            Action::NextTab | Action::PrevTab | Action::LastUsedTab | Action::GoToTab(_) | Action::GoToLastTab | Action::FocusWindow(_) | Action::NextWindow | Action::PrevWindow
+            Action::NextTab
+                | Action::PrevTab
+                | Action::LastUsedTab
+                | Action::GoToTab(_)
+                | Action::GoToLastTab
+                | Action::FocusWindow(_)
+                | Action::NextWindow
+                | Action::PrevWindow
         ) {
             self.quick = None;
             self.focus_window();

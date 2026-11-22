@@ -244,11 +244,7 @@ fn decode_image(b64: &str) -> Option<(Vec<u8>, usize, usize)> {
 pub fn parse_notebook(bytes: &[u8], syntax_theme: &str) -> Result<NotebookView, String> {
     let v: serde_json::Value = serde_json::from_slice(bytes).map_err(|e| format!("Invalid notebook JSON: {e}"))?;
     let meta = &v["metadata"];
-    let language = meta["language_info"]["name"]
-        .as_str()
-        .or_else(|| meta["kernelspec"]["language"].as_str())
-        .unwrap_or("python")
-        .to_string();
+    let language = meta["language_info"]["name"].as_str().or_else(|| meta["kernelspec"]["language"].as_str()).unwrap_or("python").to_string();
     let kernel = meta["kernelspec"]["display_name"].as_str().unwrap_or(&language).to_string();
     let mut images = Vec::new();
     let mut cells = Vec::new();
@@ -283,7 +279,12 @@ pub fn parse_notebook(bytes: &[u8], syntax_theme: &str) -> Result<NotebookView, 
                         "execute_result" | "display_data" => {
                             let data = &o["data"];
                             let room_for_image = image_bytes < NOTEBOOK_IMAGE_BYTES;
-                            if let Some(img) = ["image/png", "image/jpeg", "image/gif"].iter().filter(|_| room_for_image).find_map(|k| data[*k].as_str()).and_then(decode_image) {
+                            if let Some(img) = ["image/png", "image/jpeg", "image/gif"]
+                                .iter()
+                                .filter(|_| room_for_image)
+                                .find_map(|k| data[*k].as_str())
+                                .and_then(decode_image)
+                            {
                                 image_bytes += img.0.len();
                                 images.push(Some(img));
                                 outputs.push(Output::Image(images.len() - 1));

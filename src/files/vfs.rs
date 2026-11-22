@@ -20,16 +20,7 @@ impl Entry {
     pub fn new(name: String, is_dir: bool, size: u64, modified: Option<SystemTime>) -> Self {
         let ext = if is_dir { String::new() } else { ext_of(&name) };
         let hidden = name.starts_with('.');
-        Self {
-            name,
-            is_dir,
-            size,
-            modified,
-            is_link: false,
-            hidden,
-            is_parent: false,
-            ext,
-        }
+        Self { name, is_dir, size, modified, is_link: false, hidden, is_parent: false, ext }
     }
 
     pub fn parent() -> Self {
@@ -44,9 +35,15 @@ impl Entry {
 pub enum Location {
     Local(PathBuf),
     /// A remote connection (id into the app's connection table) and a `/` path.
-    Remote { id: u64, path: String },
+    Remote {
+        id: u64,
+        path: String,
+    },
     /// Browsing inside an archive file. `inner` is a `/` path without leading slash.
-    Archive { file: PathBuf, inner: String },
+    Archive {
+        file: PathBuf,
+        inner: String,
+    },
 }
 
 impl Location {
@@ -78,19 +75,15 @@ impl Location {
     pub fn parent(&self) -> Option<Location> {
         match self {
             Location::Local(p) => p.parent().map(|p| Location::Local(p.to_path_buf())),
-            Location::Remote { id, path } => crate::util::parent_slash(path).map(|p| Location::Remote {
-                id: *id,
-                path: if p.is_empty() { "/".into() } else { p },
-            }),
+            Location::Remote { id, path } => {
+                crate::util::parent_slash(path).map(|p| Location::Remote { id: *id, path: if p.is_empty() { "/".into() } else { p } })
+            }
             Location::Archive { file, inner } => {
                 if inner.is_empty() {
                     file.parent().map(|p| Location::Local(p.to_path_buf()))
                 } else {
                     let p = crate::util::parent_slash(inner).unwrap_or_default();
-                    Some(Location::Archive {
-                        file: file.clone(),
-                        inner: p,
-                    })
+                    Some(Location::Archive { file: file.clone(), inner: p })
                 }
             }
         }
@@ -99,36 +92,18 @@ impl Location {
     pub fn child(&self, name: &str) -> Location {
         match self {
             Location::Local(p) => Location::Local(p.join(name)),
-            Location::Remote { id, path } => Location::Remote {
-                id: *id,
-                path: crate::util::join_slash(path, name),
-            },
-            Location::Archive { file, inner } => Location::Archive {
-                file: file.clone(),
-                inner: crate::util::join_slash(inner, name),
-            },
+            Location::Remote { id, path } => Location::Remote { id: *id, path: crate::util::join_slash(path, name) },
+            Location::Archive { file, inner } => Location::Archive { file: file.clone(), inner: crate::util::join_slash(inner, name) },
         }
     }
 
     /// Name of the last path component, used for tab titles.
     pub fn short_name(&self) -> String {
         match self {
-            Location::Local(p) => p
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| p.to_string_lossy().to_string()),
-            Location::Remote { path, .. } => path
-                .trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .filter(|s| !s.is_empty())
-                .unwrap_or("/")
-                .to_string(),
+            Location::Local(p) => p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.to_string_lossy().to_string()),
+            Location::Remote { path, .. } => path.trim_end_matches('/').rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("/").to_string(),
             Location::Archive { file, inner } => {
-                let base = file
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
+                let base = file.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 match inner.rsplit('/').next().filter(|s| !s.is_empty()) {
                     Some(n) => format!("{base}:{n}"),
                     None => base,
@@ -147,9 +122,7 @@ fn is_hidden_local(path: &Path, meta: &std::fs::Metadata) -> bool {
 
 #[cfg(not(windows))]
 fn is_hidden_local(path: &Path, _meta: &std::fs::Metadata) -> bool {
-    path.file_name()
-        .map(|n| n.to_string_lossy().starts_with('.'))
-        .unwrap_or(false)
+    path.file_name().map(|n| n.to_string_lossy().starts_with('.')).unwrap_or(false)
 }
 
 pub fn list_local(dir: &Path) -> Res<Vec<Entry>> {
@@ -164,11 +137,7 @@ pub fn list_local(dir: &Path) -> Res<Vec<Entry>> {
         };
         let is_link = lmeta.file_type().is_symlink();
         // Follow symlinks for type/size, fall back to the link itself if dangling.
-        let meta = if is_link {
-            std::fs::metadata(&path).unwrap_or(lmeta)
-        } else {
-            lmeta
-        };
+        let meta = if is_link { std::fs::metadata(&path).unwrap_or(lmeta) } else { lmeta };
         let mut e = Entry::new(name, meta.is_dir(), if meta.is_dir() { 0 } else { meta.len() }, meta.modified().ok());
         e.is_link = is_link;
         e.hidden = is_hidden_local(&path, &meta);
@@ -179,9 +148,5 @@ pub fn list_local(dir: &Path) -> Res<Vec<Entry>> {
 
 /// (total, available) bytes of the filesystem holding `path`.
 pub fn free_space(path: &Path, cached: &[crate::files::drives::Drive]) -> Option<(u64, u64)> {
-    cached
-        .iter()
-        .filter(|d| path.starts_with(&d.mount))
-        .max_by_key(|d| d.mount.as_os_str().len())
-        .map(|d| (d.total, d.avail))
+    cached.iter().filter(|d| path.starts_with(&d.mount)).max_by_key(|d| d.mount.as_os_str().len()).map(|d| (d.total, d.avail))
 }

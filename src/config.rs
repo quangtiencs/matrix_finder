@@ -143,7 +143,11 @@ pub fn system_bookmarks() -> Vec<Bookmark> {
         .into_iter()
         .filter(|(_, d)| d.is_dir())
         .map(|(k, d)| {
-            let name = if k == BookmarkIcon::Home { "Home".to_string() } else { d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| k.label().to_string()) };
+            let name = if k == BookmarkIcon::Home {
+                "Home".to_string()
+            } else {
+                d.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| k.label().to_string())
+            };
             Bookmark::new(name, d.to_string_lossy().to_string())
         })
         .collect()
@@ -322,11 +326,7 @@ impl ConnectionProfile {
             self.user,
             self.host,
             self.port,
-            if self.initial_path.starts_with('/') || self.initial_path.is_empty() {
-                self.initial_path.clone()
-            } else {
-                format!("/{}", self.initial_path)
-            }
+            if self.initial_path.starts_with('/') || self.initial_path.is_empty() { self.initial_path.clone() } else { format!("/{}", self.initial_path) }
         )
     }
 }
@@ -354,16 +354,8 @@ impl Default for BackupProfile {
         Self {
             name: "My backup".into(),
             sources: vec![],
-            excludes: vec![
-                "**/.git/**".into(),
-                "**/node_modules/**".into(),
-                "**/target/**".into(),
-                "*.tmp".into(),
-            ],
-            destination: dirs::document_dir()
-                .or_else(dirs::home_dir)
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_default(),
+            excludes: vec!["**/.git/**".into(), "**/node_modules/**".into(), "**/target/**".into(), "*.tmp".into()],
+            destination: dirs::document_dir().or_else(dirs::home_dir).map(|p| p.to_string_lossy().to_string()).unwrap_or_default(),
             format: ArchiveFormat::Zip,
             level: 6,
             file_template: "{name}-{date}".into(),
@@ -545,9 +537,7 @@ pub const WINDOW_MAX: [f32; 2] = [7680.0, 4320.0];
 
 impl Default for Settings {
     fn default() -> Self {
-        let home = dirs::home_dir()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| "/".into());
+        let home = dirs::home_dir().map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|| "/".into());
         let mut bookmarks = system_bookmarks();
         if bookmarks.is_empty() {
             bookmarks.push(Bookmark::new("Home", home.clone()));
@@ -697,7 +687,8 @@ pub fn parse_lenient(text: &str) -> Result<(Settings, Vec<String>), String> {
                 good.insert(k, Value::Array(kept));
             }
             Value::Object(entries) => {
-                let kept: Map<String, Value> = entries.into_iter().filter(|(ek, ev)| fits(&k, Value::Object(Map::from_iter([(ek.clone(), ev.clone())])))).collect();
+                let kept: Map<String, Value> =
+                    entries.into_iter().filter(|(ek, ev)| fits(&k, Value::Object(Map::from_iter([(ek.clone(), ev.clone())])))).collect();
                 reset.push(k.clone());
                 good.insert(k, Value::Object(kept));
             }
@@ -784,7 +775,9 @@ impl Store {
         let bak = backup_file(path);
         let from_backup = if store.read_only.is_none() { std::fs::read_to_string(&bak).ok().and_then(|t| parse_lenient(&t).ok()) } else { None };
         store.note = match &broken {
-            Some((error, moved)) => Some(LoadNote::Broken { error: error.clone(), moved: moved.clone(), from_backup: from_backup.is_some(), read_only: store.read_only.is_some() }),
+            Some((error, moved)) => {
+                Some(LoadNote::Broken { error: error.clone(), moved: moved.clone(), from_backup: from_backup.is_some(), read_only: store.read_only.is_some() })
+            }
             None if from_backup.is_some() => Some(LoadNote::FromBackup(bak)),
             None => None,
         };
@@ -893,12 +886,19 @@ fn merge_value(key: &str, base: Option<&serde_json::Value>, mine: &serde_json::V
     // Both changed it.
     match (mine, theirs) {
         (Value::Object(m), Value::Object(t)) => Value::Object(merge_object(key, base.and_then(Value::as_object), m, t)),
-        (Value::Array(m), Value::Array(t)) if m.iter().chain(t).all(|i| list_id(key, i).is_some()) => Value::Array(merge_list(key, base.and_then(Value::as_array), m, t)),
+        (Value::Array(m), Value::Array(t)) if m.iter().chain(t).all(|i| list_id(key, i).is_some()) => {
+            Value::Array(merge_list(key, base.and_then(Value::as_array), m, t))
+        }
         _ => mine.clone(),
     }
 }
 
-fn merge_object(key: &str, base: Option<&serde_json::Map<String, serde_json::Value>>, mine: &serde_json::Map<String, serde_json::Value>, theirs: &serde_json::Map<String, serde_json::Value>) -> serde_json::Map<String, serde_json::Value> {
+fn merge_object(
+    key: &str,
+    base: Option<&serde_json::Map<String, serde_json::Value>>,
+    mine: &serde_json::Map<String, serde_json::Value>,
+    theirs: &serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
     let mut out = mine.clone();
     for (k, t) in theirs {
         let b = base.and_then(|b| b.get(k));

@@ -18,11 +18,7 @@ pub fn code_view(ui: &mut egui::Ui, lines: &[Styled], bg: Color32, wrap: bool, t
     let gutter = lines.len().to_string().len();
     let mut job = LayoutJob::default();
     for (i, line) in lines.iter().enumerate() {
-        job.append(
-            &format!("{:>w$}  ", i + 1, w = gutter),
-            0.0,
-            TextFormat { font_id: font.clone(), color: theme.weak, ..Default::default() },
-        );
+        job.append(&format!("{:>w$}  ", i + 1, w = gutter), 0.0, TextFormat { font_id: font.clone(), color: theme.weak, ..Default::default() });
         for (c, s, italic) in line {
             job.append(s, 0.0, TextFormat { font_id: font.clone(), color: *c, italics: *italic, ..Default::default() });
         }
@@ -105,11 +101,7 @@ fn to_color(c: syntect::highlighting::Color) -> Color32 {
 
 pub fn highlight(code: &str, hint: &str, theme_name: &str) -> (Vec<Styled>, Color32, String, bool) {
     let syntax = find_syntax(hint);
-    let th = THEMES
-        .themes
-        .get(theme_name)
-        .or_else(|| THEMES.themes.values().next())
-        .expect("syntect themes");
+    let th = THEMES.themes.get(theme_name).or_else(|| THEMES.themes.values().next()).expect("syntect themes");
     let bg = th.settings.background.map(to_color).unwrap_or(Color32::from_gray(30));
     let fg = th.settings.foreground.map(to_color).unwrap_or(Color32::LIGHT_GRAY);
     let mut h = HighlightLines::new(syntax, th);
@@ -127,10 +119,7 @@ pub fn highlight(code: &str, hint: &str, theme_name: &str) -> (Vec<Styled>, Colo
         }
         match h.highlight_line(line, &SYNTAXES) {
             Ok(ranges) => out.push(
-                ranges
-                    .into_iter()
-                    .map(|(st, s)| (to_color(st.foreground), s.replace('\t', "    "), st.font_style.contains(FontStyle::ITALIC)))
-                    .collect(),
+                ranges.into_iter().map(|(st, s)| (to_color(st.foreground), s.replace('\t', "    "), st.font_style.contains(FontStyle::ITALIC))).collect(),
             ),
             Err(_) => out.push(vec![(fg, line.to_string(), false)]),
         }

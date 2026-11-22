@@ -4,8 +4,8 @@
 //! size) and to show data frames, matrices and vectors as tables. Nothing in the file
 //! is ever run: functions, environments and byte code are only stepped over.
 use crate::i18n::t;
-use crate::util::fmt_count;
 use crate::preview::sheet::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_COLS, MAX_ROWS};
+use crate::util::fmt_count;
 use crate::util::{es, Res};
 use std::io::{BufRead, BufReader, Read};
 use std::time::{Duration, Instant};
@@ -92,7 +92,11 @@ enum Stop {
 
 impl From<std::io::Error> for Stop {
     fn from(e: std::io::Error) -> Self {
-        if e.kind() == std::io::ErrorKind::UnexpectedEof { Stop::Bad(t("This file is cut short.")) } else { Stop::Bad(e.to_string()) }
+        if e.kind() == std::io::ErrorKind::UnexpectedEof {
+            Stop::Bad(t("This file is cut short."))
+        } else {
+            Stop::Bad(e.to_string())
+        }
     }
 }
 
@@ -156,15 +160,27 @@ impl Keep {
     }
 
     fn child(self) -> Keep {
-        if self.attr { self } else { Keep { level: (self.level + 1).min(9), attr: false } }
+        if self.attr {
+            self
+        } else {
+            Keep { level: (self.level + 1).min(9), attr: false }
+        }
     }
 
     fn attrs(self) -> Keep {
-        if self.attr { Keep { level: 9, attr: true } } else { Keep { level: self.level, attr: true } }
+        if self.attr {
+            Keep { level: 9, attr: true }
+        } else {
+            Keep { level: self.level, attr: true }
+        }
     }
 
     fn items(self) -> usize {
-        if self.level <= 1 { MAX_ROWS } else { 0 }
+        if self.level <= 1 {
+            MAX_ROWS
+        } else {
+            0
+        }
     }
 }
 
@@ -294,7 +310,11 @@ impl<B: BufRead> In<B> {
 
     /// How many of `want` values may still be kept, at `size` bytes each.
     fn allow(&self, want: usize, n: u64) -> usize {
-        if self.kept >= MAX_KEPT { 0 } else { want.min(n as usize).min((MAX_KEPT - self.kept) / 8) }
+        if self.kept >= MAX_KEPT {
+            0
+        } else {
+            want.min(n as usize).min((MAX_KEPT - self.kept) / 8)
+        }
     }
 
     /// Whether one more object may be kept in a list.
@@ -600,7 +620,12 @@ impl<B: BufRead> In<B> {
                 Obj { ty: if class == "compact_intseq" { INTSXP } else { REALSXP }, len: n, vals, ..Default::default() }
             }
             "deferred_string" => match state.items.into_iter().next() {
-                Some((_, arg)) => Obj { ty: STRSXP, len: arg.len, vals: Vals::Str((0..arg.len.min(keep.values() as u64) as usize).map(|i| value_text(&arg, i)).collect()), ..Default::default() },
+                Some((_, arg)) => Obj {
+                    ty: STRSXP,
+                    len: arg.len,
+                    vals: Vals::Str((0..arg.len.min(keep.values() as u64) as usize).map(|i| value_text(&arg, i)).collect()),
+                    ..Default::default()
+                },
                 None => Obj { ty: STRSXP, ..Default::default() },
             },
             c if c.starts_with("wrap_") => state.items.into_iter().next().map(|(_, o)| o).unwrap_or_default(),
@@ -816,7 +841,11 @@ fn real_text(x: f64) -> String {
     } else if x.is_nan() {
         "NaN".into()
     } else if x.is_infinite() {
-        if x > 0.0 { "Inf".into() } else { "-Inf".into() }
+        if x > 0.0 {
+            "Inf".into()
+        } else {
+            "-Inf".into()
+        }
     } else if x != 0.0 && (x.abs() >= 1e15 || x.abs() < 1e-5) {
         format!("{x:e}")
     } else {
@@ -834,7 +863,11 @@ fn value_text(o: &Obj, i: usize) -> Option<String> {
             Some(if x == NA_INT {
                 "NA".into()
             } else if o.ty == LGLSXP {
-                if x != 0 { "TRUE".into() } else { "FALSE".into() }
+                if x != 0 {
+                    "TRUE".into()
+                } else {
+                    "FALSE".into()
+                }
             } else if has("factor") {
                 let levels = o.attr("levels").map(|l| l.strings()).unwrap_or_default();
                 match usize::try_from(x - 1).ok().and_then(|l| levels.get(l)) {
@@ -884,7 +917,11 @@ fn column_type(o: &Obj) -> String {
 /// A cell for something that is not a single value: `numeric [3]`.
 fn summary_text(o: &Obj) -> String {
     let size = size_text(o);
-    if size.is_empty() { class_text(o) } else { format!("{} [{size}]", class_text(o)) }
+    if size.is_empty() {
+        class_text(o)
+    } else {
+        format!("{} [{size}]", class_text(o))
+    }
 }
 
 fn cell_of(o: &Obj, i: usize) -> Cell {
@@ -903,7 +940,14 @@ fn listing_sheet(name: String, o: &Obj) -> Sheet {
         .iter()
         .enumerate()
         .take(MAX_ROWS)
-        .map(|(i, (_, e))| vec![Some(names.get(i).cloned().flatten().unwrap_or_else(|| format!("[[{}]]", i + 1))), Some(class_text(e)), Some(type_name(e).to_string()), Some(size_text(e))])
+        .map(|(i, (_, e))| {
+            vec![
+                Some(names.get(i).cloned().flatten().unwrap_or_else(|| format!("[[{}]]", i + 1))),
+                Some(class_text(e)),
+                Some(type_name(e).to_string()),
+                Some(size_text(e)),
+            ]
+        })
         .collect();
     finish_sheet(name, vec![t("Name"), t("Class"), t("Type"), t("Dimensions")], Some(vec!["text".into(); 4]), rows, Some(o.len))
 }
@@ -1246,7 +1290,10 @@ mod tests {
         let df = &d.sheets[1];
         assert_eq!(df.columns, ["x", "g", "s"]);
         assert_eq!(df.types, ["double", "factor", "character"]);
-        assert_eq!(df.rows, vec![vec![Some("1.5".to_string()), Some("b".into()), Some("u".into())], vec![Some("NA".into()), Some("a".into()), Some("NA".into())]]);
+        assert_eq!(
+            df.rows,
+            vec![vec![Some("1.5".to_string()), Some("b".into()), Some("u".into())], vec![Some("NA".into()), Some("a".into()), Some("NA".into())]]
+        );
         let m = &d.sheets[2];
         assert_eq!(m.columns, ["", "[,1]", "[,2]", "[,3]"]);
         assert_eq!(m.rows[1], vec![Some("r2".to_string()), Some("2".into()), Some("4".into()), Some("6".into())]);

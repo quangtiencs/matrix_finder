@@ -1,25 +1,25 @@
 //! The main application: layout, keyboard handling, dialogs and background jobs.
-use crate::files::archive::{self, ArchiveFormat};
-use crate::tools::backup::{self, BackupAction, BackupUi};
 use crate::config::{Bookmark, ConnectionProfile, Protocol, Settings};
-use crate::tools::diskusage::DuAction;
-use crate::i18n::{self, t};
-use crate::style::icons;
-use crate::ui::palette::{self, Act, PalItem, Palette};
+use crate::files::archive::{self, ArchiveFormat};
 use crate::files::ops::{self, Endpoint, Job};
-use crate::files::safefs::Conflict;
-use crate::ui::layout::{Layout, SplitDir};
-use crate::ui::pane::{pane_ui, Cmd, ListCtx, Pane, PaneEvent, PaneUiCtx, Tab};
-use crate::ui::tabs::{Strip, TabEvent, TabInfo, Workspace};
-use crate::terminal::view::TermSession;
-use crate::preview::{self, Preview};
-use crate::ui::shortcuts::{self, hint, Action, Chord};
-use crate::tools::rename::{self as ren, BatchRename, RenameAction};
 use crate::files::remote::{self, RemoteFs, SharedRemote};
-use crate::terminal::{self, TerminalKind};
-use crate::style::theme::{self, Theme};
-use crate::util::{es, human_size, join_slash, Res};
+use crate::files::safefs::Conflict;
 use crate::files::vfs::{Entry, Location};
+use crate::i18n::{self, t};
+use crate::preview::{self, Preview};
+use crate::style::icons;
+use crate::style::theme::{self, Theme};
+use crate::terminal::view::TermSession;
+use crate::terminal::{self, TerminalKind};
+use crate::tools::backup::{self, BackupAction, BackupUi};
+use crate::tools::diskusage::DuAction;
+use crate::tools::rename::{self as ren, BatchRename, RenameAction};
+use crate::ui::layout::{Layout, SplitDir};
+use crate::ui::palette::{self, Act, PalItem, Palette};
+use crate::ui::pane::{pane_ui, Cmd, ListCtx, Pane, PaneEvent, PaneUiCtx, Tab};
+use crate::ui::shortcuts::{self, hint, Action, Chord};
+use crate::ui::tabs::{Strip, TabEvent, TabInfo, Workspace};
+use crate::util::{es, human_size, join_slash, Res};
 use egui::{Key, Modifiers, RichText};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -42,27 +42,89 @@ macro_rules! all_panes {
 }
 
 enum Dialog {
-    Transfer { src: Location, mv: bool, items: Vec<Entry>, dst: String, policy: Conflict },
+    Transfer {
+        src: Location,
+        mv: bool,
+        items: Vec<Entry>,
+        dst: String,
+        policy: Conflict,
+    },
     /// `loc`: the folder it works in, and `view` the window it was asked from (kept, so
     /// that the dialog acts there even if the window shows another folder meanwhile).
-    NewItem { name: String, file: bool, loc: Location, view: u64 },
-    Rename { old: String, new: String, loc: Location, view: u64 },
-    Delete { items: Vec<Entry>, trash: bool, loc: Location, view: u64 },
-    Pack { items: Vec<Entry>, src_dir: PathBuf, name: String, dest_dir: String, format: ArchiveFormat, level: u32 },
-    Unpack { archive: PathBuf, dest: String, selection: Vec<String>, strip: String, policy: Conflict },
-    OpenWith { path: PathBuf, program: String, always: bool },
+    NewItem {
+        name: String,
+        file: bool,
+        loc: Location,
+        view: u64,
+    },
+    Rename {
+        old: String,
+        new: String,
+        loc: Location,
+        view: u64,
+    },
+    Delete {
+        items: Vec<Entry>,
+        trash: bool,
+        loc: Location,
+        view: u64,
+    },
+    Pack {
+        items: Vec<Entry>,
+        src_dir: PathBuf,
+        name: String,
+        dest_dir: String,
+        format: ArchiveFormat,
+        level: u32,
+    },
+    Unpack {
+        archive: PathBuf,
+        dest: String,
+        selection: Vec<String>,
+        strip: String,
+        policy: Conflict,
+    },
+    OpenWith {
+        path: PathBuf,
+        program: String,
+        always: bool,
+    },
     /// Asks for an archive's password, tries it in the background, then goes on with `then`.
-    ArchivePassword { file: PathBuf, password: String, wrong: bool, checking: Option<Receiver<bool>>, then: AfterPassword },
-    Connect { profile: ConnectionProfile, save: bool, save_password: bool },
+    ArchivePassword {
+        file: PathBuf,
+        password: String,
+        wrong: bool,
+        checking: Option<Receiver<bool>>,
+        then: AfterPassword,
+    },
+    Connect {
+        profile: ConnectionProfile,
+        save: bool,
+        save_password: bool,
+    },
     /// An SFTP server whose host key is not known yet: trust it, or do not connect.
-    TrustHostKey { profile: ConnectionProfile, fingerprint: String },
-    Message { title: String, text: String },
+    TrustHostKey {
+        profile: ConnectionProfile,
+        fingerprint: String,
+    },
+    Message {
+        title: String,
+        text: String,
+    },
     /// Replace every setting with those read from `path`.
-    ImportSettings { path: PathBuf, settings: Box<Settings> },
+    ImportSettings {
+        path: PathBuf,
+        settings: Box<Settings>,
+    },
     /// Closing terminals that are running programs (named in `programs`).
-    CloseTerminals { target: CloseTarget, programs: Vec<String> },
+    CloseTerminals {
+        target: CloseTarget,
+        programs: Vec<String>,
+    },
     /// Opening a terminal in each of several folders.
-    OpenTerminals { dirs: Vec<PathBuf> },
+    OpenTerminals {
+        dirs: Vec<PathBuf>,
+    },
 }
 
 /// What a confirmed `Dialog::CloseTerminals` closes.
@@ -357,13 +419,7 @@ impl App {
         // Zooming by keys is the app's own (saved, and rebindable): egui's would not be
         // saved, and its Ctrl+− would reach the terminals too.
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
-        let to_locs = |v: &Vec<String>| -> Vec<Location> {
-            v.iter()
-                .map(PathBuf::from)
-                .filter(|p| p.is_dir())
-                .map(Location::Local)
-                .collect()
-        };
+        let to_locs = |v: &Vec<String>| -> Vec<Location> { v.iter().map(PathBuf::from).filter(|p| p.is_dir()).map(Location::Local).collect() };
         // Start with a single pane; splits are created on demand. By default it
         // shows the user's home folder, and no terminal is opened at start.
         let home = dirs::home_dir().filter(|h| h.is_dir()).map(|h| h.to_string_lossy().to_string());
@@ -592,13 +648,23 @@ impl App {
                 if let Some(m) = moved {
                     text.push_str(&format!("\n\n{}\n{}", t("It was set aside, not deleted:"), m.display()));
                 }
-                text.push_str(&format!("\n\n{}", if from_backup { t("The previous version of the settings (the backup) was loaded instead.") } else { t("Matrix Finder starts with the default settings.") }));
+                text.push_str(&format!(
+                    "\n\n{}",
+                    if from_backup {
+                        t("The previous version of the settings (the backup) was loaded instead.")
+                    } else {
+                        t("Matrix Finder starts with the default settings.")
+                    }
+                ));
                 if read_only {
                     text.push_str(&format!("\n\n{}", t("Changes to the settings are not saved until that file can be read.")));
                 }
                 (t("The settings file could not be read"), text)
             }
-            LoadNote::FromBackup(bak) => (t("Settings restored from the backup"), format!("{}\n{}", t("The settings file was missing, so the previous version was loaded:"), bak.display())),
+            LoadNote::FromBackup(bak) => (
+                t("Settings restored from the backup"),
+                format!("{}\n{}", t("The settings file was missing, so the previous version was loaded:"), bak.display()),
+            ),
         };
         self.show_dialog(Dialog::Message { title, text }, false);
     }
@@ -636,7 +702,10 @@ impl App {
             }
             let windows = if wins.len() > 1 {
                 wins.iter()
-                    .map(|(p, term)| crate::config::SavedWindow { path: p.clone().unwrap_or_else(|| home.clone()).to_string_lossy().to_string(), terminal: *term && p.is_some() })
+                    .map(|(p, term)| crate::config::SavedWindow {
+                        path: p.clone().unwrap_or_else(|| home.clone()).to_string_lossy().to_string(),
+                        terminal: *term && p.is_some(),
+                    })
                     .collect()
             } else {
                 Vec::new()
@@ -914,7 +983,14 @@ impl App {
             }
             // The dialog is for the mouse, and keys must not reach what is behind it
             // (Enter would confirm a dialog there, F8 would delete).
-            ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Ime(_))));
+            ctx.input_mut(|i| {
+                i.events.retain(|e| {
+                    !matches!(
+                        e,
+                        egui::Event::Key { .. } | egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Copy | egui::Event::Cut | egui::Event::Ime(_)
+                    )
+                })
+            });
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         crate::ui::chrome::set_quit_guard(busy && self.quit != Quit::Go);
@@ -1181,7 +1257,6 @@ impl App {
             },
         }
     }
-
 }
 
 impl eframe::App for App {
@@ -1330,7 +1405,12 @@ impl eframe::App for App {
         }
         egui::TopBottomPanel::top("topbar")
             .show_separator_line(false)
-            .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: if self.cfg.show_sidebar { 4 } else { 10 }, right: 10, top: self.chrome.top_margin(), bottom: 4 }))
+            .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin {
+                left: if self.cfg.show_sidebar { 4 } else { 10 },
+                right: 10,
+                top: self.chrome.top_margin(),
+                bottom: 4,
+            }))
             .show(ctx, |ui| self.top_bar(ui));
         egui::TopBottomPanel::bottom("status")
             .show_separator_line(false)
@@ -1384,18 +1464,14 @@ impl eframe::App for App {
             let mut open = true;
             let name = self.viewer.as_ref().map(|v| v.name.clone()).unwrap_or_default();
             let chrome = self.chrome.clone();
-            chrome
-                .dialog_window(ctx, &name, egui::Id::new("viewer"))
-                .open(&mut open)
-                .default_size([820.0, 600.0])
-                .show(ctx, |ui| {
-                    if chrome.dialog_title(ui, self.theme, &name) {
-                        self.viewer = None;
-                    }
-                    if let Some(v) = &mut self.viewer {
-                        v.ui(ui, self.theme, t);
-                    }
-                });
+            chrome.dialog_window(ctx, &name, egui::Id::new("viewer")).open(&mut open).default_size([820.0, 600.0]).show(ctx, |ui| {
+                if chrome.dialog_title(ui, self.theme, &name) {
+                    self.viewer = None;
+                }
+                if let Some(v) = &mut self.viewer {
+                    v.ui(ui, self.theme, t);
+                }
+            });
             if !open {
                 self.viewer = None;
             }
@@ -1611,7 +1687,15 @@ fn side_row(ui: &mut egui::Ui, th: &Theme, selected: bool, label: &str, bar: Opt
 }
 
 /// A sidebar row with `button` points kept free at its right end for a button.
-fn side_row_with(ui: &mut egui::Ui, th: &Theme, selected: bool, label: &str, bar: Option<f32>, button: f32, icon: impl FnOnce(&egui::Painter, egui::Rect)) -> egui::Response {
+fn side_row_with(
+    ui: &mut egui::Ui,
+    th: &Theme,
+    selected: bool,
+    label: &str,
+    bar: Option<f32>,
+    button: f32,
+    icon: impl FnOnce(&egui::Painter, egui::Rect),
+) -> egui::Response {
     let h = if bar.is_some() { 38.0 } else { 30.0 };
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width() - 4.0, h), egui::Sense::click());
     let p = ui.painter();

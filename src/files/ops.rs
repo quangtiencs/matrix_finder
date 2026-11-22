@@ -1,7 +1,7 @@
 //! Background jobs (copy / move / delete / pack / unpack / backup) with progress.
-use crate::i18n::t;
 use crate::files::remote::SharedRemote;
 use crate::files::safefs::{self, Conflict, TempFile, Written};
+use crate::i18n::t;
 use crate::util::{es, human_size, join_slash, Res};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -158,15 +158,10 @@ impl Job {
                 let _ = tx.send(Err(t("Cancelled")));
                 return;
             }
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&p)))
-                .unwrap_or_else(|_| Err("Internal error (panic)".into()));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&p))).unwrap_or_else(|_| Err("Internal error (panic)".into()));
             let _ = tx.send(r);
         });
-        Job {
-            title: title.into(),
-            progress,
-            rx,
-        }
+        Job { title: title.into(), progress, rx }
     }
 
     /// `Some(result)` once finished.
@@ -195,13 +190,7 @@ pub struct Item {
 }
 
 fn local_size(p: &Path) -> u64 {
-    walkdir::WalkDir::new(p)
-        .into_iter()
-        .flatten()
-        .filter(|e| e.file_type().is_file())
-        .filter_map(|e| e.metadata().ok())
-        .map(|m| m.len())
-        .sum()
+    walkdir::WalkDir::new(p).into_iter().flatten().filter(|e| e.file_type().is_file()).filter_map(|e| e.metadata().ok()).map(|m| m.len()).sum()
 }
 
 /// Shown when a copy does not match its source, and a move therefore keeps the source.
@@ -414,7 +403,17 @@ fn remote_place(g: &mut dyn crate::files::remote::RemoteFs, from: &str, dir: &st
 /// skipped, and then keeps the remote folders holding it. A pause takes effect between
 /// files: the connection stays locked during a file, and nothing may sleep while holding it.
 #[allow(clippy::too_many_arguments)]
-fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool, size: u64, policy: Conflict, mut gone: Option<&mut Gone<String>>, written: &mut Written, p: &Progress) -> Res<bool> {
+fn download_recursive(
+    fs: &SharedRemote,
+    rpath: &str,
+    lpath: &Path,
+    is_dir: bool,
+    size: u64,
+    policy: Conflict,
+    mut gone: Option<&mut Gone<String>>,
+    written: &mut Written,
+    p: &Progress,
+) -> Res<bool> {
     p.check()?;
     if is_dir {
         std::fs::create_dir_all(lpath).map_err(es)?;
@@ -474,7 +473,16 @@ fn download_recursive(fs: &SharedRemote, rpath: &str, lpath: &Path, is_dir: bool
 /// once the whole item is uploaded and verified. Returns false when something was skipped,
 /// and then keeps the local folders holding it. Like downloads, it pauses between files.
 #[allow(clippy::too_many_arguments)]
-fn upload_recursive(fs: &SharedRemote, lpath: &Path, rdir: &str, name: &str, existing: Option<&HashSet<String>>, policy: Conflict, mut gone: Option<&mut Gone<PathBuf>>, p: &Progress) -> Res<bool> {
+fn upload_recursive(
+    fs: &SharedRemote,
+    lpath: &Path,
+    rdir: &str,
+    name: &str,
+    existing: Option<&HashSet<String>>,
+    policy: Conflict,
+    mut gone: Option<&mut Gone<PathBuf>>,
+    p: &Progress,
+) -> Res<bool> {
     p.check()?;
     let rpath = join_slash(rdir, name);
     let exists = existing.is_some_and(|s| s.contains(name));
@@ -484,11 +492,7 @@ fn upload_recursive(fs: &SharedRemote, lpath: &Path, rdir: &str, name: &str, exi
         if !exists {
             fs.lock().map_err(es)?.mkdir(&rpath)?;
         }
-        let children: HashSet<String> = if exists {
-            fs.lock().map_err(es)?.list(&rpath)?.into_iter().map(|e| e.name).collect()
-        } else {
-            HashSet::new()
-        };
+        let children: HashSet<String> = if exists { fs.lock().map_err(es)?.list(&rpath)?.into_iter().map(|e| e.name).collect() } else { HashSet::new() };
         let mut complete = true;
         for e in std::fs::read_dir(lpath).map_err(es)?.flatten() {
             let n = e.file_name().to_string_lossy().to_string();
@@ -550,9 +554,7 @@ fn remote_size(fs: &SharedRemote, path: &str, is_dir: bool, size: u64, p: &Progr
         Ok(mut g) => g.list(path).unwrap_or_default(),
         Err(_) => return 0,
     };
-    list.iter()
-        .map(|e| remote_size(fs, &join_slash(path, &e.name), e.is_dir, e.size, p))
-        .sum()
+    list.iter().map(|e| remote_size(fs, &join_slash(path, &e.name), e.is_dir, e.size, p)).sum()
 }
 
 /// Copy or move `items` from `src` to `dst`.
@@ -876,10 +878,7 @@ mod tests {
         std::fs::create_dir_all(&b).unwrap();
         std::fs::write(a.join("f.txt"), "x").unwrap();
         std::fs::write(a.join("d/g.txt"), "y").unwrap();
-        let items = vec![
-            Item { name: "f.txt".into(), is_dir: false, size: 1 },
-            Item { name: "d".into(), is_dir: true, size: 0 },
-        ];
+        let items = vec![Item { name: "f.txt".into(), is_dir: false, size: 1 }, Item { name: "d".into(), is_dir: true, size: 0 }];
         let p = Progress::default();
         transfer(Endpoint::Local(a.clone()), items.clone(), Endpoint::Local(b.clone()), false, Conflict::Skip, &p).unwrap();
         assert!(b.join("d/g.txt").exists());

@@ -143,7 +143,13 @@ fn theme_card(ui: &mut egui::Ui, th: &Theme, label: &str, width: f32, selected: 
     p.rect_filled(egui::Rect::from_min_size(row2.min + egui::vec2(3.0, 2.0), egui::vec2(6.0, 4.0)), 1.0, th.archive);
     p.rect_filled(egui::Rect::from_min_size(row2.min + egui::vec2(12.0, 2.5), egui::vec2(26.0, 3.0)), 1.5, th.weak);
     p.circle_filled(egui::pos2(content.right() - 8.0, content.bottom() - 7.0), 4.0, th.accent);
-    p.with_clip_rect(rect.shrink(4.0)).text(egui::pos2(rect.left() + 9.0, rect.bottom() - 12.0), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(11.5), th.text);
+    p.with_clip_rect(rect.shrink(4.0)).text(
+        egui::pos2(rect.left() + 9.0, rect.bottom() - 12.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(11.5),
+        th.text,
+    );
     card_outline(p, rect, 9.0, selected, resp.hovered(), cur);
     resp.on_hover_text(label)
 }
@@ -201,7 +207,13 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
     btn.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &shown));
     let visuals = ui.style().interact(&btn);
     ui.painter().rect_filled(r, th.radius, visuals.weak_bg_fill);
-    ui.painter().with_clip_rect(r.shrink2(vec2(10.0, 0.0))).text(pos2(r.left() + 10.0, r.center().y), Align2::LEFT_CENTER, &shown, FontId::proportional(14.0), th.text);
+    ui.painter().with_clip_rect(r.shrink2(vec2(10.0, 0.0))).text(
+        pos2(r.left() + 10.0, r.center().y),
+        Align2::LEFT_CENTER,
+        &shown,
+        FontId::proportional(14.0),
+        th.text,
+    );
     icons::chevron(ui.painter(), Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(10.0, 10.0)), 2, th.weak);
     if btn.clicked() {
         search.clear();
@@ -212,7 +224,9 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
     egui::popup::popup_below_widget(ui, id, &btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         ui.set_width(W);
         crate::ui::pane::menu_style(ui);
-        let field = ui.add(egui::TextEdit::singleline(search).desired_width(W - 12.0).background_color(th.bg).hint_text(RichText::new(t("Search fonts…")).color(th.weak)));
+        let field = ui.add(
+            egui::TextEdit::singleline(search).desired_width(W - 12.0).background_color(th.bg).hint_text(RichText::new(t("Search fonts…")).color(th.weak)),
+        );
         field.request_focus();
         let needle = search.to_lowercase();
         let matches = |name: &str| name.to_lowercase().contains(&needle);
@@ -225,10 +239,13 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
         egui::ScrollArea::vertical().id_salt(("font-list", id_salt)).max_height(280.0).show_rows(ui, ITEM_H, items.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
             for item in &items[range] {
-                let (row, resp) = ui.allocate_exact_size(vec2(W - 12.0, ITEM_H), match item {
-                    Item::Font(..) => Sense::click(),
-                    Item::Header(_) => Sense::hover(),
-                });
+                let (row, resp) = ui.allocate_exact_size(
+                    vec2(W - 12.0, ITEM_H),
+                    match item {
+                        Item::Font(..) => Sense::click(),
+                        Item::Header(_) => Sense::hover(),
+                    },
+                );
                 match item {
                     Item::Header(text) => {
                         ui.painter().text(pos2(row.left() + 8.0, row.bottom() - 9.0), Align2::LEFT_CENTER, text, FontId::proportional(11.5), th.weak);
@@ -236,7 +253,13 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
                     Item::Font(value, name) => {
                         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, *name));
                         crate::ui::pane::menu_row_fill(ui, row, th, *value == current, resp.hovered());
-                        ui.painter().with_clip_rect(row).text(pos2(row.left() + 8.0, row.center().y), Align2::LEFT_CENTER, name, FontId::proportional(14.0), th.text);
+                        ui.painter().with_clip_rect(row).text(
+                            pos2(row.left() + 8.0, row.center().y),
+                            Align2::LEFT_CENTER,
+                            name,
+                            FontId::proportional(14.0),
+                            th.text,
+                        );
                         if resp.clicked() {
                             picked = Some(value.to_string());
                         }
@@ -291,7 +314,8 @@ impl App {
             let now = ui.ctx().screen_rect().size() * ui.ctx().zoom_factor();
             // Maximized, the window is the screen's size: no size to start a window with.
             let filled = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false));
-            let b = ui.add_enabled(!filled, egui::Button::new(t("Use current size"))).on_disabled_hover_text(t("Not while the window is maximized or full screen"));
+            let b =
+                ui.add_enabled(!filled, egui::Button::new(t("Use current size"))).on_disabled_hover_text(t("Not while the window is maximized or full screen"));
             if b.clicked() {
                 self.cfg.window_width = now.x.round().clamp(WINDOW_MIN[0], WINDOW_MAX[0]);
                 self.cfg.window_height = now.y.round().clamp(WINDOW_MIN[1], WINDOW_MAX[1]);
@@ -335,7 +359,13 @@ impl App {
                     let (icon, _) = ui.allocate_exact_size(vec2(ICON_W, 20.0), Sense::hover());
                     icons::file_icon(ui.painter(), icon, &format!("file.{ext}"), false, ext, th);
                     let (label, _) = ui.allocate_exact_size(vec2(TYPE_W, 20.0), Sense::hover());
-                    ui.painter().with_clip_rect(label).text(pos2(label.left(), label.center().y), Align2::LEFT_CENTER, format!(".{ext}"), FontId::proportional(14.0), th.text);
+                    ui.painter().with_clip_rect(label).text(
+                        pos2(label.left(), label.center().y),
+                        Align2::LEFT_CENTER,
+                        format!(".{ext}"),
+                        FontId::proportional(14.0),
+                        th.text,
+                    );
                     let hint = match apps::system_app(ui.ctx(), ext) {
                         Some(Some(app)) => format!("{app} ({})", t("system default")),
                         Some(None) => t("System default"),
@@ -343,7 +373,11 @@ impl App {
                     };
                     let mut program = self.cfg.default_apps.get(ext).cloned().unwrap_or_default();
                     let missing = apps::program_missing(&program);
-                    let mut field = egui::TextEdit::singleline(&mut program).id_salt(("default-app", ext)).background_color(th.bg).desired_width(field_w).hint_text(RichText::new(hint).color(th.weak));
+                    let mut field = egui::TextEdit::singleline(&mut program)
+                        .id_salt(("default-app", ext))
+                        .background_color(th.bg)
+                        .desired_width(field_w)
+                        .hint_text(RichText::new(hint).color(th.weak));
                     if missing {
                         field = field.text_color(th.danger);
                     }
@@ -375,7 +409,9 @@ impl App {
         });
         ui.add_space(6.0);
         ui.horizontal_wrapped(|ui| {
-            let field = ui.add(egui::TextEdit::singleline(&mut self.default_app_new).desired_width(150.0).hint_text(RichText::new(t("File type, e.g. mkv")).color(th.weak)));
+            let field = ui.add(
+                egui::TextEdit::singleline(&mut self.default_app_new).desired_width(150.0).hint_text(RichText::new(t("File type, e.g. mkv")).color(th.weak)),
+            );
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
             let new_type = apps::normalize_ext(&self.default_app_new);
             if (ui.add_enabled(!new_type.is_empty(), egui::Button::new(format!("+ {}", t("Add file type")))).clicked() || enter) && !new_type.is_empty() {
@@ -407,7 +443,15 @@ impl App {
         let keys = sc::active();
         let os = keys.os();
         let safe = if os == sc::Os::Mac { "⌘" } else { "Ctrl+Shift" };
-        ui.label(RichText::new(format!("{} ({safe}). {}", t("Defaults for this system. While a terminal has the keyboard, only combinations terminal programs never see are used"), t("All other keys reach Vim, Emacs and the like."))).size(12.0).color(th.weak));
+        ui.label(
+            RichText::new(format!(
+                "{} ({safe}). {}",
+                t("Defaults for this system. While a terminal has the keyboard, only combinations terminal programs never see are used"),
+                t("All other keys reach Vim, Emacs and the like.")
+            ))
+            .size(12.0)
+            .color(th.weak),
+        );
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.shortcut_search).desired_width(220.0).hint_text(RichText::new(t("Search shortcuts…")).color(th.weak)));
@@ -437,7 +481,11 @@ impl App {
         for group in sc::GROUPS {
             let matching: Vec<Action> = Action::all()
                 .filter(|a| a.group() == group)
-                .filter(|a| needle.is_empty() || a.label().to_lowercase().contains(&needle) || keys.keys(*a).iter().any(|c| c.display(os).to_lowercase().contains(&needle)))
+                .filter(|a| {
+                    needle.is_empty()
+                        || a.label().to_lowercase().contains(&needle)
+                        || keys.keys(*a).iter().any(|c| c.display(os).to_lowercase().contains(&needle))
+                })
                 .collect();
             if matching.is_empty() {
                 continue;
@@ -451,7 +499,13 @@ impl App {
                     let waiting = self.shortcut_capture.map(|(a, slot)| (a == action).then_some(slot)).unwrap_or(None);
                     centered_row(ui, 30.0, |ui| {
                         let (label, _) = ui.allocate_exact_size(vec2(LABEL_W + 20.0, 20.0), Sense::hover());
-                        ui.painter().with_clip_rect(label).text(pos2(label.left(), label.center().y), Align2::LEFT_CENTER, action.label(), FontId::proportional(14.0), th.text);
+                        ui.painter().with_clip_rect(label).text(
+                            pos2(label.left(), label.center().y),
+                            Align2::LEFT_CENTER,
+                            action.label(),
+                            FontId::proportional(14.0),
+                            th.text,
+                        );
                         ui.spacing_mut().item_spacing.x = 4.0;
                         let current = keys.keys(action).to_vec();
                         for (i, chord) in current.iter().enumerate() {
@@ -461,7 +515,11 @@ impl App {
                             }
                             let only_outside = action.works_in_terminals() && !chord.leaves_terminals_alone();
                             let text = RichText::new(chord.display(os)).size(12.5).monospace().color(if only_outside { th.weak } else { th.text });
-                            let chip = ui.add(egui::Button::new(text)).on_hover_text(if only_outside { t("Not while a terminal has the keyboard: there this key goes to the program. Click to change.") } else { t("Click to change") });
+                            let chip = ui.add(egui::Button::new(text)).on_hover_text(if only_outside {
+                                t("Not while a terminal has the keyboard: there this key goes to the program. Click to change.")
+                            } else {
+                                t("Click to change")
+                            });
                             if chip.clicked() {
                                 capture = Some((action, Some(i)));
                             }
@@ -477,7 +535,16 @@ impl App {
                             capture = Some((action, None));
                         }
                         let defaults = sc::defaults(action, os);
-                        if current != defaults && ui.add(egui::Button::new("↺").small()).on_hover_text(format!("{} ({})", t("Back to the default"), defaults.iter().map(|c| c.display(os)).collect::<Vec<_>>().join(" / "))).clicked() {
+                        if current != defaults
+                            && ui
+                                .add(egui::Button::new("↺").small())
+                                .on_hover_text(format!(
+                                    "{} ({})",
+                                    t("Back to the default"),
+                                    defaults.iter().map(|c| c.display(os)).collect::<Vec<_>>().join(" / ")
+                                ))
+                                .clicked()
+                        {
                             edit = Some((action, defaults));
                         }
                     });
@@ -542,7 +609,13 @@ impl App {
                     }
                     let col = if sel { th.accent } else { th.weak };
                     icon(ui.painter(), egui::Rect::from_center_size(egui::pos2(r.left() + 18.0, r.center().y), egui::vec2(15.0, 15.0)), col);
-                    ui.painter().text(egui::pos2(r.left() + 36.0, r.center().y), egui::Align2::LEFT_CENTER, label, egui::FontId::proportional(14.0), if sel { th.strong() } else { th.text });
+                    ui.painter().text(
+                        egui::pos2(r.left() + 36.0, r.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        label,
+                        egui::FontId::proportional(14.0),
+                        if sel { th.strong() } else { th.text },
+                    );
                     if resp.clicked() {
                         self.settings_page = *page;
                         self.shortcut_capture = None;
@@ -551,7 +624,11 @@ impl App {
                 }
                 ui.add_space(16.0);
                 if ui
-                    .add(egui::Button::new(RichText::new(format!("↺  {}", t("Reset to defaults…"))).color(th.danger)).frame(false).min_size(egui::vec2(190.0, 28.0)))
+                    .add(
+                        egui::Button::new(RichText::new(format!("↺  {}", t("Reset to defaults…"))).color(th.danger))
+                            .frame(false)
+                            .min_size(egui::vec2(190.0, 28.0)),
+                    )
                     .on_hover_text(t("Restore the default settings. Bookmarks, connections, backup, terminal profiles and default apps are kept."))
                     .clicked()
                 {
@@ -731,17 +808,30 @@ impl App {
             SettingsPage::Files => {
                 settings_section(ui, th, &t("Panels"), "");
                 card(ui, th, |ui| {
-                    changed |= toggle_row(ui, th, &mut self.cfg.start_in_home, &t("Open the home folder at start"), &t("Off: reopen the tabs of the last session"));
+                    changed |=
+                        toggle_row(ui, th, &mut self.cfg.start_in_home, &t("Open the home folder at start"), &t("Off: reopen the tabs of the last session"));
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.show_hidden, &t("Show hidden files"), "");
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.dirs_first, &t("Folders first"), "");
                     row_line(ui, th);
-                    changed |= toggle_row(ui, th, &mut self.cfg.show_disk_usage, &t("Show disk space"), &t("Usage bars in the sidebar, free space in the panels and the Disk usage button"));
+                    changed |= toggle_row(
+                        ui,
+                        th,
+                        &mut self.cfg.show_disk_usage,
+                        &t("Show disk space"),
+                        &t("Usage bars in the sidebar, free space in the panels and the Disk usage button"),
+                    );
                 });
                 settings_section(ui, th, &t("Git"), "");
                 card(ui, th, |ui| {
-                    changed |= toggle_row(ui, th, &mut self.cfg.git_branches, &t("Show the branch of git folders"), &t("After the folder's name: folder (git) [branch]. Read from the folder, git does not run."));
+                    changed |= toggle_row(
+                        ui,
+                        th,
+                        &mut self.cfg.git_branches,
+                        &t("Show the branch of git folders"),
+                        &t("After the folder's name: folder (git) [branch]. Read from the folder, git does not run."),
+                    );
                     row_line(ui, th);
                     ui.add_enabled_ui(self.cfg.git_branches, |ui| {
                         changed |= toggle_row(ui, th, &mut self.cfg.git_label, &t("Show the (git) label before the branch"), &t("On: folder (git) [branch] · Off: folder [branch]"));
@@ -765,19 +855,38 @@ impl App {
                 });
                 settings_section(ui, th, &t("Window"), "");
                 card(ui, th, |ui| {
-                    changed |= toggle_row(ui, th, &mut self.cfg.integrated_titlebar, &t("Integrated title bar with native window buttons"), &t("Takes effect after restarting Matrix Finder"));
+                    changed |= toggle_row(
+                        ui,
+                        th,
+                        &mut self.cfg.integrated_titlebar,
+                        &t("Integrated title bar with native window buttons"),
+                        &t("Takes effect after restarting Matrix Finder"),
+                    );
                     row_line(ui, th);
                     if cfg!(target_os = "linux") {
-                        changed |= toggle_row(ui, th, &mut self.cfg.round_corners, &t("Round window corners"), &t("GNOME and KDE on Wayland, with the integrated title bar. Takes effect after restarting Matrix Finder"));
+                        changed |= toggle_row(
+                            ui,
+                            th,
+                            &mut self.cfg.round_corners,
+                            &t("Round window corners"),
+                            &t("GNOME and KDE on Wayland, with the integrated title bar. Takes effect after restarting Matrix Finder"),
+                        );
                         row_line(ui, th);
                     }
                     changed |= self.window_size_row(ui, th);
                     row_line(ui, th);
                     ui.add_space(4.0);
                     ui.label(RichText::new(t("When Matrix Finder is started again")).color(th.text));
-                    ui.label(RichText::new(t("For example matrix_finder ~/src in a terminal, while it is already running. --new-tab and --new-window choose for one launch.")).size(11.5).color(th.weak));
+                    ui.label(
+                        RichText::new(t(
+                            "For example matrix_finder ~/src in a terminal, while it is already running. --new-tab and --new-window choose for one launch.",
+                        ))
+                        .size(11.5)
+                        .color(th.weak),
+                    );
                     ui.add_space(2.0);
-                    changed |= ui.radio_value(&mut self.cfg.instance_mode, crate::config::InstanceMode::NewTab, t("Open a new tab in the running window")).changed();
+                    changed |=
+                        ui.radio_value(&mut self.cfg.instance_mode, crate::config::InstanceMode::NewTab, t("Open a new tab in the running window")).changed();
                     changed |= ui.radio_value(&mut self.cfg.instance_mode, crate::config::InstanceMode::NewWindow, t("Open a separate window")).changed();
                     ui.add_space(4.0);
                     row_line(ui, th);
@@ -844,7 +953,12 @@ impl App {
             SettingsPage::DefaultApps => changed |= self.default_app_settings(ui, th),
             SettingsPage::Shortcuts => changed |= self.shortcut_settings(ui, th),
             SettingsPage::Terminal => {
-                settings_section(ui, th, &t("Terminal profiles"), &t("A profile is a terminal, a shell and an optional startup script. The terminal shortcut opens the default profile."));
+                settings_section(
+                    ui,
+                    th,
+                    &t("Terminal profiles"),
+                    &t("A profile is a terminal, a shell and an optional startup script. The terminal shortcut opens the default profile."),
+                );
                 changed |= self.terminal_profiles_editor(ui, th);
                 settings_section(ui, th, &t("Built-in terminal"), &t("Opens in a tab. Ctrl+Shift+C / Ctrl+Shift+V copy and paste, Ctrl+Click opens links."));
                 card(ui, th, |ui| {
@@ -868,7 +982,9 @@ impl App {
                                 *v = default;
                                 changed = true;
                             }
-                            changed |= ui.add(egui::Slider::new(v, crate::config::SCROLL_SPEEDS).logarithmic(true).step_by(0.1).fixed_decimals(1).suffix("×")).changed();
+                            changed |= ui
+                                .add(egui::Slider::new(v, crate::config::SCROLL_SPEEDS).logarithmic(true).step_by(0.1).fixed_decimals(1).suffix("×"))
+                                .changed();
                         });
                         row_line(ui, th);
                     }
@@ -876,7 +992,13 @@ impl App {
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.term_close_on_exit, &t("Close the tab when the shell exits"), "");
                     row_line(ui, th);
-                    changed |= toggle_row(ui, th, &mut self.cfg.term_confirm_close, &t("Ask before closing a running program"), &t("When closing a window, a tab or the app while a program (not the shell) runs in its terminal"));
+                    changed |= toggle_row(
+                        ui,
+                        th,
+                        &mut self.cfg.term_confirm_close,
+                        &t("Ask before closing a running program"),
+                        &t("When closing a window, a tab or the app while a program (not the shell) runs in its terminal"),
+                    );
                     row_line(ui, th);
                     let in_home = self.cfg.start_in_home;
                     ui.add_enabled_ui(!in_home, |ui| {
@@ -927,12 +1049,15 @@ impl App {
             });
             row_line(ui, th);
             ui.add_space(4.0);
-            egui::Frame::new().fill(th.bg).stroke(Stroke::new(1.0_f32, th.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.label(RichText::new("The quick brown fox jumps over the lazy dog").font(bold(15.0)).color(th.strong()));
-                ui.label(RichText::new("Thư mục tiếng Việt · Ăă Đđ Ơơ Ưư · 0123456789").color(th.text));
-                ui.label(RichText::new("report-final.pdf · 2.4 MB · 2026-11-04 16:30").size(12.0).color(th.weak));
-            });
+            egui::Frame::new().fill(th.bg).stroke(Stroke::new(1.0_f32, th.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(
+                ui,
+                |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(RichText::new("The quick brown fox jumps over the lazy dog").font(bold(15.0)).color(th.strong()));
+                    ui.label(RichText::new("Thư mục tiếng Việt · Ăă Đđ Ơơ Ưư · 0123456789").color(th.text));
+                    ui.label(RichText::new("report-final.pdf · 2.4 MB · 2026-11-04 16:30").size(12.0).color(th.weak));
+                },
+            );
             ui.add_space(4.0);
         });
         settings_section(ui, th, &t("Reading"), &t("Markdown, the text of notebooks, EPUB and other documents in Quick View."));
@@ -943,11 +1068,17 @@ impl App {
             }
             ui.add_space(4.0);
             crate::style::fonts::set_reading_serif(self.cfg.reading_font == crate::config::ReadingFont::Serif);
-            let sample = crate::preview::markdown::parse_markdown("**Quick View** reads *Markdown* like this: plain words, `code` and [links](https://example.com).\n\nThư mục tiếng Việt · Ăă Đđ Ơơ Ưư", th.syntax);
-            egui::Frame::new().fill(th.bg).stroke(Stroke::new(1.0_f32, th.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                crate::preview::markdown::markdown_ui(ui, &sample, th);
-            });
+            let sample = crate::preview::markdown::parse_markdown(
+                "**Quick View** reads *Markdown* like this: plain words, `code` and [links](https://example.com).\n\nThư mục tiếng Việt · Ăă Đđ Ơơ Ưư",
+                th.syntax,
+            );
+            egui::Frame::new().fill(th.bg).stroke(Stroke::new(1.0_f32, th.border)).corner_radius(8).inner_margin(egui::Margin::symmetric(12, 10)).show(
+                ui,
+                |ui| {
+                    ui.set_width(ui.available_width());
+                    crate::preview::markdown::markdown_ui(ui, &sample, th);
+                },
+            );
             ui.add_space(4.0);
         });
         settings_section(ui, th, &t("Terminal"), &t("The built-in terminal. The sample uses the colours of the default profile."));
@@ -982,7 +1113,12 @@ impl App {
     fn agent_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
         use crate::system::agents::{self, ALL};
         let mut changed = false;
-        settings_section(ui, th, &t("AI button"), &t("A button in the terminal's info bar starts an AI coding agent at the prompt. It works while the terminal is idle, with no program running."));
+        settings_section(
+            ui,
+            th,
+            &t("AI button"),
+            &t("A button in the terminal's info bar starts an AI coding agent at the prompt. It works while the terminal is idle, with no program running."),
+        );
         if self.cfg.term_agents {
             self.find_agents(false);
         }
@@ -1094,12 +1230,28 @@ impl App {
                 let swatch = Rect::from_center_size(pos2(r.left() + 25.0, r.center().y), vec2(36.0, 30.0));
                 let built_in = p.terminal == TerminalKind::BuiltIn;
                 ui.painter().rect(swatch, 5.0, if built_in { scheme.bg } else { th.surface }, Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
-                ui.painter().text(swatch.center(), Align2::CENTER_CENTER, ">_", FontId::new(13.0, FontFamily::Name("term-bold".into())), if built_in { scheme.accent } else { th.weak });
+                ui.painter().text(
+                    swatch.center(),
+                    Align2::CENTER_CENTER,
+                    ">_",
+                    FontId::new(13.0, FontFamily::Name("term-bold".into())),
+                    if built_in { scheme.accent } else { th.weak },
+                );
                 let text_x = swatch.right() + 9.0;
                 let p2 = ui.painter().with_clip_rect(r.shrink(2.0));
                 p2.text(pos2(text_x, r.center().y - 9.0), Align2::LEFT_CENTER, &p.name, bold(13.5), th.strong());
-                let shell = if p.shell.is_empty() { t("default shell") } else { Path::new(&p.shell).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default() };
-                let sub = if self.cfg.default_terminal == i { format!("★ {}", t("Default")) } else if built_in { shell } else { p.terminal.label().to_string() };
+                let shell = if p.shell.is_empty() {
+                    t("default shell")
+                } else {
+                    Path::new(&p.shell).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default()
+                };
+                let sub = if self.cfg.default_terminal == i {
+                    format!("★ {}", t("Default"))
+                } else if built_in {
+                    shell
+                } else {
+                    p.terminal.label().to_string()
+                };
                 let sub_col = if self.cfg.default_terminal == i { th.accent } else { th.weak };
                 p2.text(pos2(text_x, r.center().y + 9.0), Align2::LEFT_CENTER, sub, FontId::proportional(11.5), sub_col);
                 if resp.clicked() {
@@ -1130,7 +1282,11 @@ impl App {
         let old_name = self.cfg.terminal_profiles[i].name.clone();
         ui.horizontal(|ui| {
             let p = &mut self.cfg.terminal_profiles[i];
-            let name = egui::TextEdit::singleline(&mut p.name).id_salt(("profile-name", i)).background_color(th.bg).desired_width((width - 210.0).max(120.0)).font(bold(15.0));
+            let name = egui::TextEdit::singleline(&mut p.name)
+                .id_salt(("profile-name", i))
+                .background_color(th.bg)
+                .desired_width((width - 210.0).max(120.0))
+                .font(bold(15.0));
             changed |= ui.add(name).changed();
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if n > 1 && ui.button(RichText::new(t("Delete")).color(th.danger)).clicked() {
@@ -1183,13 +1339,25 @@ impl App {
         if p.terminal == TerminalKind::Custom {
             field_row(ui, &t("Command"), &mut |ui| {
                 changed |= ui
-                    .add(egui::TextEdit::singleline(&mut p.custom).background_color(th.bg).hint_text(RichText::new("myterm --cwd {dir} -e {cmd}").color(th.weak)).desired_width(field_w))
+                    .add(
+                        egui::TextEdit::singleline(&mut p.custom)
+                            .background_color(th.bg)
+                            .hint_text(RichText::new("myterm --cwd {dir} -e {cmd}").color(th.weak))
+                            .desired_width(field_w),
+                    )
                     .on_hover_text(t("{dir} is replaced by the current folder, {cmd} by the shell command"))
                     .changed();
             });
         }
         field_row(ui, &t("Shell"), &mut |ui| {
-            changed |= ui.add(egui::TextEdit::singleline(&mut p.shell).background_color(th.bg).hint_text(RichText::new(t("default shell")).color(th.weak)).desired_width(field_w - 40.0)).changed();
+            changed |= ui
+                .add(
+                    egui::TextEdit::singleline(&mut p.shell)
+                        .background_color(th.bg)
+                        .hint_text(RichText::new(t("default shell")).color(th.weak))
+                        .desired_width(field_w - 40.0),
+                )
+                .changed();
             egui::ComboBox::from_id_salt(("term-shell", i)).width(24.0).selected_text("").show_ui(ui, |ui| {
                 if ui.selectable_label(p.shell.is_empty(), t("default shell")).clicked() {
                     p.shell.clear();
@@ -1206,7 +1374,11 @@ impl App {
         // Only the built-in terminal can type the script once the shell has started.
         let built_in = p.terminal == TerminalKind::BuiltIn;
         field_row(ui, &t("Startup script"), &mut |ui| {
-            let hint = if built_in { t("Commands to run when the terminal starts, e.g. source .venv/bin/activate") } else { t("Only the built-in terminal runs a startup script") };
+            let hint = if built_in {
+                t("Commands to run when the terminal starts, e.g. source .venv/bin/activate")
+            } else {
+                t("Only the built-in terminal runs a startup script")
+            };
             changed |= ui
                 .add_enabled(
                     built_in,
@@ -1291,14 +1463,14 @@ impl App {
             self.icon_themes = Some((crate::style::sysicons::installed_themes(), crate::style::sysicons::current_theme_name()));
         }
         let (installed, current) = self.icon_themes.clone().unwrap_or_default();
-        let mut options: Vec<(String, String)> = vec![
-            ("theme".into(), format!("{} ({})", t("Match theme"), self.theme.icons.label())),
-        ];
+        let mut options: Vec<(String, String)> = vec![("theme".into(), format!("{} ({})", t("Match theme"), self.theme.icons.label()))];
         if !cfg!(any(target_os = "macos", windows)) {
             let cur = current.clone().map(|c| format!(" ({c})")).unwrap_or_default();
             options.push(("system".into(), format!("{}{cur}", t("System icon theme"))));
         }
-        for (k, v) in [("matrix", "Matrix Finder"), ("adwaita", "Adwaita (GNOME)"), ("breeze", "Breeze (KDE Plasma)"), ("macos", "macOS"), ("windows", "Windows 11")] {
+        for (k, v) in
+            [("matrix", "Matrix Finder"), ("adwaita", "Adwaita (GNOME)"), ("breeze", "Breeze (KDE Plasma)"), ("macos", "macOS"), ("windows", "Windows 11")]
+        {
             options.push((k.into(), v.into()));
         }
         for n in installed {
@@ -1347,64 +1519,68 @@ impl App {
         ui.add_space(6.0);
         let mut frame = card_frame(th).begin(ui);
         {
-        let ui = &mut frame.content_ui;
-        ui.set_width(ui.available_width());
-        let n = self.cfg.quick_filters.len();
-        let mut edit: Option<(usize, i32)> = None; // -1 up, 1 down, 0 delete
-        // One width for every row (icon, name, count and buttons take ~310 px), so
-        // the rows line up and never widen the page.
-        let ext_w = (ui.available_width() - 310.0).max(160.0);
-        for i in 0..n {
-            let q = &mut self.cfg.quick_filters[i];
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let (r, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
-                crate::ui::pane::quick_filter_icon(ui.painter(), r.shrink(5.0), &q.ext_list(), th);
-                changed |= ui.add(egui::TextEdit::singleline(&mut q.name).desired_width(130.0).hint_text(t("Name"))).changed();
-                changed |= ui
-                    .add(egui::TextEdit::singleline(&mut q.exts).desired_width(ext_w).hint_text(t("Extensions, e.g. jpg png gif")))
-                    .on_hover_text(t("Extensions separated by spaces or commas (dots are optional)"))
-                    .changed();
-                let (cr, cresp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::hover());
-                ui.painter().text(cr.center(), egui::Align2::CENTER_CENTER, q.ext_list().len().to_string(), egui::FontId::proportional(11.5), th.weak);
-                cresp.on_hover_text(t("Extensions"));
-                if icons::icon_button(ui, 24.0, i > 0, th, |p, r, c| icons::chevron(p, r, 0, c)).on_hover_text(t("Move up")).clicked() {
-                    edit = Some((i, -1));
+            let ui = &mut frame.content_ui;
+            ui.set_width(ui.available_width());
+            let n = self.cfg.quick_filters.len();
+            let mut edit: Option<(usize, i32)> = None; // -1 up, 1 down, 0 delete
+                                                       // One width for every row (icon, name, count and buttons take ~310 px), so
+                                                       // the rows line up and never widen the page.
+            let ext_w = (ui.available_width() - 310.0).max(160.0);
+            for i in 0..n {
+                let q = &mut self.cfg.quick_filters[i];
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+                    crate::ui::pane::quick_filter_icon(ui.painter(), r.shrink(5.0), &q.ext_list(), th);
+                    changed |= ui.add(egui::TextEdit::singleline(&mut q.name).desired_width(130.0).hint_text(t("Name"))).changed();
+                    changed |= ui
+                        .add(egui::TextEdit::singleline(&mut q.exts).desired_width(ext_w).hint_text(t("Extensions, e.g. jpg png gif")))
+                        .on_hover_text(t("Extensions separated by spaces or commas (dots are optional)"))
+                        .changed();
+                    let (cr, cresp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::hover());
+                    ui.painter().text(cr.center(), egui::Align2::CENTER_CENTER, q.ext_list().len().to_string(), egui::FontId::proportional(11.5), th.weak);
+                    cresp.on_hover_text(t("Extensions"));
+                    if icons::icon_button(ui, 24.0, i > 0, th, |p, r, c| icons::chevron(p, r, 0, c)).on_hover_text(t("Move up")).clicked() {
+                        edit = Some((i, -1));
+                    }
+                    if icons::icon_button(ui, 24.0, i + 1 < n, th, |p, r, c| icons::chevron(p, r, 2, c)).on_hover_text(t("Move down")).clicked() {
+                        edit = Some((i, 1));
+                    }
+                    if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(t("Remove")).clicked() {
+                        edit = Some((i, 0));
+                    }
+                });
+            }
+            match edit {
+                Some((i, -1)) => self.cfg.quick_filters.swap(i, i - 1),
+                Some((i, 1)) => self.cfg.quick_filters.swap(i, i + 1),
+                Some((i, _)) => {
+                    self.cfg.quick_filters.remove(i);
                 }
-                if icons::icon_button(ui, 24.0, i + 1 < n, th, |p, r, c| icons::chevron(p, r, 2, c)).on_hover_text(t("Move down")).clicked() {
-                    edit = Some((i, 1));
+                None => {}
+            }
+            changed |= edit.is_some();
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(format!("+ {}", t("New quick filter"))).clicked() {
+                    let name = crate::config::unused_quick_filter_name(&self.cfg.quick_filters, &t("New filter"));
+                    self.cfg.quick_filters.push(crate::config::QuickFilter::new(&name, ""));
+                    changed = true;
                 }
-                if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(t("Remove")).clicked() {
-                    edit = Some((i, 0));
+                if ui
+                    .button(t("Restore the built-in filters"))
+                    .on_hover_text(t("Adds the built-in categories that are missing and resets their extensions"))
+                    .clicked()
+                {
+                    for d in crate::config::default_quick_filters() {
+                        match self.cfg.quick_filters.iter_mut().find(|q| q.name == d.name) {
+                            Some(q) => q.exts = d.exts,
+                            None => self.cfg.quick_filters.push(d),
+                        }
+                    }
+                    changed = true;
                 }
             });
-        }
-        match edit {
-            Some((i, -1)) => self.cfg.quick_filters.swap(i, i - 1),
-            Some((i, 1)) => self.cfg.quick_filters.swap(i, i + 1),
-            Some((i, _)) => {
-                self.cfg.quick_filters.remove(i);
-            }
-            None => {}
-        }
-        changed |= edit.is_some();
-        ui.add_space(6.0);
-        ui.horizontal_wrapped(|ui| {
-            if ui.button(format!("+ {}", t("New quick filter"))).clicked() {
-                let name = crate::config::unused_quick_filter_name(&self.cfg.quick_filters, &t("New filter"));
-                self.cfg.quick_filters.push(crate::config::QuickFilter::new(&name, ""));
-                changed = true;
-            }
-            if ui.button(t("Restore the built-in filters")).on_hover_text(t("Adds the built-in categories that are missing and resets their extensions")).clicked() {
-                for d in crate::config::default_quick_filters() {
-                    match self.cfg.quick_filters.iter_mut().find(|q| q.name == d.name) {
-                        Some(q) => q.exts = d.exts,
-                        None => self.cfg.quick_filters.push(d),
-                    }
-                }
-                changed = true;
-            }
-        });
         }
         frame.end(ui);
         changed

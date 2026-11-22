@@ -46,7 +46,11 @@ pub fn group_color(i: u8, _dark: bool) -> Color32 {
 /// `hot`: how far the pointer's highlight has faded in (0 to 1).
 fn group_tint(col: Color32, dark: bool, selected: bool, hot: f32) -> Color32 {
     let a = if selected {
-        if dark { 0.55 } else { 0.42 }
+        if dark {
+            0.55
+        } else {
+            0.42
+        }
     } else {
         let (rest, hover) = if dark { (0.24, 0.42) } else { (0.17, 0.34) };
         rest + (hover - rest) * hot
@@ -57,7 +61,11 @@ fn group_tint(col: Color32, dark: bool, selected: bool, hot: f32) -> Color32 {
 /// Black or white, whichever reads better on `bg`.
 fn text_on(bg: Color32) -> Color32 {
     let l = 0.299 * bg.r() as f32 + 0.587 * bg.g() as f32 + 0.114 * bg.b() as f32;
-    if l > 150.0 { Color32::from_rgb(0x1b, 0x1c, 0x20) } else { Color32::WHITE }
+    if l > 150.0 {
+        Color32::from_rgb(0x1b, 0x1c, 0x20)
+    } else {
+        Color32::WHITE
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -71,8 +79,15 @@ pub struct TabGroup {
 /// Requests from the tab bar that need the app (creating, closing or moving tabs).
 #[derive(Debug, Clone)]
 pub enum TabEvent {
-    NewFiles { at: usize, group: Option<u32> },
-    NewTerminal { at: usize, group: Option<u32>, profile: Option<usize> },
+    NewFiles {
+        at: usize,
+        group: Option<u32>,
+    },
+    NewTerminal {
+        at: usize,
+        group: Option<u32>,
+        profile: Option<usize>,
+    },
     Close(Vec<u64>),
     Duplicate(u64),
     /// The shown tab was clicked: give its focused window the keyboard.
@@ -80,9 +95,16 @@ pub enum TabEvent {
     /// Show this tab's windows beside the shown tab's (merge the two tabs).
     MergeIntoShown(u64),
     /// A mini window dropped between tabs: it becomes a tab of its own.
-    Detach { view: u64, at: usize, group: Option<u32> },
+    Detach {
+        view: u64,
+        at: usize,
+        group: Option<u32>,
+    },
     /// A mini window dropped onto another tab: it moves into that tab.
-    WindowInto { view: u64, tab: u64 },
+    WindowInto {
+        view: u64,
+        tab: u64,
+    },
     ReopenClosed,
 }
 
@@ -568,10 +590,17 @@ pub fn tab_bar(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], c: &BarCt
         });
         // "+" = new file tab, terminal button = new terminal tab (right-click: profiles).
         let (at, group) = (strip.active + 1, strip.tabs[strip.active].group);
-        if icons::icon_button(ui, 24.0, true, th, icons::plus).on_hover_text(format!("{} ({})", t("New tab"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::NewTab))).clicked() {
+        if icons::icon_button(ui, 24.0, true, th, icons::plus)
+            .on_hover_text(format!("{} ({})", t("New tab"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::NewTab)))
+            .clicked()
+        {
             ev.push(TabEvent::NewFiles { at, group });
         }
-        let tr = icons::icon_button(ui, 24.0, true, th, |p, r, col| terminal_glyph(p, r.shrink(1.0), col)).on_hover_text(format!("{} ({})", t("New terminal tab"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::NewTerminalTab)));
+        let tr = icons::icon_button(ui, 24.0, true, th, |p, r, col| terminal_glyph(p, r.shrink(1.0), col)).on_hover_text(format!(
+            "{} ({})",
+            t("New terminal tab"),
+            crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::NewTerminalTab)
+        ));
         if tr.clicked() {
             ev.push(TabEvent::NewTerminal { at, group, profile: None });
         }
@@ -631,7 +660,11 @@ pub fn tab_bar(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], c: &BarCt
                 let at = strip.group_range(*g).map(|(_, l)| l + 1).unwrap_or(strip.tabs.len());
                 (at, Some(*g))
             } else {
-                let at = tab_rects.iter().find(|(_, r)| p.x < r.center().x).map(|(i, _)| *i).unwrap_or_else(|| tab_rects.last().map(|(i, _)| i + 1).unwrap_or(strip.tabs.len()));
+                let at = tab_rects
+                    .iter()
+                    .find(|(_, r)| p.x < r.center().x)
+                    .map(|(i, _)| *i)
+                    .unwrap_or_else(|| tab_rects.last().map(|(i, _)| i + 1).unwrap_or(strip.tabs.len()));
                 let mut group = strip.drop_group(moving, at);
                 // Between a group's chip and its first tab: join the group.
                 if let Some(g) = strip.tabs.get(at).and_then(|t| t.group) {
@@ -802,7 +835,17 @@ fn group_chip(ui: &mut egui::Ui, strip: &mut Strip, gid: u32, c: &BarCtx, ev: &m
 }
 
 #[allow(clippy::too_many_arguments)]
-fn tab_item(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, w: f32, c: &BarCtx, ev: &mut Vec<TabEvent>, local: &mut Vec<Local>, font: &FontId) -> Rect {
+fn tab_item(
+    ui: &mut egui::Ui,
+    strip: &mut Strip,
+    info: &[TabInfo],
+    i: usize,
+    w: f32,
+    c: &BarCtx,
+    ev: &mut Vec<TabEvent>,
+    local: &mut Vec<Local>,
+    font: &FontId,
+) -> Rect {
     let th = c.theme;
     let selected = i == strip.active;
     let (rect, _) = ui.allocate_exact_size(vec2(w, TAB_H), Sense::hover());
@@ -830,7 +873,13 @@ fn tab_item(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, w:
     if being_dragged {
         p.rect_stroke(rect, 6.0, Stroke::new(1.0_f32, th.accent.gamma_multiply(0.6)), egui::StrokeKind::Inside);
     }
-    let color = if selected { th.strong() } else if tab.group.is_some() { th.text.lerp_to_gamma(th.strong(), hot) } else { th.weak.lerp_to_gamma(th.strong(), hot) };
+    let color = if selected {
+        th.strong()
+    } else if tab.group.is_some() {
+        th.text.lerp_to_gamma(th.strong(), hot)
+    } else {
+        th.weak.lerp_to_gamma(th.strong(), hot)
+    };
     let icon_c = if tab.pinned { rect.center().x } else { rect.left() + 13.0 };
     let icon_r = Rect::from_center_size(pos2(icon_c, rect.center().y), vec2(13.0, 13.0));
     if inf.cells.len() > 1 {
@@ -847,7 +896,13 @@ fn tab_item(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, w:
     } else {
         match inf.term {
             Some(exited) => {
-                let ic = if exited { th.weak.gamma_multiply(0.6) } else if selected { th.accent } else { th.weak };
+                let ic = if exited {
+                    th.weak.gamma_multiply(0.6)
+                } else if selected {
+                    th.accent
+                } else {
+                    th.weak
+                };
                 terminal_glyph(&p, icon_r, ic);
             }
             None => icons::folder_icon(&p, icon_r, th),

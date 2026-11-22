@@ -214,7 +214,8 @@ fn set_style(s: PathStyle) {
 
 fn is_ident(k: &str, extra: &[char]) -> bool {
     let mut c = k.chars();
-    c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_' || extra.contains(&f)) && c.all(|x| x.is_ascii_alphanumeric() || x == '_' || extra.contains(&x))
+    c.next().is_some_and(|f| f.is_ascii_alphabetic() || f == '_' || extra.contains(&f))
+        && c.all(|x| x.is_ascii_alphanumeric() || x == '_' || extra.contains(&x))
 }
 
 fn single_quoted(k: &str) -> String {
@@ -287,7 +288,8 @@ pub struct JsonView {
 impl JsonView {
     pub fn new(root: Node, source: Option<(Vec<Styled>, Color32)>) -> Self {
         let (values, depth) = root.stats();
-        let mut v = Self { root, values, depth, source, show_source: false, expanded: HashSet::new(), shown: HashMap::new(), rows: Vec::new(), selected: Vec::new() };
+        let mut v =
+            Self { root, values, depth, source, show_source: false, expanded: HashSet::new(), shown: HashMap::new(), rows: Vec::new(), selected: Vec::new() };
         v.expanded.insert(Vec::new());
         v.rebuild();
         v.open_first_levels();
@@ -348,7 +350,8 @@ impl JsonView {
     /// Open level after level while the view stays short.
     fn open_first_levels(&mut self) {
         for depth in 0..3 {
-            let next: Vec<At> = self.rows.iter().filter(|r| r.kind == RowKind::Value && r.depth == depth + 1 && !self.expanded.contains(&r.at)).map(|r| r.at.clone()).collect();
+            let next: Vec<At> =
+                self.rows.iter().filter(|r| r.kind == RowKind::Value && r.depth == depth + 1 && !self.expanded.contains(&r.at)).map(|r| r.at.clone()).collect();
             let added: usize = next.iter().filter_map(|a| self.node(a)).map(|n| n.len().min(PAGE)).sum();
             if added == 0 || self.rows.len() + added > FIRST_ROWS {
                 break;
@@ -504,7 +507,13 @@ impl JsonView {
                 let p = ui.painter_at(rect);
                 if let RowKind::More(n) = row.kind {
                     let text = format!("… {} {}", crate::util::fmt_count(n as u64), t("hidden · click to show more"));
-                    p.text(egui::pos2(indent + 16.0, rect.center().y), egui::Align2::LEFT_CENTER, text, font.clone(), if resp.hovered() { th.accent } else { th.weak });
+                    p.text(
+                        egui::pos2(indent + 16.0, rect.center().y),
+                        egui::Align2::LEFT_CENTER,
+                        text,
+                        font.clone(),
+                        if resp.hovered() { th.accent } else { th.weak },
+                    );
                     if resp.clicked() {
                         action = Some(Action::More(row.at.clone()));
                     }
@@ -522,7 +531,11 @@ impl JsonView {
                 let chevron = egui::Rect::from_center_size(egui::pos2(indent + 6.0, rect.center().y), egui::vec2(12.0, 12.0));
                 if node.is_container() {
                     let c = chevron.center();
-                    let pts = if open { vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)] } else { vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(3.0, 0.0), c + egui::vec2(-2.0, 4.0)] };
+                    let pts = if open {
+                        vec![c + egui::vec2(-4.0, -2.0), c + egui::vec2(4.0, -2.0), c + egui::vec2(0.0, 3.0)]
+                    } else {
+                        vec![c + egui::vec2(-2.0, -4.0), c + egui::vec2(3.0, 0.0), c + egui::vec2(-2.0, 4.0)]
+                    };
                     p.add(egui::Shape::convex_polygon(pts, th.weak, egui::Stroke::NONE));
                 }
                 let mut job = egui::text::LayoutJob::default();

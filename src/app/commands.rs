@@ -111,7 +111,11 @@ impl App {
                 }
                 let name = if sel.len() == 1 {
                     let n = &sel[0].name;
-                    if sel[0].is_dir || sel[0].ext.is_empty() { n.clone() } else { n[..n.len() - sel[0].ext.len() - 1].to_string() }
+                    if sel[0].is_dir || sel[0].ext.is_empty() {
+                        n.clone()
+                    } else {
+                        n[..n.len() - sel[0].ext.len() - 1].to_string()
+                    }
                 } else {
                     dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "archive".into())
                 };
@@ -220,13 +224,25 @@ impl App {
                 let base = if here { dir.clone() } else { other.local_path().map(|p| p.to_path_buf()).unwrap_or(dir.clone()) };
                 let stem = e.name.trim_end_matches(&format!(".{}", ArchiveFormat::detect(&path).map(|f| f.extension()).unwrap_or(""))).to_string();
                 let dest = base.join(stem);
-                self.show_dialog(Dialog::Unpack { archive: path, dest: dest.to_string_lossy().to_string(), selection: vec![], strip: String::new(), policy: Conflict::Rename }, true);
+                self.show_dialog(
+                    Dialog::Unpack {
+                        archive: path,
+                        dest: dest.to_string_lossy().to_string(),
+                        selection: vec![],
+                        strip: String::new(),
+                        policy: Conflict::Rename,
+                    },
+                    true,
+                );
             }
             Location::Archive { file, inner } => {
                 // Inside an archive: extract the selection.
                 let sel: Vec<String> = tab.selection().iter().map(|e| join_slash(&inner, &e.name)).collect();
                 let dest = other.local_path().map(|p| p.to_path_buf()).or_else(|| file.parent().map(|p| p.to_path_buf())).unwrap_or_default();
-                self.show_dialog(Dialog::Unpack { archive: file, dest: dest.to_string_lossy().to_string(), selection: sel, strip: inner, policy: Conflict::Rename }, true);
+                self.show_dialog(
+                    Dialog::Unpack { archive: file, dest: dest.to_string_lossy().to_string(), selection: sel, strip: inner, policy: Conflict::Rename },
+                    true,
+                );
             }
             Location::Remote { .. } => self.toast(t("Download the archive first"), true),
         }
@@ -361,7 +377,11 @@ impl App {
             v.push(E::new(t("Close window"), hint(Action::CloseWindow), PalItem::Cmd(Cmd::ClosePane)));
         }
         for (i, p) in self.cfg.terminal_profiles.iter().enumerate() {
-            v.push(E::new(format!("{}: {}", t("Terminal"), p.name), if i == self.cfg.default_terminal { hint(Action::OpenTerminal) } else { "" }, PalItem::Cmd(Cmd::TerminalProfile(i))));
+            v.push(E::new(
+                format!("{}: {}", t("Terminal"), p.name),
+                if i == self.cfg.default_terminal { hint(Action::OpenTerminal) } else { "" },
+                PalItem::Cmd(Cmd::TerminalProfile(i)),
+            ));
         }
         let windows = self.panes.len();
         for (act, label, key) in [
@@ -403,7 +423,8 @@ impl App {
         // Every window of every tab, so the palette doubles as a tab search.
         for w in &self.strip.tabs {
             let panes = if w.uid == self.live { &self.panes } else { &w.panes };
-            let group = w.group.and_then(|g| self.strip.group(g)).map(|g| if g.name.is_empty() { String::new() } else { format!(" · {}", g.name) }).unwrap_or_default();
+            let group =
+                w.group.and_then(|g| self.strip.group(g)).map(|g| if g.name.is_empty() { String::new() } else { format!(" · {}", g.name) }).unwrap_or_default();
             for p in panes {
                 let tab = p.tab();
                 let kind = if tab.is_terminal() { t("Terminal") } else { t("Tab") };
@@ -672,11 +693,8 @@ impl App {
             return;
         }
         // Marked items, or everything currently visible (respects the quick filter).
-        let entries: Vec<Entry> = if tab.marked_shown().is_empty() {
-            tab.view.iter().map(|&i| tab.entries[i].clone()).filter(|e| !e.is_parent).collect()
-        } else {
-            tab.selection()
-        };
+        let entries: Vec<Entry> =
+            if tab.marked_shown().is_empty() { tab.view.iter().map(|&i| tab.entries[i].clone()).filter(|e| !e.is_parent).collect() } else { tab.selection() };
         if entries.is_empty() {
             return;
         }
@@ -706,7 +724,11 @@ impl App {
     /// Batch rename in `loc`: the pairs done and the errors.
     fn run_rename(&mut self, loc: &Location, pairs: &[(String, String)]) -> (Vec<(String, String)>, Vec<String>) {
         match loc {
-            Location::Local(dir) => ren::apply(pairs, |f, to| crate::files::safefs::rename_item(&dir.join(f), &dir.join(to)).map_err(es), |n| crate::files::safefs::exists(&dir.join(n))),
+            Location::Local(dir) => ren::apply(
+                pairs,
+                |f, to| crate::files::safefs::rename_item(&dir.join(f), &dir.join(to)).map_err(es),
+                |n| crate::files::safefs::exists(&dir.join(n)),
+            ),
             Location::Remote { id, path } => {
                 let Some(fs) = self.remotes.get(id).map(|r| r.1.clone()) else { return (vec![], vec![t("Connection closed")]) };
                 // Never waits for a transfer on this connection (the window would freeze).

@@ -128,7 +128,10 @@ fn fetch() -> Res<Vec<u8>> {
         let accept = "Accept: application/vnd.github+json";
         let tools: [(&str, Vec<String>); 2] = [
             ("curl", vec!["-fsSL".into(), "--max-time".into(), "20".into(), "-A".into(), agent.clone(), "-H".into(), accept.into(), url.clone()]),
-            ("wget", vec!["-q".into(), "-O".into(), "-".into(), "--timeout=20".into(), format!("--user-agent={agent}"), format!("--header={accept}"), url.clone()]),
+            (
+                "wget",
+                vec!["-q".into(), "-O".into(), "-".into(), "--timeout=20".into(), format!("--user-agent={agent}"), format!("--header={accept}"), url.clone()],
+            ),
         ];
         for (tool, args) in tools {
             let mut cmd = Command::new(tool);

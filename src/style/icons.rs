@@ -1,7 +1,7 @@
 //! Small vector icons painted with egui shapes, so they look crisp and
 //! consistent on every platform (no dependency on emoji fonts).
-use crate::style::theme::Theme;
 use crate::files::vfs::Entry;
+use crate::style::theme::Theme;
 use egui::{pos2, vec2, Color32, Painter, Pos2, Rect, Shape, Stroke};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -26,17 +26,17 @@ pub fn kind_of(ext: &str) -> FileKind {
         "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tif" | "tiff" | "heic" | "avif" | "psd" => FileKind::Image,
         "mp4" | "mkv" | "avi" | "mov" | "webm" | "wmv" | "m4v" => FileKind::Video,
         "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" => FileKind::Audio,
-        "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "xz" | "txz" | "zst" | "tzst" | "bz2" | "jar" | "apk" | "cbz" | "whl" => {
-            FileKind::Archive
+        "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "xz" | "txz" | "zst" | "tzst" | "bz2" | "jar" | "apk" | "cbz" | "whl" => FileKind::Archive,
+        "rs" | "py" | "js" | "mjs" | "ts" | "tsx" | "jsx" | "go" | "c" | "h" | "cpp" | "hpp" | "cc" | "java" | "kt" | "cs" | "rb" | "php" | "swift" | "lua"
+        | "html" | "css" | "scss" | "vue" | "svelte" | "zig" | "dart" | "scala" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "sql" | "hs" | "ex" | "exs" => {
+            FileKind::Code
         }
-        "rs" | "py" | "js" | "mjs" | "ts" | "tsx" | "jsx" | "go" | "c" | "h" | "cpp" | "hpp" | "cc" | "java" | "kt" | "cs"
-        | "rb" | "php" | "swift" | "lua" | "html" | "css" | "scss" | "vue" | "svelte" | "zig" | "dart" | "scala" | "sh"
-        | "bash" | "zsh" | "fish" | "ps1" | "sql" | "hs" | "ex" | "exs" => FileKind::Code,
         "md" | "markdown" | "txt" | "rst" | "doc" | "docx" | "odt" | "rtf" | "pages" | "log" => FileKind::Doc,
         "pdf" => FileKind::Pdf,
         "exe" | "msi" | "app" | "bat" | "cmd" | "appimage" | "deb" | "rpm" | "dmg" | "pkg" | "bin" => FileKind::Exec,
-        "json" | "toml" | "yaml" | "yml" | "xml" | "csv" | "tsv" | "parquet" | "pq" | "avro" | "xlsm" | "xlsb" | "ini" | "cfg" | "conf" | "lock" | "db" | "sqlite"
-        | "xls" | "xlsx" | "ods" | "geojson" | "geojsonl" | "wkt" | "wkb" | "h5" | "hdf5" | "npy" | "npz" | "safetensors" | "onnx" | "feather" | "arrow" => FileKind::Data,
+        "json" | "toml" | "yaml" | "yml" | "xml" | "csv" | "tsv" | "parquet" | "pq" | "avro" | "xlsm" | "xlsb" | "ini" | "cfg" | "conf" | "lock" | "db"
+        | "sqlite" | "xls" | "xlsx" | "ods" | "geojson" | "geojsonl" | "wkt" | "wkb" | "h5" | "hdf5" | "npy" | "npz" | "safetensors" | "onnx" | "feather"
+        | "arrow" => FileKind::Data,
         _ => FileKind::Other,
     }
 }
@@ -333,8 +333,16 @@ fn kind_glyph(p: &Painter, g: Rect, kind: FileKind, c: Color32) {
     match kind {
         FileKind::Image => {
             let base = g.bottom();
-            p.add(Shape::convex_polygon(vec![pos2(g.left(), base), pos2(g.left() + w * 0.38, g.top() + w * 0.25), pos2(g.left() + w * 0.7, base)], c, Stroke::NONE));
-            p.add(Shape::convex_polygon(vec![pos2(g.left() + w * 0.45, base), pos2(g.left() + w * 0.72, g.top() + w * 0.45), pos2(g.right(), base)], c.gamma_multiply(0.75), Stroke::NONE));
+            p.add(Shape::convex_polygon(
+                vec![pos2(g.left(), base), pos2(g.left() + w * 0.38, g.top() + w * 0.25), pos2(g.left() + w * 0.7, base)],
+                c,
+                Stroke::NONE,
+            ));
+            p.add(Shape::convex_polygon(
+                vec![pos2(g.left() + w * 0.45, base), pos2(g.left() + w * 0.72, g.top() + w * 0.45), pos2(g.right(), base)],
+                c.gamma_multiply(0.75),
+                Stroke::NONE,
+            ));
             p.circle_filled(pos2(g.right() - w * 0.18, g.top() + w * 0.12), w * 0.12, c);
         }
         FileKind::Video => {
@@ -473,7 +481,11 @@ pub fn icon_button(ui: &mut egui::Ui, size: f32, enabled: bool, th: &Theme, draw
 pub fn eject(p: &Painter, r: Rect, col: Color32) {
     let (l, w) = (r.left(), r.width());
     let tri_bottom = r.top() + r.height() * 0.6;
-    p.add(egui::Shape::convex_polygon(vec![pos2(r.center().x, r.top() + r.height() * 0.08), pos2(l + w * 0.95, tri_bottom), pos2(l + w * 0.05, tri_bottom)], col, Stroke::NONE));
+    p.add(egui::Shape::convex_polygon(
+        vec![pos2(r.center().x, r.top() + r.height() * 0.08), pos2(l + w * 0.95, tri_bottom), pos2(l + w * 0.05, tri_bottom)],
+        col,
+        Stroke::NONE,
+    ));
     p.rect_filled(Rect::from_min_max(pos2(l + w * 0.05, r.top() + r.height() * 0.76), pos2(l + w * 0.95, r.top() + r.height() * 0.92)), 1.0, col);
 }
 
@@ -718,10 +730,12 @@ pub fn mi_refresh(p: &Painter, r: Rect, c: Color32) {
     let s = ms(c);
     let ctr = r.center();
     let rad = r.width() * 0.4;
-    let pts: Vec<egui::Pos2> = (0..=20).map(|i| {
-        let a = 0.6 + (i as f32 / 20.0) * 4.9;
-        pos2(ctr.x + rad * a.cos(), ctr.y + rad * a.sin())
-    }).collect();
+    let pts: Vec<egui::Pos2> = (0..=20)
+        .map(|i| {
+            let a = 0.6 + (i as f32 / 20.0) * 4.9;
+            pos2(ctr.x + rad * a.cos(), ctr.y + rad * a.sin())
+        })
+        .collect();
     let end = *pts.last().unwrap();
     p.add(Shape::line(pts, s));
     p.line_segment([end, end + egui::vec2(3.5, 0.5)], s);

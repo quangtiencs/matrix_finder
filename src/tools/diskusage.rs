@@ -72,7 +72,11 @@ fn allocated_size(m: &std::fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     // Prefer the real on-disk size (sparse files), but never exceed apparent size by much.
     let blocks = m.blocks() * 512;
-    if blocks == 0 { m.len() } else { blocks.min(m.len().max(4096)) }
+    if blocks == 0 {
+        m.len()
+    } else {
+        blocks.min(m.len().max(4096))
+    }
 }
 #[cfg(not(unix))]
 fn allocated_size(m: &std::fs::Metadata) -> u64 {
@@ -163,7 +167,16 @@ impl Drop for DiskUsage {
 impl DiskUsage {
     /// A view of `path`, scanning `depth` levels (1 by default).
     pub fn new(path: PathBuf, depth: usize) -> Self {
-        let mut d = Self { job: None, root: None, drill: vec![], depth: depth.max(1), view: DuView::Treemap, sort: (DuSort::Size, true), took: 0.0, path: path.clone() };
+        let mut d = Self {
+            job: None,
+            root: None,
+            drill: vec![],
+            depth: depth.max(1),
+            view: DuView::Treemap,
+            sort: (DuSort::Size, true),
+            took: 0.0,
+            path: path.clone(),
+        };
         d.start(path);
         d
     }
@@ -275,7 +288,11 @@ impl DiskUsage {
                 DuSort::Size => a.size.cmp(&b.size),
                 DuSort::Files => a.files.cmp(&b.files),
             };
-            if desc { o.reverse() } else { o }
+            if desc {
+                o.reverse()
+            } else {
+                o
+            }
         });
         for k in kids {
             if out.len() >= MAX_TABLE_ROWS {
@@ -439,7 +456,11 @@ fn treemap(ui: &mut egui::Ui, rect: Rect, node: &Node, path: &Path, theme: &Them
             let gk: Vec<&Node> = k.children.iter().filter(|c| c.size > 0).take(60).collect();
             let gr = squarify(&gk.iter().map(|g| g.size as f64).collect::<Vec<_>>(), inner);
             for (g, rr) in gk.iter().zip(&gr) {
-                let shade = if theme.dark { Color32::from_black_alpha(if g.is_dir { 40 } else { 70 }) } else { Color32::from_white_alpha(if g.is_dir { 70 } else { 120 }) };
+                let shade = if theme.dark {
+                    Color32::from_black_alpha(if g.is_dir { 40 } else { 70 })
+                } else {
+                    Color32::from_white_alpha(if g.is_dir { 70 } else { 120 })
+                };
                 painter.rect_filled(rr.shrink(1.0), 3.0, shade);
             }
         }
@@ -495,7 +516,13 @@ fn table(ui: &mut egui::Ui, node: &Node, rows: &[(usize, &Node, PathBuf)], sort:
             let ext = if n.is_dir { String::new() } else { crate::util::ext_of(&n.name) };
             crate::style::icons::file_icon(painter, icon_r, &n.name, n.is_dir, &ext, theme);
             let name_clip = Rect::from_min_max(pos2(r.left(), r.top()), pos2(r.left() + name_w - 8.0, r.bottom()));
-            painter.with_clip_rect(name_clip).text(pos2(icon_r.right() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, &n.name, egui::FontId::proportional(13.0), theme.text);
+            painter.with_clip_rect(name_clip).text(
+                pos2(icon_r.right() + 8.0, r.center().y),
+                egui::Align2::LEFT_CENTER,
+                &n.name,
+                egui::FontId::proportional(13.0),
+                theme.text,
+            );
             let x = r.left() + name_w;
             painter.text(pos2(x + size_w - 6.0, r.center().y), egui::Align2::RIGHT_CENTER, human_size(n.size), egui::FontId::proportional(12.5), theme.text);
             // Share of the shown folder, as a bar and a number.
@@ -503,11 +530,27 @@ fn table(ui: &mut egui::Ui, node: &Node, rows: &[(usize, &Node, PathBuf)], sort:
             let track = Rect::from_min_size(pos2(x + size_w + 12.0, r.center().y - 3.0), vec2(share_w - 64.0, 6.0));
             painter.rect_filled(track, 3.0, theme.surface);
             painter.rect_filled(Rect::from_min_size(track.min, vec2(track.width() * frac.clamp(0.0, 1.0), 6.0)), 3.0, theme.accent.gamma_multiply(0.85));
-            painter.text(pos2(track.right() + 46.0, r.center().y), egui::Align2::RIGHT_CENTER, format!("{:.1}%", frac * 100.0), egui::FontId::proportional(11.5), theme.weak);
+            painter.text(
+                pos2(track.right() + 46.0, r.center().y),
+                egui::Align2::RIGHT_CENTER,
+                format!("{:.1}%", frac * 100.0),
+                egui::FontId::proportional(11.5),
+                theme.weak,
+            );
             let files = if n.is_dir { n.files.to_string() } else { String::new() };
-            painter.text(pos2(x + size_w + share_w + files_w - 6.0, r.center().y), egui::Align2::RIGHT_CENTER, files, egui::FontId::proportional(12.5), theme.weak);
+            painter.text(
+                pos2(x + size_w + share_w + files_w - 6.0, r.center().y),
+                egui::Align2::RIGHT_CENTER,
+                files,
+                egui::FontId::proportional(12.5),
+                theme.weak,
+            );
             if resp.double_clicked() && n.is_dir {
-                *act = if *level == 0 { node.children.iter().position(|c| std::ptr::eq(c, *n)).map(Act::Open).unwrap_or(Act::None) } else { Act::OpenPath(p.clone()) };
+                *act = if *level == 0 {
+                    node.children.iter().position(|c| std::ptr::eq(c, *n)).map(Act::Open).unwrap_or(Act::None)
+                } else {
+                    Act::OpenPath(p.clone())
+                };
             }
             let resp = resp.on_hover_text(p.to_string_lossy());
             resp.context_menu(|ui| entry_menu(ui, n, p, t, act));
@@ -527,7 +570,11 @@ fn header_cell(ui: &mut egui::Ui, theme: &Theme, label: &str, width: f32, right:
     let on = sort.0 == key;
     let col = if on || resp.hovered() { theme.accent } else { theme.weak };
     let text = if on { format!("{label} {}", if sort.1 { "▼" } else { "▲" }) } else { label.to_string() };
-    let (pos, align) = if right { (pos2(r.right() - 6.0, r.center().y), egui::Align2::RIGHT_CENTER) } else { (pos2(r.left() + 30.0, r.center().y), egui::Align2::LEFT_CENTER) };
+    let (pos, align) = if right {
+        (pos2(r.right() - 6.0, r.center().y), egui::Align2::RIGHT_CENTER)
+    } else {
+        (pos2(r.left() + 30.0, r.center().y), egui::Align2::LEFT_CENTER)
+    };
     ui.painter().text(pos, align, text, egui::FontId::proportional(12.0), col);
     if resp.clicked() {
         *act = Act::Sort(key);

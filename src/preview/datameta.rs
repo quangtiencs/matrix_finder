@@ -4,8 +4,8 @@
 //! label) from the file's header, so a file of any size opens at once. A header that
 //! is damaged, or larger than any real one, is refused with a message instead.
 use crate::i18n::t;
-use crate::util::fmt_count;
 use crate::preview::sheet::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_ROWS};
+use crate::util::fmt_count;
 use crate::util::{es, human_size, Res};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -44,7 +44,11 @@ fn field_text(b: &[u8]) -> String {
 }
 
 fn shape_text(dims: &[u64]) -> String {
-    if dims.is_empty() { t("scalar") } else { dims.iter().map(u64::to_string).collect::<Vec<_>>().join(" × ") }
+    if dims.is_empty() {
+        t("scalar")
+    } else {
+        dims.iter().map(u64::to_string).collect::<Vec<_>>().join(" × ")
+    }
 }
 
 /// Reads numbers of either byte order, refusing to go past the end of the file.
@@ -269,7 +273,11 @@ fn mat_v5<R: Read + Seek>(r: R) -> Res<TableData> {
                 let _ = decoder.take(HEAD).read_to_end(&mut out);
                 // The packed data is itself a matrix element, of which only the start is here.
                 let tag = out.get(..4).map(|w| if little { u32::from_le_bytes(w.try_into().unwrap()) } else { u32::from_be_bytes(w.try_into().unwrap()) });
-                if tag == Some(14) { out.get(8..).unwrap_or_default().to_vec() } else { vec![] }
+                if tag == Some(14) {
+                    out.get(8..).unwrap_or_default().to_vec()
+                } else {
+                    vec![]
+                }
             }
             _ => vec![],
         };
@@ -461,10 +469,18 @@ fn netcdf_classic<R: Read + Seek>(r: R) -> Res<TableData> {
         let attrs = nc.attributes()?;
         let kind = nc.f.u32()?;
         let _vsize = nc.count()?;
-        if version == 1 { nc.f.u32()?; } else { nc.f.u64()?; }
+        if version == 1 {
+            nc.f.u32()?;
+        } else {
+            nc.f.u64()?;
+        }
         let attr = |key: &str| attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone()).unwrap_or_default();
         let units = attr("units");
-        let label = [attr("long_name"), if units.is_empty() { units } else { format!("[{units}]") }].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" ");
+        let label = [attr("long_name"), if units.is_empty() { units } else { format!("[{units}]") }]
+            .into_iter()
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
         let type_name = nc_type(kind).map_or("?", |(_, n)| n);
         rows.push(vec![name, shape_text(&shape), dim_names.join(", "), type_name.to_string(), label]);
     }
@@ -477,7 +493,8 @@ fn netcdf_classic<R: Read + Seek>(r: R) -> Res<TableData> {
     if let Some(r) = records {
         info.push(format!("{} {}", fmt_count(r), t("records")));
     }
-    let dim_rows = dims.iter().map(|(n, l)| vec![n.clone(), if *l == 0 { format!("{} ({})", records.unwrap_or(0), t("unlimited")) } else { l.to_string() }]).collect();
+    let dim_rows =
+        dims.iter().map(|(n, l)| vec![n.clone(), if *l == 0 { format!("{} ({})", records.unwrap_or(0), t("unlimited")) } else { l.to_string() }]).collect();
     let sheets = vec![
         text_sheet(t("Variables"), vec![t("Name"), t("Shape"), t("Dimensions"), t("Type"), t("Label")], rows),
         text_sheet(t("Dimensions"), vec![t("Name"), t("Length")], dim_rows),
@@ -621,7 +638,9 @@ fn orc_type_name(types: &[OrcType], i: usize, depth: usize, budget: &mut usize) 
     if *budget == 0 {
         return "…".into();
     }
-    let mut sub = |k: usize| ty.subtypes.get(k).map_or_else(|| "?".to_string(), |&s| if depth > 8 { "…".into() } else { orc_type_name(types, s as usize, depth + 1, budget) });
+    let mut sub = |k: usize| {
+        ty.subtypes.get(k).map_or_else(|| "?".to_string(), |&s| if depth > 8 { "…".into() } else { orc_type_name(types, s as usize, depth + 1, budget) })
+    };
     match ty.kind {
         0 => "boolean".into(),
         1 => "tinyint".into(),
@@ -792,7 +811,13 @@ pub fn stata_from<R: Read + Seek>(r: R) -> Res<TableData> {
     f.seek(0)?;
     let (release, k, n, label, stamp, types, names, formats, labels);
     if start == b"<stata_dta>" {
-        let expect = |f: &mut Bin<R>, tag: &[u8]| -> Res<()> { if f.bytes(tag.len() as u64)? == tag { Ok(()) } else { Err(too_complex()) } };
+        let expect = |f: &mut Bin<R>, tag: &[u8]| -> Res<()> {
+            if f.bytes(tag.len() as u64)? == tag {
+                Ok(())
+            } else {
+                Err(too_complex())
+            }
+        };
         expect(&mut f, b"<stata_dta><header><release>")?;
         release = String::from_utf8_lossy(&f.bytes(3)?).parse::<u32>().map_err(|_| not_dta())?;
         if !(117..=119).contains(&release) {
@@ -823,7 +848,10 @@ pub fn stata_from<R: Read + Seek>(r: R) -> Res<TableData> {
             f.bytes(k.checked_mul(each).ok_or_else(too_complex)?)
         };
         let raw = block(&mut f, map[2], b"<variable_types>", 2)?;
-        types = raw.chunks_exact(2).map(|c| stata_type_new(if f.little { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) })).collect::<Vec<_>>();
+        types = raw
+            .chunks_exact(2)
+            .map(|c| stata_type_new(if f.little { u16::from_le_bytes([c[0], c[1]]) } else { u16::from_be_bytes([c[0], c[1]]) }))
+            .collect::<Vec<_>>();
         names = block(&mut f, map[3], b"<varnames>", name_len)?.chunks(name_len as usize).map(field_text).collect::<Vec<_>>();
         formats = block(&mut f, map[5], b"<formats>", format_len)?.chunks(format_len as usize).map(field_text).collect::<Vec<_>>();
         labels = block(&mut f, map[7], b"<variable_labels>", label_len)?.chunks(label_len as usize).map(field_text).collect::<Vec<_>>();
@@ -849,7 +877,14 @@ pub fn stata_from<R: Read + Seek>(r: R) -> Res<TableData> {
     }
     let rows = (0..k as usize)
         .take(MAX_VARIABLES)
-        .map(|i| vec![names.get(i).cloned().unwrap_or_default(), types.get(i).cloned().unwrap_or_default(), formats.get(i).cloned().unwrap_or_default(), labels.get(i).cloned().unwrap_or_default()])
+        .map(|i| {
+            vec![
+                names.get(i).cloned().unwrap_or_default(),
+                types.get(i).cloned().unwrap_or_default(),
+                formats.get(i).cloned().unwrap_or_default(),
+                labels.get(i).cloned().unwrap_or_default(),
+            ]
+        })
         .collect();
     let info = vec![format!("{} {}", fmt_count(k), t("variables")), format!("{} {}", fmt_count(n), t("observations"))];
     let about = vec![(t("Version"), release.to_string()), (t("Label"), label), (t("Saved"), stamp.trim().to_string())];
@@ -885,7 +920,11 @@ fn spss_format(code: u32) -> String {
         39 => "SDATE",
         _ => return String::new(),
     };
-    if decimals > 0 { format!("{name}{width}.{decimals}") } else { format!("{name}{width}") }
+    if decimals > 0 {
+        format!("{name}{width}.{decimals}")
+    } else {
+        format!("{name}{width}")
+    }
 }
 
 /// An SPSS data file's dictionary: its variables, read up to where the data starts.
@@ -1093,7 +1132,11 @@ pub fn sas_from<R: Read + Seek>(r: R) -> Res<TableData> {
             let sig = if u64_file {
                 let v = rd(s, 0, 8).unwrap_or(0);
                 let (hi, lo) = (v >> 32, v & 0xFFFF_FFFF);
-                if hi == 0 || hi == 0xFFFF_FFFF { lo } else { hi }
+                if hi == 0 || hi == 0xFFFF_FFFF {
+                    lo
+                } else {
+                    hi
+                }
             } else {
                 rd(s, 0, 4).unwrap_or(0)
             };
@@ -1145,7 +1188,9 @@ pub fn sas_from<R: Read + Seek>(r: R) -> Res<TableData> {
     if names.is_empty() && col_count.unwrap_or(0) > 0 {
         return Err(too_complex());
     }
-    let text = |(i, o, l): (usize, usize, usize)| texts.get(i).and_then(|t| t.get(o..o + l)).map(|b| String::from_utf8_lossy(b).trim().to_string()).unwrap_or_default();
+    let text = |(i, o, l): (usize, usize, usize)| {
+        texts.get(i).and_then(|t| t.get(o..o + l)).map(|b| String::from_utf8_lossy(b).trim().to_string()).unwrap_or_default()
+    };
     let rows: Vec<Vec<String>> = names
         .iter()
         .enumerate()
@@ -1252,7 +1297,11 @@ pub fn duckdb_from(path: &Path, cancel: &crate::preview::media::Cancel) -> Res<T
         cancel,
     );
     let Some(tables) = tables else {
-        let note = if crate::util::find_tool("duckdb").is_some() { t("The DuckDB tool could not open this database.") } else { t("Install DuckDB to see the tables of this database.") };
+        let note = if crate::util::find_tool("duckdb").is_some() {
+            t("The DuckDB tool could not open this database.")
+        } else {
+            t("Install DuckDB to see the tables of this database.")
+        };
         let sheets = vec![key_values(t("Metadata"), header.into_iter().chain([(t("Note"), note)]).collect())];
         return Ok(TableData { format: "DuckDB", info: vec![], sheets });
     };
@@ -1265,18 +1314,34 @@ pub fn duckdb_from(path: &Path, cancel: &crate::preview::media::Cancel) -> Res<T
     let qualified = |m: &serde_json::Map<String, serde_json::Value>, key: &str| {
         let schema = json_text(m.get("schema_name"));
         let name = json_text(m.get(key));
-        if schema == "main" || schema.is_empty() { name } else { format!("{schema}.{name}") }
+        if schema == "main" || schema.is_empty() {
+            name
+        } else {
+            format!("{schema}.{name}")
+        }
     };
     let table_rows: Vec<Vec<String>> = tables
         .iter()
         .map(|m| {
             let kind = json_text(m.get("kind"));
-            vec![qualified(m, "table_name"), if kind == "view" { t("view") } else { t("table") }, json_text(m.get("column_count")), json_text(m.get("estimated_size")).parse::<u64>().map(fmt_count).unwrap_or_default()]
+            vec![
+                qualified(m, "table_name"),
+                if kind == "view" { t("view") } else { t("table") },
+                json_text(m.get("column_count")),
+                json_text(m.get("estimated_size")).parse::<u64>().map(fmt_count).unwrap_or_default(),
+            ]
         })
         .collect();
     let column_rows: Vec<Vec<String>> = columns
         .iter()
-        .map(|m| vec![qualified(m, "table_name"), json_text(m.get("column_name")), json_text(m.get("data_type")), if m.get("is_nullable") == Some(&serde_json::Value::Bool(false)) { "NOT NULL".into() } else { String::new() }])
+        .map(|m| {
+            vec![
+                qualified(m, "table_name"),
+                json_text(m.get("column_name")),
+                json_text(m.get("data_type")),
+                if m.get("is_nullable") == Some(&serde_json::Value::Bool(false)) { "NOT NULL".into() } else { String::new() },
+            ]
+        })
         .collect();
     let info = vec![format!("{} {}", fmt_count(table_rows.len() as u64), t("tables"))];
     let sheets = vec![

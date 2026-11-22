@@ -31,13 +31,23 @@ pub fn sqlite_uri(path: &Path) -> String {
 
 pub fn sqlite_from_path(path: &Path) -> Res<TableData> {
     use rusqlite::{Connection, OpenFlags};
-    let mut conn = Connection::open_with_flags(sqlite_uri(path), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(es)?;
+    let mut conn =
+        Connection::open_with_flags(sqlite_uri(path), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX)
+            .map_err(es)?;
     // A database file is untrusted data: its views must not call anything risky.
     conn.pragma_update(None, "trusted_schema", "OFF").map_err(es)?;
     let objects: Vec<(String, String)> = {
         // An encrypted database looks like random bytes: nothing tells it from a damaged one.
-        let unreadable = |e: rusqlite::Error| if e.sqlite_error_code() == Some(rusqlite::ErrorCode::NotADatabase) { t("This is not a SQLite database, or it is encrypted.") } else { es(e) };
-        let mut q = conn.prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name").map_err(unreadable)?;
+        let unreadable = |e: rusqlite::Error| {
+            if e.sqlite_error_code() == Some(rusqlite::ErrorCode::NotADatabase) {
+                t("This is not a SQLite database, or it is encrypted.")
+            } else {
+                es(e)
+            }
+        };
+        let mut q = conn
+            .prepare("SELECT name, type FROM sqlite_master WHERE type IN ('table','view') AND name NOT LIKE 'sqlite_%' ORDER BY type, name")
+            .map_err(unreadable)?;
         let rows = q.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(es)?;
         rows.collect::<Result<_, _>>().map_err(es)?
     };
@@ -80,7 +90,11 @@ fn sqlite_sheet(conn: &mut rusqlite::Connection, name: &str, kind: &str, text_le
             rows.push(cells);
         }
         drop(result);
-        let total = if rows.len() < MAX_ROWS { Some(rows.len() as u64) } else { conn.query_row(&format!("SELECT count(*) FROM {quoted}"), [], |r| r.get::<_, i64>(0)).ok().map(|n| n as u64) };
+        let total = if rows.len() < MAX_ROWS {
+            Some(rows.len() as u64)
+        } else {
+            conn.query_row(&format!("SELECT count(*) FROM {quoted}"), [], |r| r.get::<_, i64>(0)).ok().map(|n| n as u64)
+        };
         let known = types.iter().all(|t| !t.is_empty());
         Ok(finish_sheet(sheet_name.clone(), columns, known.then_some(types), rows, total))
     };
@@ -272,7 +286,11 @@ fn np_value(f: &NpField, b: &[u8]) -> String {
         NpKind::Unicode => {
             let order = |c: &[u8]| {
                 let c = [c[0], c[1], c[2], c[3]];
-                if f.little { u32::from_le_bytes(c) } else { u32::from_be_bytes(c) }
+                if f.little {
+                    u32::from_le_bytes(c)
+                } else {
+                    u32::from_be_bytes(c)
+                }
             };
             b.chunks_exact(4).map(order).take_while(|c| *c != 0).filter_map(char::from_u32).collect()
         }
@@ -383,7 +401,12 @@ pub fn npy_header<R: Read>(r: &mut R) -> Res<NpyHeader> {
     let header = String::from_utf8_lossy(&header).into_owned();
     let bad = || t("Not a valid NumPy file.");
     let fortran = np_header_value(&header, "fortran_order").ok_or_else(bad)?.starts_with("True");
-    let shape: Vec<u64> = np_group(np_header_value(&header, "shape").ok_or_else(bad)?).ok_or_else(bad)?.trim_matches(['(', ')']).split(',').filter_map(|n| n.trim().parse().ok()).collect();
+    let shape: Vec<u64> = np_group(np_header_value(&header, "shape").ok_or_else(bad)?)
+        .ok_or_else(bad)?
+        .trim_matches(['(', ')'])
+        .split(',')
+        .filter_map(|n| n.trim().parse().ok())
+        .collect();
     let descr = np_header_value(&header, "descr").ok_or_else(bad)?.to_string();
     Ok(NpyHeader { fortran, shape, descr })
 }
@@ -394,7 +417,11 @@ pub fn npy_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
     let bad = || t("Not a valid NumPy file.");
     let shape_text = format!("[{}]", shape.iter().map(u64::to_string).collect::<Vec<_>>().join(" × "));
     let fields = np_fields(&descr).ok_or_else(|| t("This array holds Python objects, which are not read for safety."))?;
-    let item = fields.iter().try_fold(0u64, |sum, f| sum.checked_add(f.size as u64)).filter(|i| *i <= NP_MAX_ITEM).ok_or_else(|| t("The items of this array are too large to preview."))?;
+    let item = fields
+        .iter()
+        .try_fold(0u64, |sum, f| sum.checked_add(f.size as u64))
+        .filter(|i| *i <= NP_MAX_ITEM)
+        .ok_or_else(|| t("The items of this array are too large to preview."))?;
     // The numbers come from the file: they may be anything, and offsets must not overflow.
     shape.iter().try_fold(item, |bytes, n| bytes.checked_mul(*n)).ok_or_else(bad)?;
     // Rows are the first axis; the rest becomes columns. A scalar is one row.
@@ -571,10 +598,13 @@ pub fn arrow_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
     while rows.len() < MAX_ROWS {
         let Some(batch) = next_batch() else { break };
         let batch = batch?;
-        let formatters: Vec<_> = batch.columns().iter().take(MAX_COLS).map(|c| ArrayFormatter::try_new(c.as_ref(), &options)).collect::<Result<_, _>>().map_err(es)?;
+        let formatters: Vec<_> =
+            batch.columns().iter().take(MAX_COLS).map(|c| ArrayFormatter::try_new(c.as_ref(), &options)).collect::<Result<_, _>>().map_err(es)?;
         let take = batch.num_rows().min(MAX_ROWS - rows.len());
         for i in 0..take {
-            rows.push(batch.columns().iter().take(MAX_COLS).zip(&formatters).map(|(c, f)| (!c.is_null(i)).then(|| clip_cell(f.value(i).to_string()))).collect());
+            rows.push(
+                batch.columns().iter().take(MAX_COLS).zip(&formatters).map(|(c, f)| (!c.is_null(i)).then(|| clip_cell(f.value(i).to_string()))).collect(),
+            );
         }
         if take < batch.num_rows() {
             complete = false;
@@ -591,7 +621,6 @@ pub fn arrow_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
 const H5_MAX_DATASET: u64 = 64 * 1024 * 1024;
 const H5_MAX_TOTAL: u64 = 256 * 1024 * 1024;
 const H5_MAX_DATASETS: usize = 40;
-
 
 fn h5_collect(group: &hdf5_pure::Group, prefix: &str, depth: usize, visits: &mut usize, out: &mut Vec<String>) {
     // Groups can link back to each other.
@@ -691,7 +720,8 @@ pub fn hdf5_table(file: &hdf5_pure::File) -> Res<TableData> {
         let per_row = (values.len() / n_rows).max(1);
         let shown_cols = per_row.min(MAX_COLS);
         let columns: Vec<String> = if per_row == 1 { vec!["value".to_string()] } else { (0..shown_cols).map(|c| c.to_string()).collect() };
-        let rows: Vec<Vec<Cell>> = values.chunks(per_row).take(MAX_ROWS).map(|row| row.iter().take(shown_cols).map(|v| Some(clip_cell(v.clone()))).collect()).collect();
+        let rows: Vec<Vec<Cell>> =
+            values.chunks(per_row).take(MAX_ROWS).map(|row| row.iter().take(shown_cols).map(|v| Some(clip_cell(v.clone()))).collect()).collect();
         sheets.push(finish_sheet(path.clone(), columns, Some(vec![type_text; shown_cols]), rows, Some(n_rows as u64)));
     }
     if paths.is_empty() {
@@ -742,7 +772,10 @@ pub fn hdf5_open(path: &Path) -> Res<hdf5_pure::File> {
 /// user block of 512, 1024, 2048… bytes). Versions 2 and 3 come with the newest format.
 fn hdf5_superblock_version(bytes: &[u8]) -> Option<u8> {
     const SIGNATURE: &[u8] = b"\x89HDF\r\n\x1a\n";
-    std::iter::once(0).chain((9..40).map(|p| 1usize << p)).take_while(|at| *at < bytes.len()).find_map(|at| bytes[at..].starts_with(SIGNATURE).then(|| bytes.get(at + 8).copied()).flatten())
+    std::iter::once(0)
+        .chain((9..40).map(|p| 1usize << p))
+        .take_while(|at| *at < bytes.len())
+        .find_map(|at| bytes[at..].starts_with(SIGNATURE).then(|| bytes.get(at + 8).copied()).flatten())
 }
 
 /// An HDF5 file already in memory (in an archive, on a server), if in the newest format.

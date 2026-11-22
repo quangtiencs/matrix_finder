@@ -19,11 +19,7 @@ pub struct LangFile {
 
 /// Translate a UI string.
 pub fn t(key: &str) -> String {
-    CURRENT
-        .read()
-        .ok()
-        .and_then(|m| m.get(key).cloned())
-        .unwrap_or_else(|| key.to_string())
+    CURRENT.read().ok().and_then(|m| m.get(key).cloned()).unwrap_or_else(|| key.to_string())
 }
 
 /// (code, display name) of every available language.
@@ -56,11 +52,7 @@ pub fn set_language(code: &str) {
             let path = crate::config::lang_dir().join(format!("{other}.json"));
             let from_file = load_file(&path).ok().or_else(|| {
                 // Fall back to scanning files whose `code` matches.
-                std::fs::read_dir(crate::config::lang_dir())
-                    .ok()?
-                    .flatten()
-                    .filter_map(|e| load_file(&e.path()).ok())
-                    .find(|l| l.code == other)
+                std::fs::read_dir(crate::config::lang_dir()).ok()?.flatten().filter_map(|e| load_file(&e.path()).ok()).find(|l| l.code == other)
             });
             from_file.map(|l| l.strings).unwrap_or_default()
         }

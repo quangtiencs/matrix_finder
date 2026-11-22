@@ -359,7 +359,8 @@ impl FolderTree {
         while let Ok((dir, names)) = self.rx.try_recv() {
             self.set_kids(dir, names);
         }
-        let want: Vec<PathBuf> = self.visible().into_iter().filter(|r| r.open && r.kids == Kids::Loading && !self.loading.contains(&r.path)).map(|r| r.path).collect();
+        let want: Vec<PathBuf> =
+            self.visible().into_iter().filter(|r| r.open && r.kids == Kids::Loading && !self.loading.contains(&r.path)).map(|r| r.path).collect();
         for dir in want {
             self.loading.insert(dir.clone());
             let (tx, hidden, ctx) = (self.tx.clone(), self.show_hidden, ctx.cloned());
@@ -501,45 +502,42 @@ pub fn popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, tree: &mut FolderTre
     let h = tree.max_height + POPUP_EXTRA;
     let below = anchor.bottom() + 4.0;
     let y = if below + h > screen.bottom() - 8.0 && anchor.top() - 4.0 - h >= screen.top() + 4.0 { anchor.top() - 4.0 - h } else { below };
-    let shown = egui::Area::new(id)
-        .order(egui::Order::Foreground)
-        .fixed_pos(pos2(x, y))
-        .show(&ctx, |ui| {
-            egui::Frame::popup(ui.style())
-                .fill(th.panel)
-                .corner_radius(8)
-                .inner_margin(egui::Margin::same(6))
-                .stroke(egui::Stroke::new(1.0_f32, th.border))
-                .show(ui, |ui| {
-                    ui.set_width(WIDTH - 12.0);
-                    let mut res = tree.ui(ui, th).map(Popup::Picked);
-                    ui.add_space(4.0);
-                    let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
-                    ui.painter().rect_filled(line, 0.0, th.border);
-                    ui.add_space(6.0);
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = 6.0;
-                        let name = tree.selected().map(|p| p.display().to_string()).unwrap_or_default();
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let ok = ui.add_enabled(
-                                tree.selected().is_some(),
-                                egui::Button::new(egui::RichText::new(t("OK")).color(th.on_accent()).strong()).fill(th.accent).min_size(vec2(64.0, 26.0)),
-                            );
-                            let cancel = ui.add(egui::Button::new(t("Cancel")).min_size(vec2(64.0, 26.0)));
-                            tree.buttons = Some((ok.rect, cancel.rect));
-                            ui.add(egui::Label::new(egui::RichText::new(name.clone()).size(11.5).color(th.weak)).truncate()).on_hover_text(name);
-                            if ok.clicked() {
-                                res = tree.selected().map(|p| Popup::Picked(p.to_path_buf()));
-                            }
-                            if cancel.clicked() {
-                                res = Some(Popup::Closed);
-                            }
-                        });
+    let shown = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(&ctx, |ui| {
+        egui::Frame::popup(ui.style())
+            .fill(th.panel)
+            .corner_radius(8)
+            .inner_margin(egui::Margin::same(6))
+            .stroke(egui::Stroke::new(1.0_f32, th.border))
+            .show(ui, |ui| {
+                ui.set_width(WIDTH - 12.0);
+                let mut res = tree.ui(ui, th).map(Popup::Picked);
+                ui.add_space(4.0);
+                let (line, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+                ui.painter().rect_filled(line, 0.0, th.border);
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    let name = tree.selected().map(|p| p.display().to_string()).unwrap_or_default();
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let ok = ui.add_enabled(
+                            tree.selected().is_some(),
+                            egui::Button::new(egui::RichText::new(t("OK")).color(th.on_accent()).strong()).fill(th.accent).min_size(vec2(64.0, 26.0)),
+                        );
+                        let cancel = ui.add(egui::Button::new(t("Cancel")).min_size(vec2(64.0, 26.0)));
+                        tree.buttons = Some((ok.rect, cancel.rect));
+                        ui.add(egui::Label::new(egui::RichText::new(name.clone()).size(11.5).color(th.weak)).truncate()).on_hover_text(name);
+                        if ok.clicked() {
+                            res = tree.selected().map(|p| Popup::Picked(p.to_path_buf()));
+                        }
+                        if cancel.clicked() {
+                            res = Some(Popup::Closed);
+                        }
                     });
-                    res
-                })
-                .inner
-        });
+                });
+                res
+            })
+            .inner
+    });
     if let Some(p) = shown.inner {
         return p;
     }
@@ -730,7 +728,8 @@ mod tests {
             removable: false,
             ejectable: false,
         };
-        let drives = [drive("Macintosh HD", "/", false), drive("Data", "/System/Volumes/Data", true), drive("USB", "/Volumes/USB", false), drive("", "/mnt/x", false)];
+        let drives =
+            [drive("Macintosh HD", "/", false), drive("Data", "/System/Volumes/Data", true), drive("USB", "/Volumes/USB", false), drive("", "/mnt/x", false)];
         let r = roots(Some(Path::new("/Users/me")), &drives);
         let got: Vec<(&str, &str, bool)> = r.iter().map(|r| (r.name.as_str(), r.path.to_str().unwrap(), r.drive)).collect();
         let home = t("Home");

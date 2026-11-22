@@ -265,7 +265,9 @@ impl App {
         let have = |list: &[Bookmark], path: &str| Bookmark::leaves(list).any(|b| bookmark_target(&b.path) == bookmark_target(path));
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
-            let add = egui::Button::new(RichText::new(format!("+ {}", t("Add bookmark"))).color(th.on_accent()).strong()).fill(th.accent).min_size(egui::vec2(0.0, 28.0));
+            let add = egui::Button::new(RichText::new(format!("+ {}", t("Add bookmark"))).color(th.on_accent()).strong())
+                .fill(th.accent)
+                .min_size(egui::vec2(0.0, 28.0));
             egui::menu::menu_custom_button(ui, add, |ui| {
                 ui.set_min_width(280.0);
                 // The folder of the file window the user was in (Settings is a tab of its own).
@@ -273,7 +275,10 @@ impl App {
                     let path = loc.display(|id| self.remote_label(id));
                     let name = loc.short_name();
                     let label = t("The folder you were in: {name}").replace("{name}", &name);
-                    let r = ui.add_enabled(!have(&self.cfg.bookmarks, &path), egui::Button::new(label)).on_hover_text(&path).on_disabled_hover_text(t("Already a bookmark"));
+                    let r = ui
+                        .add_enabled(!have(&self.cfg.bookmarks, &path), egui::Button::new(label))
+                        .on_hover_text(&path)
+                        .on_disabled_hover_text(t("Already a bookmark"));
                     if r.clicked() {
                         changed |= self.add_bookmark(name, path);
                         ui.close_menu();
@@ -303,7 +308,11 @@ impl App {
             })
             .response
             .on_hover_text(t("Add a folder you use often"));
-            if ui.add(egui::Button::new(format!("+ {}", t("New group"))).min_size(egui::vec2(0.0, 28.0))).on_hover_text(t("A group keeps bookmarks together: pick it in a bookmark's Group list")).clicked() {
+            if ui
+                .add(egui::Button::new(format!("+ {}", t("New group"))).min_size(egui::vec2(0.0, 28.0)))
+                .on_hover_text(t("A group keeps bookmarks together: pick it in a bookmark's Group list"))
+                .clicked()
+            {
                 self.cfg.bookmarks.push(Bookmark::new_folder(t("New group")));
                 self.bm_focus_last = true;
                 changed = true;
@@ -371,28 +380,28 @@ impl App {
         settings_section(ui, th, &t("Bookmarks bar"), &t("Where bookmarks are shown and what they do."));
         let mut top = card_frame(th).begin(ui);
         {
-        let ui = &mut top.content_ui;
-        ui.set_width(ui.available_width());
-        changed |= ui.radio_value(&mut self.cfg.bookmark_bar, BookmarkBar::Vertical, t("Vertical bar (in the sidebar)")).changed();
-        changed |= ui.radio_value(&mut self.cfg.bookmark_bar, BookmarkBar::Horizontal, t("Horizontal bar (above the tabs)")).changed();
-        ui.add_space(4.0);
-        ui.label(RichText::new(t("Choosing a bookmark")).strong());
-        changed |= ui
-            .radio_value(&mut self.cfg.bookmark_action, BookmarkAction::FilesOnly, t("Go to file only"))
-            .on_hover_text(t("In a terminal, the folder opens in a file window of the tab (or a new tab)"))
-            .changed();
-        changed |= ui
-            .radio_value(&mut self.cfg.bookmark_action, BookmarkAction::FilesAndTerminal, t("File and Terminal"))
-            .on_hover_text(t("In a terminal, run cd to the folder"))
-            .changed();
-        ui.add_space(4.0);
-        changed |= toggle_row(
-            ui,
-            th,
-            &mut self.cfg.bookmark_system_icons,
-            &t("Icons for standard folders (Desktop, Documents, Downloads, …)"),
-            &t("Off: every bookmark gets a plain folder icon (unless you picked an icon for it)"),
-        );
+            let ui = &mut top.content_ui;
+            ui.set_width(ui.available_width());
+            changed |= ui.radio_value(&mut self.cfg.bookmark_bar, BookmarkBar::Vertical, t("Vertical bar (in the sidebar)")).changed();
+            changed |= ui.radio_value(&mut self.cfg.bookmark_bar, BookmarkBar::Horizontal, t("Horizontal bar (above the tabs)")).changed();
+            ui.add_space(4.0);
+            ui.label(RichText::new(t("Choosing a bookmark")).strong());
+            changed |= ui
+                .radio_value(&mut self.cfg.bookmark_action, BookmarkAction::FilesOnly, t("Go to file only"))
+                .on_hover_text(t("In a terminal, the folder opens in a file window of the tab (or a new tab)"))
+                .changed();
+            changed |= ui
+                .radio_value(&mut self.cfg.bookmark_action, BookmarkAction::FilesAndTerminal, t("File and Terminal"))
+                .on_hover_text(t("In a terminal, run cd to the folder"))
+                .changed();
+            ui.add_space(4.0);
+            changed |= toggle_row(
+                ui,
+                th,
+                &mut self.cfg.bookmark_system_icons,
+                &t("Icons for standard folders (Desktop, Documents, Downloads, …)"),
+                &t("Off: every bookmark gets a plain folder icon (unless you picked an icon for it)"),
+            );
         }
         top.end(ui);
 
@@ -413,77 +422,92 @@ impl App {
         let mut paths = std::mem::take(&mut self.bookmark_paths);
         let (drives, show_hidden) = (&self.drives, self.cfg.show_hidden);
         let home = dirs::home_dir();
-        let mut row = |ui: &mut egui::Ui, b: &mut Bookmark, at: (usize, Option<usize>), count: usize, edit: &mut Option<BmEdit>, changed: &mut bool, focus: bool| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                if at.1.is_some() {
-                    ui.add_space(22.0);
-                }
-                if b.folder {
-                    let (r, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
-                    icons::bookmark_folder(ui.painter(), r.shrink(5.0), th.weak);
-                } else {
-                    // Icon: click for the choices.
-                    let shown = b.icon.resolve(&b.path, sys);
-                    let resp = icons::icon_button(ui, 26.0, true, th, |p, r, _| icons::bookmark_icon(p, r.shrink(1.0), shown, th)).on_hover_text(t("Icon"));
-                    let id = resp.id.with("icon-pick");
-                    if resp.clicked() {
-                        ui.memory_mut(|m| m.toggle_popup(id));
+        let mut row =
+            |ui: &mut egui::Ui, b: &mut Bookmark, at: (usize, Option<usize>), count: usize, edit: &mut Option<BmEdit>, changed: &mut bool, focus: bool| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    if at.1.is_some() {
+                        ui.add_space(22.0);
                     }
-                    egui::popup::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
-                        ui.set_min_width(170.0);
-                        for choice in BookmarkIcon::CHOICES {
-                            let (r, resp) = ui.allocate_exact_size(egui::vec2(170.0, 24.0), egui::Sense::click());
-                            crate::ui::pane::menu_row_fill(ui, r, th, b.icon == choice, resp.hovered());
-                            let draw = choice.resolve(&b.path, sys);
-                            icons::bookmark_icon(ui.painter(), egui::Rect::from_center_size(egui::pos2(r.left() + 14.0, r.center().y), egui::vec2(15.0, 15.0)), draw, th);
-                            ui.painter().text(egui::pos2(r.left() + 30.0, r.center().y), egui::Align2::LEFT_CENTER, t(choice.label()), egui::FontId::proportional(13.0), th.text);
-                            if resp.clicked() {
-                                b.icon = choice;
-                                *changed = true;
+                    if b.folder {
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
+                        icons::bookmark_folder(ui.painter(), r.shrink(5.0), th.weak);
+                    } else {
+                        // Icon: click for the choices.
+                        let shown = b.icon.resolve(&b.path, sys);
+                        let resp = icons::icon_button(ui, 26.0, true, th, |p, r, _| icons::bookmark_icon(p, r.shrink(1.0), shown, th)).on_hover_text(t("Icon"));
+                        let id = resp.id.with("icon-pick");
+                        if resp.clicked() {
+                            ui.memory_mut(|m| m.toggle_popup(id));
+                        }
+                        egui::popup::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                            ui.set_min_width(170.0);
+                            for choice in BookmarkIcon::CHOICES {
+                                let (r, resp) = ui.allocate_exact_size(egui::vec2(170.0, 24.0), egui::Sense::click());
+                                crate::ui::pane::menu_row_fill(ui, r, th, b.icon == choice, resp.hovered());
+                                let draw = choice.resolve(&b.path, sys);
+                                icons::bookmark_icon(
+                                    ui.painter(),
+                                    egui::Rect::from_center_size(egui::pos2(r.left() + 14.0, r.center().y), egui::vec2(15.0, 15.0)),
+                                    draw,
+                                    th,
+                                );
+                                ui.painter().text(
+                                    egui::pos2(r.left() + 30.0, r.center().y),
+                                    egui::Align2::LEFT_CENTER,
+                                    t(choice.label()),
+                                    egui::FontId::proportional(13.0),
+                                    th.text,
+                                );
+                                if resp.clicked() {
+                                    b.icon = choice;
+                                    *changed = true;
+                                }
                             }
-                        }
-                    });
-                }
-                let name = ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(if b.folder { 200.0 } else { 130.0 }).hint_text(t("Name")));
-                // A group just made: in view, its name ready to type.
-                if focus {
-                    name.request_focus();
-                    name.scroll_to_me(Some(egui::Align::Center));
-                }
-                *changed |= name.changed();
-                if !b.folder {
-                    let o = crate::ui::pathfield::Opts { base: home.as_deref(), show_hidden, drives, width: path_w, hint: Some(t("Location")) };
-                    *changed |= paths.show(ui, &mut b.path, egui::Id::new(("bm-path", at)), o, th).changed();
-                    // Folder to keep it in.
-                    let cur = at.1.and_then(|_| folders.iter().find(|(i, _)| *i == at.0)).map(|(_, n)| n.clone()).unwrap_or_else(|| "—".into());
-                    egui::ComboBox::from_id_salt(("bm-folder", at.0, at.1)).width(110.0).selected_text(cur).show_ui(ui, |ui| {
-                        if ui.selectable_label(at.1.is_none(), t("No group")).clicked() && at.1.is_some() {
-                            *edit = Some(BmEdit::MoveTo(at, None));
-                        }
-                        for (fi, name) in &folders {
-                            let here = at.1.is_some() && at.0 == *fi;
-                            if ui.selectable_label(here, if name.is_empty() { t("Unnamed group") } else { name.clone() }).clicked() && !here {
-                                *edit = Some(BmEdit::MoveTo(at, Some(*fi)));
-                            }
-                        }
-                    })
-                    .response
-                    .on_hover_text(t("Group"));
-                }
-                let k = at.1.unwrap_or(at.0);
-                if icons::icon_button(ui, 24.0, k > 0, th, |p, r, c| icons::chevron(p, r, 0, c)).on_hover_text(t("Move up")).clicked() {
-                    *edit = Some(BmEdit::Up(at));
-                }
-                if icons::icon_button(ui, 24.0, k + 1 < count, th, |p, r, c| icons::chevron(p, r, 2, c)).on_hover_text(t("Move down")).clicked() {
-                    *edit = Some(BmEdit::Down(at));
-                }
-                let tip = if b.folder { t("Remove group (keep its bookmarks)") } else { t("Remove bookmark") };
-                if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(tip).clicked() {
-                    *edit = Some(BmEdit::Delete(at));
-                }
-            });
-        };
+                        });
+                    }
+                    let name = ui.add(egui::TextEdit::singleline(&mut b.name).desired_width(if b.folder { 200.0 } else { 130.0 }).hint_text(t("Name")));
+                    // A group just made: in view, its name ready to type.
+                    if focus {
+                        name.request_focus();
+                        name.scroll_to_me(Some(egui::Align::Center));
+                    }
+                    *changed |= name.changed();
+                    if !b.folder {
+                        let o = crate::ui::pathfield::Opts { base: home.as_deref(), show_hidden, drives, width: path_w, hint: Some(t("Location")) };
+                        *changed |= paths.show(ui, &mut b.path, egui::Id::new(("bm-path", at)), o, th).changed();
+                        // Folder to keep it in.
+                        let cur = at.1.and_then(|_| folders.iter().find(|(i, _)| *i == at.0)).map(|(_, n)| n.clone()).unwrap_or_else(|| "—".into());
+                        egui::ComboBox::from_id_salt(("bm-folder", at.0, at.1))
+                            .width(110.0)
+                            .selected_text(cur)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(at.1.is_none(), t("No group")).clicked() && at.1.is_some() {
+                                    *edit = Some(BmEdit::MoveTo(at, None));
+                                }
+                                for (fi, name) in &folders {
+                                    let here = at.1.is_some() && at.0 == *fi;
+                                    if ui.selectable_label(here, if name.is_empty() { t("Unnamed group") } else { name.clone() }).clicked() && !here {
+                                        *edit = Some(BmEdit::MoveTo(at, Some(*fi)));
+                                    }
+                                }
+                            })
+                            .response
+                            .on_hover_text(t("Group"));
+                    }
+                    let k = at.1.unwrap_or(at.0);
+                    if icons::icon_button(ui, 24.0, k > 0, th, |p, r, c| icons::chevron(p, r, 0, c)).on_hover_text(t("Move up")).clicked() {
+                        *edit = Some(BmEdit::Up(at));
+                    }
+                    if icons::icon_button(ui, 24.0, k + 1 < count, th, |p, r, c| icons::chevron(p, r, 2, c)).on_hover_text(t("Move down")).clicked() {
+                        *edit = Some(BmEdit::Down(at));
+                    }
+                    let tip = if b.folder { t("Remove group (keep its bookmarks)") } else { t("Remove bookmark") };
+                    if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(tip).clicked() {
+                        *edit = Some(BmEdit::Delete(at));
+                    }
+                });
+            };
         for i in 0..n {
             let b = &mut self.cfg.bookmarks[i];
             row(ui, b, (i, None), n, &mut edit, &mut changed, focus_last && i + 1 == n);

@@ -2,8 +2,8 @@
 //! bitrate, sample rate) and the cover picture, read without decoding any sound.
 //! The reader keeps to a small memory budget of its own (16 MB for one item), so a
 //! damaged tag that claims gigabytes fails instead of taking them.
-use crate::preview::certview::Row;
 use crate::i18n::t;
+use crate::preview::certview::Row;
 use crate::util::{ext_of, Res};
 use lofty::config::{ParseOptions, ParsingMode};
 use lofty::file::{AudioFile, FileType, TaggedFileExt};
@@ -14,7 +14,10 @@ use std::io::{Read, Seek};
 const MAX_TEXT: usize = 600;
 
 pub fn is_audio(name: &str) -> bool {
-    matches!(ext_of(name).as_str(), "mp3" | "flac" | "wav" | "ogg" | "oga" | "opus" | "m4a" | "m4b" | "aac" | "aif" | "aiff" | "aifc" | "ape" | "wv" | "mpc" | "spx")
+    matches!(
+        ext_of(name).as_str(),
+        "mp3" | "flac" | "wav" | "ogg" | "oga" | "opus" | "m4a" | "m4b" | "aac" | "aif" | "aiff" | "aifc" | "ape" | "wv" | "mpc" | "spx"
+    )
 }
 
 pub struct AudioInfo {

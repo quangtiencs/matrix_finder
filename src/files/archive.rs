@@ -3,15 +3,15 @@
 use crate::files::ops::Progress;
 use crate::files::safefs::Conflict;
 use crate::files::safefs::{self, TempFile};
-use crate::util::{es, Res};
 use crate::files::vfs::Entry;
+use crate::util::{es, Res};
 use globset::GlobSet;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, BufWriter, Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -63,7 +63,11 @@ fn sevenz_err(e: sevenz_rust2::Error) -> String {
 
 /// A 7z entry whose data stopped short: with a password, almost always a wrong one.
 fn sevenz_short(path: &Path) -> String {
-    if password_for(path).is_some() { wrong_password() } else { crate::i18n::t("This file is cut short.") }
+    if password_for(path).is_some() {
+        wrong_password()
+    } else {
+        crate::i18n::t("This file is cut short.")
+    }
 }
 
 /// Reads all `left` bytes of a 7z entry, or fails. sevenz-rust2 ends an entry early
@@ -142,7 +146,11 @@ fn look_for_encryption(path: &Path) -> Lock {
             let Ok(file) = File::open(path) else { return Lock::Open };
             let Ok(mut z) = zip::ZipArchive::new(BufReader::new(file)) else { return Lock::Open };
             let any = (0..z.len()).any(|i| z.by_index_raw(i).is_ok_and(|f| f.encrypted()));
-            if any { Lock::Contents } else { Lock::Open }
+            if any {
+                Lock::Contents
+            } else {
+                Lock::Open
+            }
         }
         Some(ArchiveFormat::SevenZ) => match sevenz_rust2::Archive::open(path) {
             Err(sevenz_rust2::Error::PasswordRequired) => Lock::Everything,
@@ -150,7 +158,11 @@ fn look_for_encryption(path: &Path) -> Lock {
             Ok(a) => {
                 let aes = sevenz_rust2::EncoderMethod::ID_AES256_SHA256;
                 let any = a.blocks.iter().any(|b| b.coders.iter().any(|c| c.encoder_method_id() == aes));
-                if any { Lock::Contents } else { Lock::Open }
+                if any {
+                    Lock::Contents
+                } else {
+                    Lock::Open
+                }
             }
         },
         Some(ArchiveFormat::Rar) => {
@@ -376,12 +388,7 @@ pub fn rar_cli() -> Option<PathBuf> {
             }
         }
     }
-    let extra = [
-        "C:\\Program Files\\WinRAR\\Rar.exe",
-        "C:\\Program Files (x86)\\WinRAR\\Rar.exe",
-        "/opt/homebrew/bin/rar",
-        "/usr/local/bin/rar",
-    ];
+    let extra = ["C:\\Program Files\\WinRAR\\Rar.exe", "C:\\Program Files (x86)\\WinRAR\\Rar.exe", "/opt/homebrew/bin/rar", "/usr/local/bin/rar"];
     extra.iter().map(PathBuf::from).find(|p| p.is_file())
 }
 
@@ -399,9 +406,7 @@ fn norm(p: &str) -> String {
 }
 
 fn stem_name(path: &Path) -> String {
-    path.file_stem()
-        .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "data".into())
+    path.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "data".into())
 }
 
 fn dos_time(t: u32) -> Option<SystemTime> {
@@ -419,8 +424,11 @@ fn dos_time(t: u32) -> Option<SystemTime> {
 }
 
 fn zip_time(t: zip::DateTime) -> Option<SystemTime> {
-    let nd = chrono::NaiveDate::from_ymd_opt(t.year() as i32, t.month() as u32, t.day() as u32)?
-        .and_hms_opt(t.hour() as u32, t.minute() as u32, t.second() as u32)?;
+    let nd = chrono::NaiveDate::from_ymd_opt(t.year() as i32, t.month() as u32, t.day() as u32)?.and_hms_opt(
+        t.hour() as u32,
+        t.minute() as u32,
+        t.second() as u32,
+    )?;
     let local = nd.and_local_timezone(chrono::Local).single()?;
     Some(local.into())
 }
@@ -503,12 +511,7 @@ pub fn list_until(path: &Path, max: usize, stop: &dyn Fn() -> bool) -> Res<(Vec<
                 }
                 let f = z.by_index_raw(i).map_err(es)?;
                 let Some(name) = f.enclosed_name() else { continue };
-                out.push(ArchEntry {
-                    path: norm(&name.to_string_lossy()),
-                    is_dir: f.is_dir(),
-                    size: f.size(),
-                    modified: f.last_modified().and_then(zip_time),
-                });
+                out.push(ArchEntry { path: norm(&name.to_string_lossy()), is_dir: f.is_dir(), size: f.size(), modified: f.last_modified().and_then(zip_time) });
             }
         }
         ArchiveFormat::SevenZ => {
@@ -526,11 +529,7 @@ pub fn list_until(path: &Path, max: usize, stop: &dyn Fn() -> bool) -> Res<(Vec<
                     path: norm(f.name()),
                     is_dir: f.is_directory(),
                     size: f.size(),
-                    modified: if f.has_last_modified_date {
-                        Some(SystemTime::from(f.last_modified_date()))
-                    } else {
-                        None
-                    },
+                    modified: if f.has_last_modified_date { Some(SystemTime::from(f.last_modified_date())) } else { None },
                 });
             }
         }
@@ -580,12 +579,7 @@ pub fn list_until(path: &Path, max: usize, stop: &dyn Fn() -> bool) -> Res<(Vec<
         }
         ArchiveFormat::Gz | ArchiveFormat::Xz | ArchiveFormat::Zst | ArchiveFormat::Bz2 => {
             let meta = std::fs::metadata(path).map_err(es)?;
-            out.push(ArchEntry {
-                path: stem_name(path),
-                is_dir: false,
-                size: meta.len(),
-                modified: meta.modified().ok(),
-            });
+            out.push(ArchEntry { path: stem_name(path), is_dir: false, size: meta.len(), modified: meta.modified().ok() });
         }
     }
     out.retain(|e| !e.path.is_empty());
@@ -603,18 +597,14 @@ pub fn children(all: &[ArchEntry], inner: &str) -> Vec<Entry> {
         }
         match rest.split_once('/') {
             Some((dir, _)) => {
-                let ent = map
-                    .entry(dir.to_string())
-                    .or_insert_with(|| Entry::new(dir.to_string(), true, 0, None));
+                let ent = map.entry(dir.to_string()).or_insert_with(|| Entry::new(dir.to_string(), true, 0, None));
                 ent.is_dir = true;
                 if !e.is_dir {
                     ent.size += e.size;
                 }
             }
             None => {
-                let ent = map
-                    .entry(rest.to_string())
-                    .or_insert_with(|| Entry::new(rest.to_string(), e.is_dir, 0, e.modified));
+                let ent = map.entry(rest.to_string()).or_insert_with(|| Entry::new(rest.to_string(), e.is_dir, 0, e.modified));
                 if e.is_dir {
                     ent.is_dir = true;
                     ent.modified = e.modified;
@@ -630,10 +620,7 @@ pub fn children(all: &[ArchEntry], inner: &str) -> Vec<Entry> {
 }
 
 fn is_selected(path: &str, selection: &[String]) -> bool {
-    selection.is_empty()
-        || selection
-            .iter()
-            .any(|s| path == s || path.strip_prefix(s.as_str()).is_some_and(|r| r.starts_with('/')))
+    selection.is_empty() || selection.iter().any(|s| path == s || path.strip_prefix(s.as_str()).is_some_and(|r| r.starts_with('/')))
 }
 
 /// Safely join an archive-relative path to a destination (rejects `..`, absolute paths).
@@ -654,11 +641,7 @@ fn safe_join(dest: &Path, rel: &str) -> Option<PathBuf> {
 }
 
 fn out_path(dest: &Path, path: &str, strip: &str) -> Option<PathBuf> {
-    let rel = if strip.is_empty() {
-        path
-    } else {
-        path.strip_prefix(strip)?.trim_start_matches('/')
-    };
+    let rel = if strip.is_empty() { path } else { path.strip_prefix(strip)?.trim_start_matches('/') };
     safe_join(dest, rel)
 }
 
@@ -734,10 +717,7 @@ fn write_temp_counted(reader: &mut dyn Read, out: &Path, progress: &Progress) ->
     }
     let mut tmp = TempFile::beside(out).map_err(es)?;
     let n = {
-        let mut w = ProgressWriter {
-            inner: BufWriter::new(tmp.file()),
-            progress,
-        };
+        let mut w = ProgressWriter { inner: BufWriter::new(tmp.file()), progress };
         std::io::copy(reader, &mut w).and_then(|n| w.flush().map(|_| n)).map_err(es)?
     };
     Ok((tmp, n))
@@ -844,13 +824,7 @@ pub fn extract(path: &Path, dest: &Path, selection: &[String], strip: &str, poli
         }
         ArchiveFormat::SevenZ => {
             let mut r = sevenz_rust2::ArchiveReader::open(path, sevenz_password(path)).map_err(sevenz_err)?;
-            let total: u64 = r
-                .archive()
-                .files
-                .iter()
-                .filter(|f| is_selected(&norm(f.name()), selection))
-                .map(|f| f.size())
-                .sum();
+            let total: u64 = r.archive().files.iter().filter(|f| is_selected(&norm(f.name()), selection)).map(|f| f.size()).sum();
             progress.set_total(total);
             let short = sevenz_short(path);
             let mut err: Option<String> = None;
@@ -1100,10 +1074,7 @@ pub fn read_entry(path: &Path, inner: &str, max: usize) -> Res<Vec<u8>> {
             return Err("Entry not found".into());
         }
         ArchiveFormat::Gz | ArchiveFormat::Xz | ArchiveFormat::Zst | ArchiveFormat::Bz2 => {
-            single_reader(path, fmt)?
-                .take(max as u64)
-                .read_to_end(&mut buf)
-                .map_err(es)?;
+            single_reader(path, fmt)?.take(max as u64).read_to_end(&mut buf).map_err(es)?;
         }
     }
     Ok(buf)
@@ -1150,11 +1121,7 @@ pub fn collect_items(sources: &[PathBuf], exclude: Option<&GlobSet>, progress: O
                 }
             };
             let rel = e.path().strip_prefix(&base).unwrap_or(e.path());
-            let name = rel
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                .collect::<Vec<_>>()
-                .join("/");
+            let name = rel.components().map(|c| c.as_os_str().to_string_lossy().to_string()).collect::<Vec<_>>().join("/");
             if name.is_empty() {
                 continue;
             }
@@ -1173,10 +1140,7 @@ pub fn collect_items(sources: &[PathBuf], exclude: Option<&GlobSet>, progress: O
     }
     match unreadable.as_slice() {
         [] => Ok(out),
-        [first, ..] => Err(format!(
-            "Cannot read {} item(s), such as {first}. Nothing was archived. Fix the permissions or exclude them.",
-            unreadable.len()
-        )),
+        [first, ..] => Err(format!("Cannot read {} item(s), such as {first}. Nothing was archived. Fix the permissions or exclude them.", unreadable.len())),
     }
 }
 
@@ -1239,11 +1203,7 @@ pub fn create(
         ArchiveFormat::Gz | ArchiveFormat::Xz | ArchiveFormat::Zst | ArchiveFormat::Bz2 => {
             let files: Vec<&Item> = items.iter().filter(|i| !i.is_dir).collect();
             if files.len() != 1 || items.len() != 1 {
-                return Err(format!(
-                    ".{} compresses a single file. Use .tar.{} for folders or multiple files.",
-                    fmt.extension(),
-                    fmt.extension()
-                ));
+                return Err(format!(".{} compresses a single file. Use .tar.{} for folders or multiple files.", fmt.extension(), fmt.extension()));
             }
             create_single(&files[0].src, f, fmt, level, progress)
         }
@@ -1271,9 +1231,7 @@ fn num_threads() -> u32 {
 fn create_zip(items: &[Item], extra: &[(String, Vec<u8>)], f: &mut File, level: u32, progress: &Progress) -> Res<()> {
     use zip::write::SimpleFileOptions;
     let mut z = zip::ZipWriter::new(BufWriter::new(f));
-    let base = SimpleFileOptions::default()
-        .compression_method(zip::CompressionMethod::Deflated)
-        .compression_level(Some(level as i64));
+    let base = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated).compression_level(Some(level as i64));
     for it in items {
         progress.check()?;
         progress.set_current(&it.name);
@@ -1292,10 +1250,7 @@ fn create_zip(items: &[Item], extra: &[(String, Vec<u8>)], f: &mut File, level: 
         } else {
             opts = opts.large_file(it.size >= u32::MAX as u64);
             z.start_file(it.name.as_str(), opts).map_err(es)?;
-            let mut r = ProgressReader {
-                inner: BufReader::new(File::open(&it.src).map_err(es)?),
-                progress,
-            };
+            let mut r = ProgressReader { inner: BufReader::new(File::open(&it.src).map_err(es)?), progress };
             std::io::copy(&mut r, &mut z).map_err(es)?;
         }
     }
@@ -1322,10 +1277,7 @@ fn create_7z(items: &[Item], extra: &[(String, Vec<u8>)], f: &mut File, level: u
         if it.is_dir {
             w.push_archive_entry::<File>(entry, None).map_err(es)?;
         } else {
-            let r = ProgressReader {
-                inner: BufReader::new(File::open(&it.src).map_err(es)?),
-                progress,
-            };
+            let r = ProgressReader { inner: BufReader::new(File::open(&it.src).map_err(es)?), progress };
             w.push_archive_entry(entry, Some(r)).map_err(es)?;
         }
     }
@@ -1352,10 +1304,7 @@ fn write_tar<W: Write>(w: W, items: &[Item], extra: &[(String, Vec<u8>)], progre
             let mut h = tar::Header::new_gnu();
             h.set_metadata(&meta);
             h.set_size(meta.len());
-            let r = ProgressReader {
-                inner: BufReader::new(f),
-                progress,
-            };
+            let r = ProgressReader { inner: BufReader::new(f), progress };
             b.append_data(&mut h, &it.name, r).map_err(es)?;
         }
     }
@@ -1372,10 +1321,7 @@ fn write_tar<W: Write>(w: W, items: &[Item], extra: &[(String, Vec<u8>)], progre
 
 fn create_single(src: &Path, out: &mut File, fmt: ArchiveFormat, level: u32, progress: &Progress) -> Res<()> {
     progress.set_current(&src.to_string_lossy());
-    let mut r = ProgressReader {
-        inner: BufReader::new(File::open(src).map_err(es)?),
-        progress,
-    };
+    let mut r = ProgressReader { inner: BufReader::new(File::open(src).map_err(es)?), progress };
     let f = BufWriter::new(out);
     let f = match fmt {
         ArchiveFormat::Gz => {
@@ -1405,9 +1351,7 @@ fn create_single(src: &Path, out: &mut File, fmt: ArchiveFormat, level: u32, pro
 }
 
 fn create_rar(sources: &[PathBuf], has_exclude: bool, dest: &Path, level: u32, progress: &Progress) -> Res<PathBuf> {
-    let rar = rar_cli().ok_or(
-        "RAR is a proprietary format: creating .rar requires the `rar` command-line tool (WinRAR / rarlab) in PATH.",
-    )?;
+    let rar = rar_cli().ok_or("RAR is a proprietary format: creating .rar requires the `rar` command-line tool (WinRAR / rarlab) in PATH.")?;
     let _ = has_exclude;
     progress.set_current("rar…");
     // `rar a` adds to an archive that is there, so it writes a new one in a temporary
@@ -1416,13 +1360,7 @@ fn create_rar(sources: &[PathBuf], has_exclude: bool, dest: &Path, level: u32, p
     std::fs::create_dir(dir.path()).map_err(es)?;
     let inner = dir.path().join(dest.file_name().unwrap_or(std::ffi::OsStr::new("archive.rar")));
     let mut cmd = std::process::Command::new(rar);
-    cmd.arg("a")
-        .arg("-r")
-        .arg("-ep1")
-        .arg("-idq")
-        .arg("-y")
-        .arg(format!("-m{}", (level * 5 / 9).clamp(1, 5)))
-        .arg(&inner);
+    cmd.arg("a").arg("-r").arg("-ep1").arg("-idq").arg("-y").arg(format!("-m{}", (level * 5 / 9).clamp(1, 5))).arg(&inner);
     for s in sources {
         cmd.arg(s);
     }
@@ -1968,4 +1906,3 @@ mod password_tests {
         }
     }
 }
-

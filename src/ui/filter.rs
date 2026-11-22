@@ -60,9 +60,17 @@ pub enum Expr {
     And(Box<Expr>, Box<Expr>),
     Or(Box<Expr>, Box<Expr>),
     Not(Box<Expr>),
-    Cmp { field: Field, op: Op, values: Vec<Value> },
+    Cmp {
+        field: Field,
+        op: Op,
+        values: Vec<Value>,
+    },
     /// `field REGEXP 'pattern'`; `negate` for `NOT REGEXP` and `!~`.
-    Regex { field: Field, re: regex::Regex, negate: bool },
+    Regex {
+        field: Field,
+        re: regex::Regex,
+        negate: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,10 +92,7 @@ impl Filter {
         if s.is_empty() {
             return Ok(Filter::All);
         }
-        let s = s
-            .strip_prefix("where ")
-            .or_else(|| s.strip_prefix("WHERE "))
-            .unwrap_or(s);
+        let s = s.strip_prefix("where ").or_else(|| s.strip_prefix("WHERE ")).unwrap_or(s);
         if looks_like_sql(s) {
             match parse_sql(s) {
                 Ok(e) => return Ok(Filter::Expr(e)),
@@ -98,10 +103,7 @@ impl Filter {
             }
         }
         // Extension list: every token starts with '.'
-        let parts: Vec<&str> = s
-            .split(|c: char| c == ',' || c == ';' || c.is_whitespace())
-            .filter(|p| !p.is_empty())
-            .collect();
+        let parts: Vec<&str> = s.split(|c: char| c == ',' || c == ';' || c.is_whitespace()).filter(|p| !p.is_empty()).collect();
         if !parts.is_empty() && parts.iter().all(|p| p.starts_with('.') && p.len() > 1 && !p.contains('*')) {
             return Ok(Filter::Exts(parts.iter().map(|p| p[1..].to_lowercase()).collect()));
         }
@@ -193,16 +195,10 @@ pub fn nfc(s: &str) -> std::borrow::Cow<'_, str> {
 
 fn looks_like_sql(s: &str) -> bool {
     let up = s.to_uppercase();
-    let words: Vec<&str> = up
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|w| !w.is_empty())
-        .collect();
-    let has_kw = words
-        .iter()
-        .any(|w| matches!(*w, "LIKE" | "ILIKE" | "GLOB" | "IN" | "AND" | "OR" | "NOT" | "REGEXP" | "RLIKE"));
-    let starts_field = words.first().is_some_and(|w| {
-        matches!(*w, "NAME" | "EXT" | "SIZE" | "TYPE" | "MODIFIED" | "AGE" | "HIDDEN" | "SOURCE" | "CONTENT" | "NOT")
-    });
+    let words: Vec<&str> = up.split(|c: char| !c.is_alphanumeric() && c != '_').filter(|w| !w.is_empty()).collect();
+    let has_kw = words.iter().any(|w| matches!(*w, "LIKE" | "ILIKE" | "GLOB" | "IN" | "AND" | "OR" | "NOT" | "REGEXP" | "RLIKE"));
+    let starts_field =
+        words.first().is_some_and(|w| matches!(*w, "NAME" | "EXT" | "SIZE" | "TYPE" | "MODIFIED" | "AGE" | "HIDDEN" | "SOURCE" | "CONTENT" | "NOT"));
     starts_field && (has_kw || s.contains(['=', '<', '>', '~']))
 }
 
@@ -466,20 +462,28 @@ impl Parser {
                 ">=" => Op::Ge,
                 _ => return Err(format!("Unknown operator '{s}'")),
             },
-            Some(t) if t.kw("LIKE") || t.kw("ILIKE") => if negate { Op::NotLike } else { Op::Like },
+            Some(t) if t.kw("LIKE") || t.kw("ILIKE") => {
+                if negate {
+                    Op::NotLike
+                } else {
+                    Op::Like
+                }
+            }
             Some(t) if t.kw("GLOB") => {
                 let v = self.value(field)?;
                 let pat = match v {
                     Value::Str(s) => glob_to_like(&s),
                     Value::Num(n) => n.to_string(),
                 };
-                return Ok(Expr::Cmp {
-                    field,
-                    op: if negate { Op::NotLike } else { Op::Like },
-                    values: vec![Value::Str(pat)],
-                });
+                return Ok(Expr::Cmp { field, op: if negate { Op::NotLike } else { Op::Like }, values: vec![Value::Str(pat)] });
             }
-            Some(t) if t.kw("IN") => if negate { Op::NotIn } else { Op::In },
+            Some(t) if t.kw("IN") => {
+                if negate {
+                    Op::NotIn
+                } else {
+                    Op::In
+                }
+            }
             Some(t) => return Err(format!("Expected an operator, found '{}'", t.text())),
             None => return Err("Expected an operator".into()),
         };
@@ -696,18 +700,12 @@ fn eval(x: &Expr, e: &Entry, path: Option<&Path>, stop: &AtomicBool) -> bool {
                     None => return false,
                 },
                 Field::Age => match e.modified {
-                    Some(m) => SystemTime::now()
-                        .duration_since(m)
-                        .unwrap_or(Duration::ZERO)
-                        .as_secs_f64(),
+                    Some(m) => SystemTime::now().duration_since(m).unwrap_or(Duration::ZERO).as_secs_f64(),
                     None => return false,
                 },
                 _ => return false,
             };
-            let nums: Vec<f64> = values
-                .iter()
-                .filter_map(|v| if let Value::Num(n) = v { Some(*n) } else { None })
-                .collect();
+            let nums: Vec<f64> = values.iter().filter_map(|v| if let Value::Num(n) = v { Some(*n) } else { None }).collect();
             match op {
                 Op::In => nums.contains(&n),
                 Op::NotIn => !nums.contains(&n),

@@ -70,7 +70,8 @@ struct Shared {
     started: bool,
 }
 
-static SHARED: LazyLock<(Mutex<Shared>, Condvar)> = LazyLock::new(|| (Mutex::new(Shared { slots: HashMap::new(), queue: vec![], ctx: None, started: false }), Condvar::new()));
+static SHARED: LazyLock<(Mutex<Shared>, Condvar)> =
+    LazyLock::new(|| (Mutex::new(Shared { slots: HashMap::new(), queue: vec![], ctx: None, started: false }), Condvar::new()));
 /// The `git` program, found once.
 static GIT: LazyLock<Option<PathBuf>> = LazyLock::new(|| crate::util::find_tool("git"));
 
@@ -150,7 +151,15 @@ fn worker() {
         slot.head_at = Some(now);
         let previous = slot.repo.take();
         slot.repo = head.map(|(branch, detached)| {
-            let mut r = previous.filter(|p| p.branch == branch).unwrap_or(Repo { branch, detached, state: State::Unknown, changed: 0, untracked: 0, ahead: 0, behind: 0 });
+            let mut r = previous.filter(|p| p.branch == branch).unwrap_or(Repo {
+                branch,
+                detached,
+                state: State::Unknown,
+                changed: 0,
+                untracked: 0,
+                ahead: 0,
+                behind: 0,
+            });
             r.detached = detached;
             match &status {
                 Some(Some(st)) => {
@@ -268,7 +277,12 @@ fn safe_git(git: &Path, dir: &Path) -> Command {
         cmd.arg("-c").arg(format!("filter.{d}.required=false"));
     }
     // Never write (refresh the index), never ask anything.
-    cmd.env("GIT_OPTIONAL_LOCKS", "0").env("GIT_TERMINAL_PROMPT", "0").env_remove("GIT_DIR").env_remove("GIT_WORK_TREE").stdin(Stdio::null()).stderr(Stdio::null());
+    cmd.env("GIT_OPTIONAL_LOCKS", "0")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;

@@ -133,7 +133,10 @@ impl App {
         }
         let hashing = all_panes!(self).any(|p| p.tab().checksum.as_ref().is_some_and(|c| c.reads_under(&mount)));
         if hashing {
-            self.toast(format!("{} {name}: {}", t("Could not eject"), t("A Checksum tab is reading files on this drive. Wait for it to finish, or close the tab.")), true);
+            self.toast(
+                format!("{} {name}: {}", t("Could not eject"), t("A Checksum tab is reading files on this drive. Wait for it to finish, or close the tab.")),
+                true,
+            );
             return;
         }
         // Let go of what this app reads there.

@@ -3,8 +3,8 @@
 use crate::config::ConnectionProfile;
 use crate::i18n::t;
 use crate::style::icons;
-use crate::ui::pane::Cmd;
 use crate::style::theme::Theme;
+use crate::ui::pane::Cmd;
 use egui::{pos2, vec2, Align2, FontId, Key, Modifiers, Rect, Sense};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -172,95 +172,92 @@ impl Palette {
         let mut chosen: Option<PalItem> = None;
         let screen = ctx.screen_rect();
         let width = (screen.width() - 48.0).min(600.0);
-        let area = egui::Area::new(egui::Id::new("palette"))
-            .order(egui::Order::Foreground)
-            .anchor(Align2::CENTER_TOP, vec2(0.0, 64.0))
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style())
-                    .fill(th.panel)
-                    .corner_radius(14)
-                    .inner_margin(egui::Margin::same(10))
-                    .stroke(egui::Stroke::new(1.0_f32, th.border))
-                    .show(ui, |ui| {
-                        ui.set_width(width);
-                        ui.horizontal(|ui| {
-                            let (r, _) = ui.allocate_exact_size(vec2(22.0, 30.0), Sense::hover());
-                            icons::search(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), th.weak);
-                            let edit = egui::TextEdit::singleline(&mut self.query)
-                                .id(egui::Id::new("palette-input"))
-                                .frame(false)
-                                .font(FontId::proportional(16.0))
-                                .hint_text(egui::RichText::new(t("Search files, commands, folders, settings…")).color(th.weak))
-                                .desired_width(f32::INFINITY);
-                            let resp = ui.add(edit);
-                            if self.focus {
-                                resp.request_focus();
-                                self.focus = false;
-                            }
-                            if resp.changed() {
-                                self.selected = 0;
-                            }
-                        });
-                        ui.add_space(4.0);
-                        let r = ui.available_rect_before_wrap();
-                        ui.painter().hline(r.x_range(), r.top(), egui::Stroke::new(1.0_f32, th.border));
-                        ui.add_space(6.0);
-                        if results.is_empty() {
-                            ui.add_space(8.0);
-                            ui.label(egui::RichText::new(t("No matches")).color(th.weak));
-                            ui.add_space(8.0);
+        let area = egui::Area::new(egui::Id::new("palette")).order(egui::Order::Foreground).anchor(Align2::CENTER_TOP, vec2(0.0, 64.0)).show(ctx, |ui| {
+            egui::Frame::popup(ui.style())
+                .fill(th.panel)
+                .corner_radius(14)
+                .inner_margin(egui::Margin::same(10))
+                .stroke(egui::Stroke::new(1.0_f32, th.border))
+                .show(ui, |ui| {
+                    ui.set_width(width);
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(vec2(22.0, 30.0), Sense::hover());
+                        icons::search(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), th.weak);
+                        let edit = egui::TextEdit::singleline(&mut self.query)
+                            .id(egui::Id::new("palette-input"))
+                            .frame(false)
+                            .font(FontId::proportional(16.0))
+                            .hint_text(egui::RichText::new(t("Search files, commands, folders, settings…")).color(th.weak))
+                            .desired_width(f32::INFINITY);
+                        let resp = ui.add(edit);
+                        if self.focus {
+                            resp.request_focus();
+                            self.focus = false;
                         }
-                        egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
-                            ui.spacing_mut().item_spacing.y = 0.0;
-                            for (i, e) in results.iter().enumerate() {
-                                let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
-                                let sel = i == self.selected;
-                                if sel {
-                                    ui.painter().rect_filled(rect, 7.0, th.selection);
-                                    if down || up {
-                                        ui.scroll_to_rect(rect, None);
-                                    }
-                                } else if resp.hovered() {
-                                    ui.painter().rect_filled(rect, 7.0, th.hover());
-                                }
-                                let p = ui.painter();
-                                // Category prefix ("Theme: …") in weak colour.
-                                let (cat, rest) = match e.label.split_once(": ") {
-                                    Some((c, r)) => (format!("{c}: "), r.to_string()),
-                                    None => (String::new(), e.label.clone()),
-                                };
-                                let font = FontId::proportional(14.0);
-                                let mut x = rect.left() + 12.0;
-                                if e.pinned {
-                                    icons::search(p, Rect::from_center_size(pos2(x + 7.0, rect.center().y), vec2(14.0, 14.0)), th.accent);
-                                    x += 22.0;
-                                }
-                                if !cat.is_empty() {
-                                    let g = p.layout_no_wrap(cat, font.clone(), th.weak);
-                                    let w = g.size().x;
-                                    p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, th.weak);
-                                    x += w;
-                                }
-                                p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, rest, font, if sel { th.strong() } else { th.text });
-                                if !e.hint.is_empty() {
-                                    keycap(p, th, pos2(rect.right() - 10.0, rect.center().y), &e.hint);
-                                }
-                                if resp.clicked() {
-                                    chosen = Some(e.item.clone());
-                                }
-                                if i + 1 == n_pinned && results.len() > n_pinned {
-                                    // Separate the file search from the commands.
-                                    ui.add_space(3.0);
-                                    let r = ui.available_rect_before_wrap();
-                                    ui.painter().hline(r.x_range().shrink(8.0), r.top(), egui::Stroke::new(1.0_f32, th.border));
-                                    ui.add_space(4.0);
-                                }
-                            }
-                        });
-                        ui.add_space(6.0);
-                        ui.label(egui::RichText::new(t("↑↓ to navigate · Enter to run · Esc to close")).small().color(th.weak));
+                        if resp.changed() {
+                            self.selected = 0;
+                        }
                     });
-            });
+                    ui.add_space(4.0);
+                    let r = ui.available_rect_before_wrap();
+                    ui.painter().hline(r.x_range(), r.top(), egui::Stroke::new(1.0_f32, th.border));
+                    ui.add_space(6.0);
+                    if results.is_empty() {
+                        ui.add_space(8.0);
+                        ui.label(egui::RichText::new(t("No matches")).color(th.weak));
+                        ui.add_space(8.0);
+                    }
+                    egui::ScrollArea::vertical().max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        for (i, e) in results.iter().enumerate() {
+                            let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::click());
+                            let sel = i == self.selected;
+                            if sel {
+                                ui.painter().rect_filled(rect, 7.0, th.selection);
+                                if down || up {
+                                    ui.scroll_to_rect(rect, None);
+                                }
+                            } else if resp.hovered() {
+                                ui.painter().rect_filled(rect, 7.0, th.hover());
+                            }
+                            let p = ui.painter();
+                            // Category prefix ("Theme: …") in weak colour.
+                            let (cat, rest) = match e.label.split_once(": ") {
+                                Some((c, r)) => (format!("{c}: "), r.to_string()),
+                                None => (String::new(), e.label.clone()),
+                            };
+                            let font = FontId::proportional(14.0);
+                            let mut x = rect.left() + 12.0;
+                            if e.pinned {
+                                icons::search(p, Rect::from_center_size(pos2(x + 7.0, rect.center().y), vec2(14.0, 14.0)), th.accent);
+                                x += 22.0;
+                            }
+                            if !cat.is_empty() {
+                                let g = p.layout_no_wrap(cat, font.clone(), th.weak);
+                                let w = g.size().x;
+                                p.galley(pos2(x, rect.center().y - g.size().y / 2.0), g, th.weak);
+                                x += w;
+                            }
+                            p.text(pos2(x, rect.center().y), Align2::LEFT_CENTER, rest, font, if sel { th.strong() } else { th.text });
+                            if !e.hint.is_empty() {
+                                keycap(p, th, pos2(rect.right() - 10.0, rect.center().y), &e.hint);
+                            }
+                            if resp.clicked() {
+                                chosen = Some(e.item.clone());
+                            }
+                            if i + 1 == n_pinned && results.len() > n_pinned {
+                                // Separate the file search from the commands.
+                                ui.add_space(3.0);
+                                let r = ui.available_rect_before_wrap();
+                                ui.painter().hline(r.x_range().shrink(8.0), r.top(), egui::Stroke::new(1.0_f32, th.border));
+                                ui.add_space(4.0);
+                            }
+                        }
+                    });
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new(t("↑↓ to navigate · Enter to run · Esc to close")).small().color(th.weak));
+                });
+        });
         if enter {
             chosen = results.get(self.selected).map(|e| e.item.clone());
         }

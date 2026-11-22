@@ -208,12 +208,7 @@ pub fn compute(items: &[Item], rules: &Rules, parent: &str) -> Result<Vec<String
     // Names may be stored decomposed (macOS, zip files): find what is typed (composed).
     let find = nfc(&rules.find);
     let re = if rules.regex && !rules.find.is_empty() {
-        Some(
-            regex::RegexBuilder::new(&find)
-                .case_insensitive(!rules.case_sensitive)
-                .build()
-                .map_err(|e| e.to_string())?,
-        )
+        Some(regex::RegexBuilder::new(&find).case_insensitive(!rules.case_sensitive).build().map_err(|e| e.to_string())?)
     } else {
         None
     };
@@ -383,7 +378,11 @@ pub fn validate(old: &[String], new: &[String], existing: &HashSet<String>, case
 /// that item keeps its name and an error says so. Should an item be left under its
 /// temporary name, the error names it, so nothing is lost out of sight.
 /// Returns the pairs actually applied (for undo) and the errors.
-pub fn apply(pairs: &[(String, String)], mut rename: impl FnMut(&str, &str) -> Res<()>, mut exists: impl FnMut(&str) -> bool) -> (Vec<(String, String)>, Vec<String>) {
+pub fn apply(
+    pairs: &[(String, String)],
+    mut rename: impl FnMut(&str, &str) -> Res<()>,
+    mut exists: impl FnMut(&str) -> bool,
+) -> (Vec<(String, String)>, Vec<String>) {
     // Names are compared ignoring case: on a disk that ignores it, `B` is where `b` is.
     let key = |s: &str| s.to_lowercase();
     // (original name, current name, target)
@@ -538,7 +537,8 @@ mod tests {
         assert_eq!(std::fs::read_to_string(dir.join("a")).unwrap(), "A");
         assert_eq!(std::fs::read_to_string(dir.join("c")).unwrap(), "C");
         // Only the letter case changes: the same file, allowed.
-        let (done, errors) = apply(&[("a".to_string(), "A".to_string())], |f, t| crate::files::safefs::rename_item(&d.join(f), &d.join(t)).map_err(|e| e.to_string()), exists);
+        let (done, errors) =
+            apply(&[("a".to_string(), "A".to_string())], |f, t| crate::files::safefs::rename_item(&d.join(f), &d.join(t)).map_err(|e| e.to_string()), exists);
         assert!(errors.is_empty() && done.len() == 1);
         assert_eq!(std::fs::read_to_string(dir.join("A")).unwrap(), "A");
         let _ = std::fs::remove_dir_all(&dir);
@@ -546,7 +546,11 @@ mod tests {
 
     /// A folder in memory whose renames never replace, as the app's are; `fail` is a rename
     /// (from, to) that fails, `*` matching any name it is from.
-    fn fake_apply(names: &[&str], pairs: &[(&str, &str)], fail: Option<(&str, &str)>) -> (Vec<(String, String)>, Vec<String>, HashSet<String>, Vec<(String, String)>) {
+    fn fake_apply(
+        names: &[&str],
+        pairs: &[(&str, &str)],
+        fail: Option<(&str, &str)>,
+    ) -> (Vec<(String, String)>, Vec<String>, HashSet<String>, Vec<(String, String)>) {
         let pairs: Vec<(String, String)> = pairs.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
         let dir = std::cell::RefCell::new(names.iter().map(|n| n.to_string()).collect::<HashSet<String>>());
         let calls = std::cell::RefCell::new(vec![]);
@@ -632,9 +636,9 @@ mod tests {
 
 // ---------------------------------------------------------------- UI
 
+use crate::files::vfs::Location;
 use crate::i18n::t;
 use crate::style::theme::Theme;
-use crate::files::vfs::Location;
 
 pub enum RenameAction {
     Apply(Location, Vec<(String, String)>),
@@ -702,222 +706,214 @@ impl BatchRename {
         let errors = status.iter().filter(|s| matches!(s, Status::Error(_))).count();
 
         ui.vertical(|ui| {
-                ui.label(
-                    egui::RichText::new(format!("{} {} · {}", self.items.len(), t("item(s)"), self.parent))
-                        .size(11.5)
-                        .color(th.weak),
-                );
-                // Presets
-                ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(t("Presets")).size(11.5).color(th.weak));
-                    let r = &mut self.rules;
-                    if ui.button(t("Number sequentially")).on_hover_text("[N]_[C]").clicked() {
-                        r.name_mask = "[N]_[C]".into();
-                    }
-                    if ui.button(t("Date prefix")).on_hover_text("[D] [N]").clicked() {
-                        r.name_mask = "[D] [N]".into();
-                    }
-                    if ui.button(t("Photos by date")).on_hover_text("IMG_[Y][M][d]_[C]").clicked() {
-                        r.name_mask = "IMG_[Y][M][d]_[C]".into();
-                        r.counter_digits = 4;
-                    }
-                    if ui.button(t("Remove diacritics")).on_hover_text("Thư mục → Thu muc").clicked() {
-                        r.strip_diacritics = true;
-                    }
-                    if ui.button(t("Web-safe (slug)")).on_hover_text("Báo Cáo 2024 → bao-cao-2024").clicked() {
-                        r.strip_diacritics = true;
-                        r.case = CaseMode::Lower;
-                        r.spaces = SpaceMode::Dash;
-                        r.collapse_spaces = true;
-                        r.slug = true;
-                    }
-                    if ui.button(t("Title Case")).clicked() {
-                        r.case = CaseMode::Title;
-                    }
-                    if ui.button(t("Reset")).clicked() {
-                        *r = Rules::default();
-                    }
-                });
-                ui.add_space(4.0);
-                ui.columns(2, |cols| {
-                    let r = &mut self.rules;
-                    let ui = &mut cols[0];
-                    egui::Grid::new("ren-left").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-                        ui.label(t("Name mask"));
-                        let resp = ui.add(egui::TextEdit::singleline(&mut r.name_mask).desired_width(220.0).font(egui::TextStyle::Monospace));
-                        if self.focus {
-                            resp.request_focus();
-                            self.focus = false;
-                        }
-                        ui.end_row();
-                        ui.label("");
-                        ui.horizontal_wrapped(|ui| {
-                            ui.spacing_mut().item_spacing.x = 4.0;
-                            for (tok, tip) in [
-                                ("[N]", t("original name")),
-                                ("[N1-3]", t("characters 1 to 3")),
-                                ("[C]", t("counter")),
-                                ("[D]", t("modified date")),
-                                ("[T]", t("modified time")),
-                                ("[P]", t("parent folder")),
-                                ("[E]", t("extension")),
-                            ] {
-                                if ui.small_button(egui::RichText::new(tok).monospace().size(11.5)).on_hover_text(tip).clicked() {
-                                    r.name_mask.push_str(tok);
-                                }
-                            }
-                        });
-                        ui.end_row();
-                        ui.label(t("Extension"));
-                        ui.add(egui::TextEdit::singleline(&mut r.ext_mask).desired_width(120.0).font(egui::TextStyle::Monospace));
-                        ui.end_row();
-                        ui.label(t("Counter"));
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(t("start")).size(11.5).color(th.weak));
-                            ui.add(egui::DragValue::new(&mut r.counter_start));
-                            ui.label(egui::RichText::new(t("step")).size(11.5).color(th.weak));
-                            ui.add(egui::DragValue::new(&mut r.counter_step).range(1..=1000));
-                            ui.label(egui::RichText::new(t("digits")).size(11.5).color(th.weak));
-                            ui.add(egui::DragValue::new(&mut r.counter_digits).range(1..=10));
-                        });
-                        ui.end_row();
-                    });
-                    let ui = &mut cols[1];
-                    egui::Grid::new("ren-right").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
-                        ui.label(t("Find"));
-                        ui.add(egui::TextEdit::singleline(&mut r.find).desired_width(220.0));
-                        ui.end_row();
-                        ui.label(t("Replace with"));
-                        ui.add(egui::TextEdit::singleline(&mut r.replace).desired_width(220.0));
-                        ui.end_row();
-                        ui.label("");
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut r.regex, t("Regular expression")).on_hover_text("(\\d+)-(\\d+) → $2-$1");
-                            ui.checkbox(&mut r.case_sensitive, t("Match case"));
-                        });
-                        ui.end_row();
-                        ui.label(t("Letter case"));
-                        egui::ComboBox::from_id_salt("ren-case").width(160.0).selected_text(case_label(r.case)).show_ui(ui, |ui| {
-                            for c in [CaseMode::Keep, CaseMode::Lower, CaseMode::Upper, CaseMode::Title, CaseMode::Sentence] {
-                                ui.selectable_value(&mut r.case, c, case_label(c));
-                            }
-                        });
-                        ui.end_row();
-                        ui.label(t("Spaces"));
-                        egui::ComboBox::from_id_salt("ren-space").width(160.0).selected_text(space_label(r.spaces)).show_ui(ui, |ui| {
-                            for c in [SpaceMode::Keep, SpaceMode::Underscore, SpaceMode::Dash, SpaceMode::Remove] {
-                                ui.selectable_value(&mut r.spaces, c, space_label(c));
-                            }
-                        });
-                        ui.end_row();
-                        ui.label("");
-                        ui.horizontal(|ui| {
-                            ui.checkbox(&mut r.strip_diacritics, t("Remove diacritics"));
-                            ui.checkbox(&mut r.collapse_spaces, t("Collapse spaces"));
-                        });
-                        ui.end_row();
-                        ui.label("");
-                        ui.checkbox(&mut r.slug, t("Letters and digits only"))
-                            .on_hover_text("Báo cáo (bản nháp) → bao-cao-ban-nhap");
-                        ui.end_row();
-                    });
-                });
-                if let Some(e) = &regex_err {
-                    ui.colored_label(th.danger, format!("⚠ {e}"));
+            ui.label(egui::RichText::new(format!("{} {} · {}", self.items.len(), t("item(s)"), self.parent)).size(11.5).color(th.weak));
+            // Presets
+            ui.horizontal_wrapped(|ui| {
+                ui.label(egui::RichText::new(t("Presets")).size(11.5).color(th.weak));
+                let r = &mut self.rules;
+                if ui.button(t("Number sequentially")).on_hover_text("[N]_[C]").clicked() {
+                    r.name_mask = "[N]_[C]".into();
                 }
-                ui.add_space(6.0);
-
-                // Preview
-                // The table's frame takes what is left above the buttons: a gap (8), the
-                // buttons (30) and the spacing around them, so they stay in sight.
-                let footer_h = 8.0 + 30.0 + 3.0 * ui.spacing().item_spacing.y;
-                let table_h = (ui.available_height() - footer_h).max(140.0);
-                egui::Frame::NONE.fill(th.bg).corner_radius(8).inner_margin(6.0).show(ui, |ui| {
-                    // Inside the frame's margins; the rows scroll below the header.
-                    ui.set_height(table_h - 12.0);
-                    let rows_h = table_h - 12.0 - 24.0 - ui.spacing().item_spacing.y;
-                    use egui_extras::{Column, TableBuilder};
-                    let w = ui.available_width();
-                    TableBuilder::new(ui)
-                        .striped(true)
-                        .auto_shrink([false, false])
-                        .max_scroll_height(rows_h)
-                        // Not the 200 px egui_extras keeps by default: it would push the buttons out of sight.
-                        .min_scrolled_height(rows_h.min(80.0))
-                        .column(Column::exact((w - 150.0) * 0.5))
-                        .column(Column::exact(24.0))
-                        .column(Column::exact((w - 150.0) * 0.5))
-                        .column(Column::remainder())
-                        .header(24.0, |mut h| {
-                            h.col(|ui| {
-                                ui.label(egui::RichText::new(t("Current name")).size(11.5).color(th.weak));
-                            });
-                            h.col(|_| {});
-                            h.col(|ui| {
-                                ui.label(egui::RichText::new(t("New name")).size(11.5).color(th.weak));
-                            });
-                            h.col(|_| {});
-                        })
-                        .body(|body| {
-                            body.rows(24.0, names.len(), |mut row| {
-                                let i = row.index();
-                                let st = &status[i];
-                                row.col(|ui| {
-                                    ui.add(egui::Label::new(egui::RichText::new(&names[i]).color(th.text)).truncate());
-                                });
-                                row.col(|ui| {
-                                    ui.label(egui::RichText::new("→").color(th.weak));
-                                });
-                                row.col(|ui| {
-                                    let color = match st {
-                                        Status::Unchanged => th.weak,
-                                        Status::Ok => th.accent,
-                                        Status::Error(_) => th.danger,
-                                    };
-                                    ui.add(egui::Label::new(egui::RichText::new(&new_names[i]).color(color)).truncate());
-                                });
-                                row.col(|ui| {
-                                    if let Status::Error(why) = st {
-                                        ui.label(egui::RichText::new(format!("⚠ {}", t(why))).size(11.0).color(th.danger));
-                                    }
-                                });
-                            });
-                        });
-                });
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    let summary = if errors > 0 {
-                        format!("{changes} {} · {errors} {}", t("to rename"), t("conflicts"))
-                    } else {
-                        format!("{changes} {}", t("to rename"))
-                    };
-                    ui.label(egui::RichText::new(summary).color(if errors > 0 { th.danger } else { th.weak }));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let can = changes > 0 && errors == 0 && regex_err.is_none();
-                        let b = egui::Button::new(egui::RichText::new(t("Rename")).strong().color(th.on_accent()))
-                            .fill(if can { th.accent } else { th.surface })
-                            .min_size(egui::vec2(110.0, 30.0));
-                        if ui.add_enabled(can, b).clicked() {
-                            if let Some(loc) = &self.loc {
-                                let pairs: Vec<(String, String)> = names
-                                    .iter()
-                                    .zip(&new_names)
-                                    .zip(&status)
-                                    .filter(|(_, s)| **s == Status::Ok)
-                                    .map(|((a, b), _)| (a.clone(), b.clone()))
-                                    .collect();
-                                action = Some(RenameAction::Apply(loc.clone(), pairs));
-                            }
-                        }
-                        if let Some((loc, done)) = &self.last {
-                            if ui.add(egui::Button::new(t("Undo last rename")).min_size(egui::vec2(0.0, 30.0))).clicked() {
-                                let back: Vec<(String, String)> = done.iter().map(|(a, b)| (b.clone(), a.clone())).collect();
-                                action = Some(RenameAction::Undo(loc.clone(), back));
+                if ui.button(t("Date prefix")).on_hover_text("[D] [N]").clicked() {
+                    r.name_mask = "[D] [N]".into();
+                }
+                if ui.button(t("Photos by date")).on_hover_text("IMG_[Y][M][d]_[C]").clicked() {
+                    r.name_mask = "IMG_[Y][M][d]_[C]".into();
+                    r.counter_digits = 4;
+                }
+                if ui.button(t("Remove diacritics")).on_hover_text("Thư mục → Thu muc").clicked() {
+                    r.strip_diacritics = true;
+                }
+                if ui.button(t("Web-safe (slug)")).on_hover_text("Báo Cáo 2024 → bao-cao-2024").clicked() {
+                    r.strip_diacritics = true;
+                    r.case = CaseMode::Lower;
+                    r.spaces = SpaceMode::Dash;
+                    r.collapse_spaces = true;
+                    r.slug = true;
+                }
+                if ui.button(t("Title Case")).clicked() {
+                    r.case = CaseMode::Title;
+                }
+                if ui.button(t("Reset")).clicked() {
+                    *r = Rules::default();
+                }
+            });
+            ui.add_space(4.0);
+            ui.columns(2, |cols| {
+                let r = &mut self.rules;
+                let ui = &mut cols[0];
+                egui::Grid::new("ren-left").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                    ui.label(t("Name mask"));
+                    let resp = ui.add(egui::TextEdit::singleline(&mut r.name_mask).desired_width(220.0).font(egui::TextStyle::Monospace));
+                    if self.focus {
+                        resp.request_focus();
+                        self.focus = false;
+                    }
+                    ui.end_row();
+                    ui.label("");
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 4.0;
+                        for (tok, tip) in [
+                            ("[N]", t("original name")),
+                            ("[N1-3]", t("characters 1 to 3")),
+                            ("[C]", t("counter")),
+                            ("[D]", t("modified date")),
+                            ("[T]", t("modified time")),
+                            ("[P]", t("parent folder")),
+                            ("[E]", t("extension")),
+                        ] {
+                            if ui.small_button(egui::RichText::new(tok).monospace().size(11.5)).on_hover_text(tip).clicked() {
+                                r.name_mask.push_str(tok);
                             }
                         }
                     });
+                    ui.end_row();
+                    ui.label(t("Extension"));
+                    ui.add(egui::TextEdit::singleline(&mut r.ext_mask).desired_width(120.0).font(egui::TextStyle::Monospace));
+                    ui.end_row();
+                    ui.label(t("Counter"));
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(t("start")).size(11.5).color(th.weak));
+                        ui.add(egui::DragValue::new(&mut r.counter_start));
+                        ui.label(egui::RichText::new(t("step")).size(11.5).color(th.weak));
+                        ui.add(egui::DragValue::new(&mut r.counter_step).range(1..=1000));
+                        ui.label(egui::RichText::new(t("digits")).size(11.5).color(th.weak));
+                        ui.add(egui::DragValue::new(&mut r.counter_digits).range(1..=10));
+                    });
+                    ui.end_row();
+                });
+                let ui = &mut cols[1];
+                egui::Grid::new("ren-right").num_columns(2).spacing([10.0, 8.0]).show(ui, |ui| {
+                    ui.label(t("Find"));
+                    ui.add(egui::TextEdit::singleline(&mut r.find).desired_width(220.0));
+                    ui.end_row();
+                    ui.label(t("Replace with"));
+                    ui.add(egui::TextEdit::singleline(&mut r.replace).desired_width(220.0));
+                    ui.end_row();
+                    ui.label("");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut r.regex, t("Regular expression")).on_hover_text("(\\d+)-(\\d+) → $2-$1");
+                        ui.checkbox(&mut r.case_sensitive, t("Match case"));
+                    });
+                    ui.end_row();
+                    ui.label(t("Letter case"));
+                    egui::ComboBox::from_id_salt("ren-case").width(160.0).selected_text(case_label(r.case)).show_ui(ui, |ui| {
+                        for c in [CaseMode::Keep, CaseMode::Lower, CaseMode::Upper, CaseMode::Title, CaseMode::Sentence] {
+                            ui.selectable_value(&mut r.case, c, case_label(c));
+                        }
+                    });
+                    ui.end_row();
+                    ui.label(t("Spaces"));
+                    egui::ComboBox::from_id_salt("ren-space").width(160.0).selected_text(space_label(r.spaces)).show_ui(ui, |ui| {
+                        for c in [SpaceMode::Keep, SpaceMode::Underscore, SpaceMode::Dash, SpaceMode::Remove] {
+                            ui.selectable_value(&mut r.spaces, c, space_label(c));
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut r.strip_diacritics, t("Remove diacritics"));
+                        ui.checkbox(&mut r.collapse_spaces, t("Collapse spaces"));
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut r.slug, t("Letters and digits only")).on_hover_text("Báo cáo (bản nháp) → bao-cao-ban-nhap");
+                    ui.end_row();
                 });
             });
+            if let Some(e) = &regex_err {
+                ui.colored_label(th.danger, format!("⚠ {e}"));
+            }
+            ui.add_space(6.0);
+
+            // Preview
+            // The table's frame takes what is left above the buttons: a gap (8), the
+            // buttons (30) and the spacing around them, so they stay in sight.
+            let footer_h = 8.0 + 30.0 + 3.0 * ui.spacing().item_spacing.y;
+            let table_h = (ui.available_height() - footer_h).max(140.0);
+            egui::Frame::NONE.fill(th.bg).corner_radius(8).inner_margin(6.0).show(ui, |ui| {
+                // Inside the frame's margins; the rows scroll below the header.
+                ui.set_height(table_h - 12.0);
+                let rows_h = table_h - 12.0 - 24.0 - ui.spacing().item_spacing.y;
+                use egui_extras::{Column, TableBuilder};
+                let w = ui.available_width();
+                TableBuilder::new(ui)
+                    .striped(true)
+                    .auto_shrink([false, false])
+                    .max_scroll_height(rows_h)
+                    // Not the 200 px egui_extras keeps by default: it would push the buttons out of sight.
+                    .min_scrolled_height(rows_h.min(80.0))
+                    .column(Column::exact((w - 150.0) * 0.5))
+                    .column(Column::exact(24.0))
+                    .column(Column::exact((w - 150.0) * 0.5))
+                    .column(Column::remainder())
+                    .header(24.0, |mut h| {
+                        h.col(|ui| {
+                            ui.label(egui::RichText::new(t("Current name")).size(11.5).color(th.weak));
+                        });
+                        h.col(|_| {});
+                        h.col(|ui| {
+                            ui.label(egui::RichText::new(t("New name")).size(11.5).color(th.weak));
+                        });
+                        h.col(|_| {});
+                    })
+                    .body(|body| {
+                        body.rows(24.0, names.len(), |mut row| {
+                            let i = row.index();
+                            let st = &status[i];
+                            row.col(|ui| {
+                                ui.add(egui::Label::new(egui::RichText::new(&names[i]).color(th.text)).truncate());
+                            });
+                            row.col(|ui| {
+                                ui.label(egui::RichText::new("→").color(th.weak));
+                            });
+                            row.col(|ui| {
+                                let color = match st {
+                                    Status::Unchanged => th.weak,
+                                    Status::Ok => th.accent,
+                                    Status::Error(_) => th.danger,
+                                };
+                                ui.add(egui::Label::new(egui::RichText::new(&new_names[i]).color(color)).truncate());
+                            });
+                            row.col(|ui| {
+                                if let Status::Error(why) = st {
+                                    ui.label(egui::RichText::new(format!("⚠ {}", t(why))).size(11.0).color(th.danger));
+                                }
+                            });
+                        });
+                    });
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                let summary =
+                    if errors > 0 { format!("{changes} {} · {errors} {}", t("to rename"), t("conflicts")) } else { format!("{changes} {}", t("to rename")) };
+                ui.label(egui::RichText::new(summary).color(if errors > 0 { th.danger } else { th.weak }));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let can = changes > 0 && errors == 0 && regex_err.is_none();
+                    let b = egui::Button::new(egui::RichText::new(t("Rename")).strong().color(th.on_accent()))
+                        .fill(if can { th.accent } else { th.surface })
+                        .min_size(egui::vec2(110.0, 30.0));
+                    if ui.add_enabled(can, b).clicked() {
+                        if let Some(loc) = &self.loc {
+                            let pairs: Vec<(String, String)> = names
+                                .iter()
+                                .zip(&new_names)
+                                .zip(&status)
+                                .filter(|(_, s)| **s == Status::Ok)
+                                .map(|((a, b), _)| (a.clone(), b.clone()))
+                                .collect();
+                            action = Some(RenameAction::Apply(loc.clone(), pairs));
+                        }
+                    }
+                    if let Some((loc, done)) = &self.last {
+                        if ui.add(egui::Button::new(t("Undo last rename")).min_size(egui::vec2(0.0, 30.0))).clicked() {
+                            let back: Vec<(String, String)> = done.iter().map(|(a, b)| (b.clone(), a.clone())).collect();
+                            action = Some(RenameAction::Undo(loc.clone(), back));
+                        }
+                    }
+                });
+            });
+        });
         action
     }
 

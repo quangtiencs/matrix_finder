@@ -18,7 +18,8 @@ impl App {
                     self.request_close_tabs(&[self.live]);
                     ui.close_menu();
                 }
-                if ui.add_enabled(!self.closed_tabs.is_empty(), egui::Button::new(format!("{}\t{}", t("Reopen closed tab"), hint(Action::ReopenTab)))).clicked() {
+                if ui.add_enabled(!self.closed_tabs.is_empty(), egui::Button::new(format!("{}\t{}", t("Reopen closed tab"), hint(Action::ReopenTab)))).clicked()
+                {
                     self.reopen_closed_tab();
                     ui.close_menu();
                 }
@@ -82,7 +83,7 @@ impl App {
                     (Cmd::Move, t("Move to other panel"), hint(Action::Move)),
                     (Cmd::Rename, t("Rename"), hint(Action::Rename)),
                     (Cmd::BatchRename, t("Batch rename…"), hint(Action::BatchRename)),
-            (Cmd::Checksum, t("Checksum: create / verify…"), hint(Action::Checksum)),
+                    (Cmd::Checksum, t("Checksum: create / verify…"), hint(Action::Checksum)),
                     (Cmd::Checksum, t("Checksum…"), hint(Action::Checksum)),
                     (Cmd::Delete, t("Delete"), hint(Action::Delete)),
                     (Cmd::Pack, t("Compress…"), hint(Action::Compress)),
@@ -255,7 +256,6 @@ impl App {
                     ui.close_menu();
                 }
             });
-
         }
     }
 
@@ -265,9 +265,7 @@ impl App {
         let bg = ui.painter().add(egui::Shape::Noop);
         let text = RichText::new("Matrix Finder      ").font(egui::FontId::new(14.5, egui::FontFamily::Name("bold".into()))).color(th.strong());
         // Text only: the logo lives in the About window, not in the toolbar.
-        let button = egui::Button::new(text)
-        .fill(egui::Color32::TRANSPARENT)
-        .min_size(egui::vec2(0.0, 30.0));
+        let button = egui::Button::new(text).fill(egui::Color32::TRANSPARENT).min_size(egui::vec2(0.0, 30.0));
         let menu = egui::menu::menu_custom_button(ui, button, |ui| {
             ui.set_min_width(230.0);
             if ui.button(t("About")).clicked() {
@@ -451,7 +449,8 @@ impl App {
         let th = self.theme;
         let active_loc = self.panes[self.active].tab().loc.clone();
         let active_disp = active_loc.display(|id| self.remote_label(id));
-        let row = egui::Rect::from_min_size(ui.max_rect().min - egui::vec2(8.0, 8.0), egui::vec2(ui.max_rect().width() + 16.0, self.chrome.row_height() + 10.0));
+        let row =
+            egui::Rect::from_min_size(ui.max_rect().min - egui::vec2(8.0, 8.0), egui::vec2(ui.max_rect().width() + 16.0, self.chrome.row_height() + 10.0));
         self.chrome.drag_area(ui, row, "sidebar");
         if self.chrome.lights_own_row() {
             // The traffic lights sit alone in the first row; the app menu goes below.
@@ -514,8 +513,7 @@ impl App {
                     }
                 }
                 self.sidebar_drop_target(ui, resp.rect, Location::Local(mp.clone()));
-                let resp = resp
-                    .on_hover_text(format!("{}\n{} {} / {}", mp.display(), human_size(avail), t("free"), human_size(total)));
+                let resp = resp.on_hover_text(format!("{}\n{} {} / {}", mp.display(), human_size(avail), t("free"), human_size(total)));
                 if resp.clicked() {
                     self.navigate_active(Location::Local(mp.clone()));
                 }
@@ -608,7 +606,8 @@ impl App {
                     None => {
                         let t0 = ui.input(|i| i.time) as f32;
                         let x = (t0 * 0.8).fract() * (r.width() + 40.0) - 40.0;
-                        let seg = egui::Rect::from_min_max(egui::pos2(r.left() + x.max(0.0), r.top()), egui::pos2((r.left() + x + 40.0).min(r.right()), r.bottom()));
+                        let seg =
+                            egui::Rect::from_min_max(egui::pos2(r.left() + x.max(0.0), r.top()), egui::pos2((r.left() + x + 40.0).min(r.right()), r.bottom()));
                         ui.painter().rect_filled(seg, 2.5, th.accent);
                     }
                 }
@@ -624,8 +623,7 @@ impl App {
                 }
                 if self.jobs.len() > 1 {
                     let titles: Vec<String> = self.jobs.iter().skip(1).map(|j| j.job.title.clone()).collect();
-                    ui.label(RichText::new(format!("+{} {}", self.jobs.len() - 1, t("more"))).size(11.5).color(th.weak))
-                        .on_hover_text(titles.join("\n"));
+                    ui.label(RichText::new(format!("+{} {}", self.jobs.len() - 1, t("more"))).size(11.5).color(th.weak)).on_hover_text(titles.join("\n"));
                 }
             } else if let Some(e) = self.panes[self.active].tab().cursor_entry().filter(|e| !e.is_parent) {
                 let info = if e.is_dir {
@@ -685,29 +683,26 @@ impl App {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        egui::Area::new(egui::Id::new("toasts"))
-            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -44.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                for toast in self.toasts.iter().rev().take(5) {
-                    let th = self.theme;
-                    let color = if toast.error { th.danger } else { th.accent };
-                    egui::Frame::popup(ui.style())
-                        .fill(th.panel)
-                        .corner_radius(10)
-                        .inner_margin(egui::Margin::symmetric(14, 10))
-                        .stroke(egui::Stroke::new(1.0_f32, th.border))
-                        .show(ui, |ui| {
-                            ui.set_max_width(420.0);
-                            ui.horizontal(|ui| {
-                                let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                                ui.painter().circle_filled(r.center(), 4.0, color);
-                                ui.add(egui::Label::new(RichText::new(&toast.text).color(th.text)).wrap());
-                            });
+        egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -44.0)).order(egui::Order::Foreground).show(ctx, |ui| {
+            for toast in self.toasts.iter().rev().take(5) {
+                let th = self.theme;
+                let color = if toast.error { th.danger } else { th.accent };
+                egui::Frame::popup(ui.style())
+                    .fill(th.panel)
+                    .corner_radius(10)
+                    .inner_margin(egui::Margin::symmetric(14, 10))
+                    .stroke(egui::Stroke::new(1.0_f32, th.border))
+                    .show(ui, |ui| {
+                        ui.set_max_width(420.0);
+                        ui.horizontal(|ui| {
+                            let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                            ui.painter().circle_filled(r.center(), 4.0, color);
+                            ui.add(egui::Label::new(RichText::new(&toast.text).color(th.text)).wrap());
                         });
-                    ui.add_space(4.0);
-                }
-            });
+                    });
+                ui.add_space(4.0);
+            }
+        });
     }
 }
 
@@ -719,7 +714,13 @@ fn tool_icon(ui: &mut egui::Ui, th: &Theme, tip: &str, active: bool, draw: impl 
     } else if resp.hovered() {
         ui.painter().rect_filled(rect, 7.0, th.surface);
     }
-    let color = if active { th.accent } else if resp.hovered() { th.strong() } else { th.weak };
+    let color = if active {
+        th.accent
+    } else if resp.hovered() {
+        th.strong()
+    } else {
+        th.weak
+    };
     draw(ui.painter(), rect.shrink2(egui::vec2(8.0, 7.0)), color);
     resp.on_hover_text(tip)
 }

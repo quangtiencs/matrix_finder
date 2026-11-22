@@ -32,7 +32,6 @@ const fn hex(c: u32) -> Color32 {
     Color32::from_rgb((c >> 16) as u8, (c >> 8) as u8, c as u8)
 }
 
-
 // ANSI colours: black, red, green, yellow, blue, magenta, cyan, white, then the bright ones.
 const BREEZE_LIGHT: [u32; 16] = [
     0x232629, 0xda4453, 0x1b8a4c, 0xb35a00, 0x1b7fcf, 0x8e44ad, 0x16857a, 0x707d8a, //
@@ -219,7 +218,6 @@ pub const THEMES: &[Theme] = &[
         icons: IconPack::Matrix,
         ansi: None,
     },
-
     // ------------------------------------------------------------ native OS looks
     Theme {
         name: "macOS Light",
@@ -635,11 +633,7 @@ pub fn by_name(name: &str) -> &'static Theme {
         "Matrix" => "Digital Rain",
         other => other,
     };
-    THEMES
-        .iter()
-        .find(|t| t.name == name)
-        .or_else(|| THEMES.iter().find(|t| t.name == DEFAULT))
-        .unwrap_or(&THEMES[0])
+    THEMES.iter().find(|t| t.name == name).or_else(|| THEMES.iter().find(|t| t.name == DEFAULT)).unwrap_or(&THEMES[0])
 }
 
 impl Theme {
@@ -680,7 +674,11 @@ impl Theme {
                 }
             }
         }
-        if contrast(Color32::BLACK, self.selection) > contrast(Color32::WHITE, self.selection) { Color32::BLACK } else { Color32::WHITE }
+        if contrast(Color32::BLACK, self.selection) > contrast(Color32::WHITE, self.selection) {
+            Color32::BLACK
+        } else {
+            Color32::WHITE
+        }
     }
 
     /// Hover background for list rows and flat buttons.
@@ -699,7 +697,11 @@ impl Theme {
 fn luminance(c: Color32) -> f32 {
     let f = |v: u8| {
         let v = v as f32 / 255.0;
-        if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        if v <= 0.03928 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
     };
     0.2126 * f(c.r()) + 0.7152 * f(c.g()) + 0.0722 * f(c.b())
 }

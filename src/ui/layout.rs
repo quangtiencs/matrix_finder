@@ -49,7 +49,11 @@ impl Layout {
             Layout::Leaf(_) => (1, 1),
             Layout::Split { horizontal, a, b, .. } => {
                 let ((ac, ar), (bc, br)) = (a.dims(), b.dims());
-                if *horizontal { (ac + bc, ar.max(br)) } else { (ac.max(bc), ar + br) }
+                if *horizontal {
+                    (ac + bc, ar.max(br))
+                } else {
+                    (ac.max(bc), ar + br)
+                }
             }
         }
     }
@@ -198,7 +202,11 @@ impl Layout {
         match (self, path.split_first()) {
             (Layout::Split { ratio, .. }, None) => *ratio = value.clamp(0.12, 0.88),
             (Layout::Split { a, b, .. }, Some((first, rest))) => {
-                if *first { b.set_ratio(rest, value) } else { a.set_ratio(rest, value) }
+                if *first {
+                    b.set_ratio(rest, value)
+                } else {
+                    a.set_ratio(rest, value)
+                }
             }
             _ => {}
         }

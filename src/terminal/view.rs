@@ -340,11 +340,7 @@ impl TermSession {
     /// Type text into the terminal as if pasted (bracketed when the program asks).
     pub fn paste(&self, text: &str) {
         let bracketed = self.term.lock().mode().contains(TermMode::BRACKETED_PASTE);
-        let s = if bracketed {
-            format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', ""))
-        } else {
-            text.replace("\r\n", "\r").replace('\n', "\r")
-        };
+        let s = if bracketed { format!("\x1b[200~{}\x1b[201~", text.replace('\x1b', "")) } else { text.replace("\r\n", "\r").replace('\n', "\r") };
         self.write(s.into_bytes());
         self.scroll_to_bottom();
     }
@@ -520,11 +516,7 @@ impl TermSession {
             return self.title.trim().to_string();
         }
         let dir = self.cwd.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| self.cwd.to_string_lossy().to_string());
-        let shell = self
-            .argv
-            .as_ref()
-            .and_then(|v| v.first().cloned())
-            .unwrap_or_else(crate::terminal::default_shell);
+        let shell = self.argv.as_ref().and_then(|v| v.first().cloned()).unwrap_or_else(crate::terminal::default_shell);
         let shell = shell.rsplit(['/', '\\']).next().unwrap_or("").trim_end_matches(".exe").to_string();
         format!("{shell}: {dir}")
     }
@@ -626,9 +618,7 @@ impl TermSession {
         }
         let focused = resp.has_focus() || ui.memory(|m| m.has_focus(self.id));
         if focused {
-            ui.memory_mut(|m| {
-                m.set_focus_lock_filter(self.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true })
-            });
+            ui.memory_mut(|m| m.set_focus_lock_filter(self.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: true }));
         }
         self.report_focus(focused && ui.input(|i| i.focused));
         if !focused {
@@ -776,7 +766,8 @@ impl TermSession {
         // system font that has them (the frame is repainted once one is added).
         if !others.is_empty() {
             let bold = self.bold_font.clone();
-            let missing: Vec<char> = ui.fonts(|f| others.into_iter().filter(|&c| !c.is_whitespace() && (!f.has_glyph(&font, c) || !f.has_glyph(&bold, c))).collect());
+            let missing: Vec<char> =
+                ui.fonts(|f| others.into_iter().filter(|&c| !c.is_whitespace() && (!f.has_glyph(&font, c) || !f.has_glyph(&bold, c))).collect());
             if !missing.is_empty() {
                 crate::style::fontfallback::request(ui.ctx(), missing);
             }
@@ -875,11 +866,8 @@ impl TermSession {
 
         // Exit banner.
         if let Some(code) = self.exited {
-            let text = format!(
-                "{}  ·  {}",
-                crate::i18n::t("Process exited with code") + &format!(" {code}"),
-                crate::i18n::t("Enter: restart · Esc: close tab")
-            );
+            let text =
+                format!("{}  ·  {}", crate::i18n::t("Process exited with code") + &format!(" {code}"), crate::i18n::t("Enter: restart · Esc: close tab"));
             let g = painter.layout_no_wrap(text, FontId::proportional(12.5), th.text);
             let r = Rect::from_center_size(pos2(rect.center().x, rect.bottom() - 26.0), g.size() + vec2(24.0, 12.0));
             painter.rect_filled(r, 8.0, th.surface);
@@ -905,7 +893,6 @@ impl TermSession {
         if !s.is_empty() {
             let f = if fl.contains(Flags::BOLD) { &self.bold_font } else { font };
             p.text(pos, Align2::LEFT_TOP, s, f.clone(), fg);
-
         }
         let h = self.cell.y;
         if fl.intersects(Flags::ALL_UNDERLINES) {
@@ -1038,7 +1025,13 @@ impl TermSession {
         let mac = cfg!(target_os = "macos");
         let kitty = mode.intersects(TermMode::KITTY_KEYBOARD_PROTOCOL);
         // Ctrl+letter, in the form the program asked for.
-        let ctrl = |letter: u8, legacy: u8| -> Vec<u8> { if kitty { format!("\x1b[{};5u", letter.to_ascii_lowercase()).into_bytes() } else { vec![legacy] } };
+        let ctrl = |letter: u8, legacy: u8| -> Vec<u8> {
+            if kitty {
+                format!("\x1b[{};5u", letter.to_ascii_lowercase()).into_bytes()
+            } else {
+                vec![legacy]
+            }
+        };
         let mut typed = false;
         for e in events {
             match e {
@@ -1064,7 +1057,9 @@ impl TermSession {
                 }
                 egui::Event::Ime(egui::ImeEvent::Disabled) => self.preedit.clear(),
                 // Keys the input method also handles while it composes (like egui's text edit).
-                egui::Event::Key { repeat: true, .. } | egui::Event::Key { key: Key::Backspace | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, .. } if !self.preedit.is_empty() => {}
+                egui::Event::Key { repeat: true, .. }
+                | egui::Event::Key { key: Key::Backspace | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, .. }
+                    if !self.preedit.is_empty() => {}
                 egui::Event::Copy => {
                     // Cmd+C / Ctrl+Shift+C copy. Plain Ctrl+C copies too while text is
                     // selected (and clears the selection), otherwise it interrupts.
@@ -1429,7 +1424,15 @@ impl TermSession {
             use crate::ui::layout::SplitDir as D;
             ui.menu_button(t("Layout"), |ui| {
                 use crate::ui::shortcuts::{terminal_hint, Action as K};
-                for (k, (d, label, key)) in [(D::Right, t("Split right"), K::SplitRight), (D::Left, t("Split left"), K::SplitLeft), (D::Down, t("Split down"), K::SplitDown), (D::Up, t("Split up"), K::SplitUp)].into_iter().enumerate() {
+                for (k, (d, label, key)) in [
+                    (D::Right, t("Split right"), K::SplitRight),
+                    (D::Left, t("Split left"), K::SplitLeft),
+                    (D::Down, t("Split down"), K::SplitDown),
+                    (D::Up, t("Split up"), K::SplitUp),
+                ]
+                .into_iter()
+                .enumerate()
+                {
                     if o.can_split[k] && ui.add(egui::Button::new(label).shortcut_text(terminal_hint(key))).clicked() {
                         out.split = Some((d, true));
                         ui.close_menu();
@@ -1542,7 +1545,6 @@ fn next_id() -> u64 {
     N.fetch_add(1, Ordering::Relaxed)
 }
 
-
 /// Whether `line` can be typed at a shell prompt as text: no control characters.
 pub fn is_typeable(line: &str) -> bool {
     !line.chars().any(|c| c.is_control())
@@ -1553,7 +1555,23 @@ pub fn is_typeable(line: &str) -> bool {
 const DRAG_THRESHOLD: f32 = 6.0;
 
 fn is_text_key(k: Key) -> bool {
-    letter(k).is_some() || digit(k).is_some() || matches!(k, Key::Space | Key::Minus | Key::Period | Key::Comma | Key::Slash | Key::Semicolon | Key::Equals | Key::OpenBracket | Key::CloseBracket | Key::Backslash | Key::Backtick | Key::Quote)
+    letter(k).is_some()
+        || digit(k).is_some()
+        || matches!(
+            k,
+            Key::Space
+                | Key::Minus
+                | Key::Period
+                | Key::Comma
+                | Key::Slash
+                | Key::Semicolon
+                | Key::Equals
+                | Key::OpenBracket
+                | Key::CloseBracket
+                | Key::Backslash
+                | Key::Backtick
+                | Key::Quote
+        )
 }
 
 fn letter(k: Key) -> Option<u8> {
@@ -1718,7 +1736,13 @@ fn key_bytes(key: Key, m: Modifiers, mode: TermMode, mac: bool) -> Option<Vec<u8
     };
     let tilde = |n: u8| -> Vec<u8> { if modn > 1 { format!("\x1b[{n};{modn}~") } else { format!("\x1b[{n}~") }.into_bytes() };
     let ss3 = |f: char| -> Vec<u8> { if modn > 1 { format!("\x1b[1;{modn}{f}") } else { format!("\x1bO{f}") }.into_bytes() };
-    let esc = |b: &[u8]| -> Vec<u8> { if m.alt { [&[0x1b], b].concat() } else { b.to_vec() } };
+    let esc = |b: &[u8]| -> Vec<u8> {
+        if m.alt {
+            [&[0x1b], b].concat()
+        } else {
+            b.to_vec()
+        }
+    };
     Some(match key {
         Key::ArrowUp => cursor('A'),
         Key::ArrowDown => cursor('B'),
@@ -1767,7 +1791,11 @@ fn key_bytes(key: Key, m: Modifiers, mode: TermMode, mac: bool) -> Option<Vec<u8
         }
         _ if m.alt && !mac => {
             let c = if let Some(l) = letter(key) {
-                if m.shift { l } else { l.to_ascii_lowercase() }
+                if m.shift {
+                    l
+                } else {
+                    l.to_ascii_lowercase()
+                }
             } else if let Some(d) = digit(key) {
                 d
             } else {
@@ -1899,7 +1927,14 @@ pub fn preview(ui: &mut egui::Ui, th: &Theme, font_size: f32, width: f32) -> egu
         &[("drwxr-xr-x  ", pal.fg, false), ("assets", ansi(BLUE), true)],
         &[("-rwxr-xr-x  ", pal.fg, false), ("build.sh", ansi(GREEN), true)],
         &[("-rw-r--r--  ", pal.fg, false), ("README.md", pal.fg, false)],
-        &[("[ok] ", ansi(GREEN), false), ("build  ", pal.fg, false), ("[!] ", ansi(YELLOW), false), ("2 warnings  ", pal.fg, false), ("[x] ", ansi(RED), false), ("0 errors", pal.fg, false)],
+        &[
+            ("[ok] ", ansi(GREEN), false),
+            ("build  ", pal.fg, false),
+            ("[!] ", ansi(YELLOW), false),
+            ("2 warnings  ", pal.fg, false),
+            ("[x] ", ansi(RED), false),
+            ("0 errors", pal.fg, false),
+        ],
         &[("~/projects ", ansi(BLUE), true), ("$ ", ansi(GREEN), true)],
     ];
     let (cell_w, row_h) = ui.fonts(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), pal.fg).size().x / 100.0, f.row_height(&font).ceil()));

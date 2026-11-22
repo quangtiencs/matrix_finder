@@ -260,7 +260,13 @@ impl App {
                 for h in &self.history {
                     ui.horizontal(|ui| {
                         let (r, _) = ui.allocate_exact_size(egui::vec2(10.0, 18.0), egui::Sense::hover());
-                        let color = if h.ok { th.accent } else if h.cancelled { th.weak } else { th.danger };
+                        let color = if h.ok {
+                            th.accent
+                        } else if h.cancelled {
+                            th.weak
+                        } else {
+                            th.danger
+                        };
                         ui.painter().circle_filled(r.center(), 4.0, color);
                         ui.label(RichText::new(&h.title).color(th.text));
                         let amount = if h.items { format!("{} {}", h.bytes, t("items")) } else { human_size(h.bytes) };
@@ -366,39 +372,32 @@ impl App {
         let th = self.theme;
         let what = if pl.items.len() == 1 { pl.items[0].name.clone() } else { format!("{} {}", pl.items.len(), t("item(s)")) };
         let (line, color) = match &self.drag_target {
-            Some(tgt) => (
-                format!("{} → {}", if self.shift_down { t("Move") } else { t("Copy") }, tgt.short_name()),
-                th.accent,
-            ),
+            Some(tgt) => (format!("{} → {}", if self.shift_down { t("Move") } else { t("Copy") }, tgt.short_name()), th.accent),
             None => (t("Drop on a folder or the other panel"), th.weak),
         };
-        egui::Area::new(egui::Id::new("drag-ghost"))
-            .order(egui::Order::Tooltip)
-            .fixed_pos(pos + egui::vec2(16.0, 12.0))
-            .interactable(false)
-            .show(ctx, |ui| {
-                egui::Frame::popup(ui.style()).fill(th.panel).corner_radius(9).inner_margin(egui::Margin::symmetric(10, 7)).show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                        if let Some(first) = pl.items.first() {
-                            icons::entry_icon(ui.painter(), r, first, th);
+        egui::Area::new(egui::Id::new("drag-ghost")).order(egui::Order::Tooltip).fixed_pos(pos + egui::vec2(16.0, 12.0)).interactable(false).show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).fill(th.panel).corner_radius(9).inner_margin(egui::Margin::symmetric(10, 7)).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                    if let Some(first) = pl.items.first() {
+                        icons::entry_icon(ui.painter(), r, first, th);
+                    }
+                    if pl.items.len() > 1 {
+                        let c = r.right_top() + egui::vec2(-1.0, 2.0);
+                        ui.painter().circle_filled(c, 7.0, th.accent);
+                        ui.painter().text(c, egui::Align2::CENTER_CENTER, pl.items.len().min(99).to_string(), egui::FontId::proportional(9.5), th.on_accent());
+                    }
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 1.0;
+                        ui.label(RichText::new(what).color(th.strong()));
+                        ui.label(RichText::new(line).size(11.5).color(color));
+                        if !self.shift_down && self.drag_target.is_some() {
+                            ui.label(RichText::new(t("Hold Shift to move")).size(10.5).color(th.weak));
                         }
-                        if pl.items.len() > 1 {
-                            let c = r.right_top() + egui::vec2(-1.0, 2.0);
-                            ui.painter().circle_filled(c, 7.0, th.accent);
-                            ui.painter().text(c, egui::Align2::CENTER_CENTER, pl.items.len().min(99).to_string(), egui::FontId::proportional(9.5), th.on_accent());
-                        }
-                        ui.vertical(|ui| {
-                            ui.spacing_mut().item_spacing.y = 1.0;
-                            ui.label(RichText::new(what).color(th.strong()));
-                            ui.label(RichText::new(line).size(11.5).color(color));
-                            if !self.shift_down && self.drag_target.is_some() {
-                                ui.label(RichText::new(t("Hold Shift to move")).size(10.5).color(th.weak));
-                            }
-                        });
                     });
                 });
             });
+        });
         ctx.set_cursor_icon(if self.drag_target.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::NoDrop });
     }
 
@@ -456,7 +455,9 @@ impl App {
         for (parent, items) in groups {
             let d = dst.clone();
             let title = format!("{} {} {}", t("Copying"), items.len(), t("item(s)"));
-            self.spawn_job(title, After::Refresh, Some(loc.clone()), vec![parent.clone()], move |p| ops::transfer(Endpoint::Local(parent), items, d, false, Conflict::Rename, p));
+            self.spawn_job(title, After::Refresh, Some(loc.clone()), vec![parent.clone()], move |p| {
+                ops::transfer(Endpoint::Local(parent), items, d, false, Conflict::Rename, p)
+            });
         }
     }
 }
@@ -465,7 +466,11 @@ impl App {
 /// characters the shell would read.
 fn quote_dropped(path: &str) -> String {
     if cfg!(windows) {
-        if path.contains([' ', '&', '(', ')', '^', ';', ',', '\'', '%', '!']) { format!("\"{path}\"") } else { path.to_string() }
+        if path.contains([' ', '&', '(', ')', '^', ';', ',', '\'', '%', '!']) {
+            format!("\"{path}\"")
+        } else {
+            path.to_string()
+        }
     } else {
         terminal::sh_quote(path)
     }
@@ -478,7 +483,11 @@ fn pause_icon(p: &egui::Painter, r: egui::Rect, c: egui::Color32) {
 }
 
 fn play_icon(p: &egui::Painter, r: egui::Rect, c: egui::Color32) {
-    let pts = vec![egui::pos2(r.left() + r.width() * 0.25, r.top()), egui::pos2(r.right() - r.width() * 0.1, r.center().y), egui::pos2(r.left() + r.width() * 0.25, r.bottom())];
+    let pts = vec![
+        egui::pos2(r.left() + r.width() * 0.25, r.top()),
+        egui::pos2(r.right() - r.width() * 0.1, r.center().y),
+        egui::pos2(r.left() + r.width() * 0.25, r.bottom()),
+    ];
     p.add(egui::Shape::convex_polygon(pts, c, egui::Stroke::NONE));
 }
 

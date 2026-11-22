@@ -570,7 +570,9 @@ fn reduce(callable: &V, args: V, depth: usize) -> V {
             _ => V::None,
         },
         "collections.OrderedDict" | "builtins.dict" | "__builtin__.dict" => V::Dict(Rc::default()),
-        "builtins.set" | "builtins.frozenset" | "builtins.list" | "__builtin__.set" | "__builtin__.frozenset" | "__builtin__.list" => V::List(Rc::new(RefCell::new(items.first().and_then(V::items).unwrap_or_default()))),
+        "builtins.set" | "builtins.frozenset" | "builtins.list" | "__builtin__.set" | "__builtin__.frozenset" | "__builtin__.list" => {
+            V::List(Rc::new(RefCell::new(items.first().and_then(V::items).unwrap_or_default())))
+        }
         "torch.device" => V::Str(items.first().and_then(V::as_str).unwrap_or("device").into()),
         _ => V::Obj(Rc::new(Obj { class: name.into(), args, state: RefCell::new(V::None) })),
     }

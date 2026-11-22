@@ -2,8 +2,8 @@
 //! subtitles (`.srt`, `.vtt`). Only the start of a file is read (`MAX_READ`), which
 //! holds more records than the table shows.
 use crate::i18n::t;
-use crate::util::fmt_count;
 use crate::preview::sheet::{clip_cell, finish_sheet, Cell, TableData, MAX_ROWS};
+use crate::util::fmt_count;
 use crate::util::{ext_of, Res};
 
 pub const MAX_READ: u64 = 32 * 1024 * 1024;
@@ -89,7 +89,11 @@ fn ical_time(v: &str, params: &str) -> String {
     match v.split_once('T') {
         Some((d, time)) if time.len() >= 4 && time.is_ascii() => match date(d) {
             Some(d) => {
-                let zone = if time.ends_with('Z') { " UTC".to_string() } else { params.split(';').find_map(|p| p.strip_prefix("TZID=")).map(|z| format!(" {}", z.trim_matches('"'))).unwrap_or_default() };
+                let zone = if time.ends_with('Z') {
+                    " UTC".to_string()
+                } else {
+                    params.split(';').find_map(|p| p.strip_prefix("TZID=")).map(|z| format!(" {}", z.trim_matches('"'))).unwrap_or_default()
+                };
                 format!("{d} {}:{}{zone}", &time[..2], &time[2..4])
             }
             None => v.to_string(),
@@ -213,7 +217,11 @@ fn vcard(text: &str) -> TableData {
         }
     }
     let columns = vec![t("Name"), t("Phone"), t("Email"), t("Organization"), t("Title")];
-    TableData { format: "vCard", info: vec![format!("{} {}", fmt_count(total as u64), t("contacts"))], sheets: vec![sheet_of(t("Contacts"), columns, rows, total)] }
+    TableData {
+        format: "vCard",
+        info: vec![format!("{} {}", fmt_count(total as u64), t("contacts"))],
+        sheets: vec![sheet_of(t("Contacts"), columns, rows, total)],
+    }
 }
 
 // ---------------------------------------------------------------- subtitles

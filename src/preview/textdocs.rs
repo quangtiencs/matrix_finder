@@ -216,7 +216,9 @@ impl Builder {
         }
         let st = self.style;
         match self.spans.last_mut() {
-            Some(l) if l.bold == st.bold && l.italic == st.italic && l.code == st.code && l.strike == st.strike && l.link == st.link => l.text.push_str(&cleaned),
+            Some(l) if l.bold == st.bold && l.italic == st.italic && l.code == st.code && l.strike == st.strike && l.link == st.link => {
+                l.text.push_str(&cleaned)
+            }
             _ => self.spans.push(Span { text: cleaned, bold: st.bold, italic: st.italic, code: st.code, strike: st.strike, link: st.link }),
         }
     }
@@ -354,7 +356,12 @@ fn xhtml_blocks(xml: &str, syntax_theme: &str) -> Vec<MdBlock> {
                     continue;
                 }
                 match tag.as_str() {
-                    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "div" | "section" | "article" | "aside" | "header" | "footer" | "figure" | "figcaption" | "dl" | "dt" | "dd" if table.is_none() => flush(&mut b, quote, &mut item),
+                    "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "p" | "div" | "section" | "article" | "aside" | "header" | "footer" | "figure" | "figcaption"
+                    | "dl" | "dt" | "dd"
+                        if table.is_none() =>
+                    {
+                        flush(&mut b, quote, &mut item)
+                    }
                     "blockquote" => {
                         flush(&mut b, quote, &mut item);
                         quote += 1;
@@ -412,7 +419,11 @@ fn xhtml_blocks(xml: &str, syntax_theme: &str) -> Vec<MdBlock> {
                             b.out.push(MdBlock::Heading(tag.as_bytes()[1] - b'0', spans));
                         }
                     }
-                    "p" | "div" | "section" | "article" | "aside" | "header" | "footer" | "figure" | "figcaption" | "dl" | "dt" | "dd" | "li" if table.is_none() => flush(&mut b, quote, &mut item),
+                    "p" | "div" | "section" | "article" | "aside" | "header" | "footer" | "figure" | "figcaption" | "dl" | "dt" | "dd" | "li"
+                        if table.is_none() =>
+                    {
+                        flush(&mut b, quote, &mut item)
+                    }
                     "blockquote" => {
                         flush(&mut b, quote, &mut item);
                         quote = quote.saturating_sub(1);
@@ -796,8 +807,33 @@ struct RtfGroup {
 fn rtf_ignored(word: &str) -> bool {
     matches!(
         word,
-        "fonttbl" | "colortbl" | "stylesheet" | "info" | "pict" | "object" | "header" | "headerl" | "headerr" | "headerf" | "footer" | "footerl" | "footerr" | "footerf" | "themedata"
-            | "colorschememapping" | "latentstyles" | "datastore" | "generator" | "listtable" | "listoverridetable" | "rsidtbl" | "mmathPr" | "xmlnstbl" | "pgptbl" | "wgrffmtfilter" | "filetbl"
+        "fonttbl"
+            | "colortbl"
+            | "stylesheet"
+            | "info"
+            | "pict"
+            | "object"
+            | "header"
+            | "headerl"
+            | "headerr"
+            | "headerf"
+            | "footer"
+            | "footerl"
+            | "footerr"
+            | "footerf"
+            | "themedata"
+            | "colorschememapping"
+            | "latentstyles"
+            | "datastore"
+            | "generator"
+            | "listtable"
+            | "listoverridetable"
+            | "rsidtbl"
+            | "mmathPr"
+            | "xmlnstbl"
+            | "pgptbl"
+            | "wgrffmtfilter"
+            | "filetbl"
     )
 }
 
@@ -998,10 +1034,16 @@ fn docx_styles(xml: &str) -> HashMap<String, DocxStyle> {
                 let kind = match e.name().as_ref() {
                     b"w:name" => {
                         let name = attr(&e, "w:val").map(|v| v.to_lowercase()).unwrap_or_default();
-                        if let Some(n) = ["list bullet ", "list number ", "list "].iter().find_map(|p| name.strip_prefix(p).and_then(|n| n.trim().parse::<usize>().ok())) {
+                        if let Some(n) =
+                            ["list bullet ", "list number ", "list "].iter().find_map(|p| name.strip_prefix(p).and_then(|n| n.trim().parse::<usize>().ok()))
+                        {
                             depth = n.saturating_sub(1).min(8);
                         }
-                        if name == "title" { Some(DocxStyle::Heading(1)) } else { name.strip_prefix("heading ").and_then(|n| n.trim().parse::<u8>().ok()).map(DocxStyle::Heading) }
+                        if name == "title" {
+                            Some(DocxStyle::Heading(1))
+                        } else {
+                            name.strip_prefix("heading ").and_then(|n| n.trim().parse::<u8>().ok()).map(DocxStyle::Heading)
+                        }
                     }
                     b"w:outlineLvl" => attr(&e, "w:val").and_then(|v| v.parse::<u8>().ok()).map(|n| DocxStyle::Heading(n + 1)),
                     b"w:ilvl" => {
@@ -1212,7 +1254,9 @@ fn pptx_slide_paths<R: Read + Seek>(zip: &mut zip::ZipArchive<R>, budget: &mut u
     let mut r = new_reader(&presentation);
     loop {
         match r.read_event() {
-            Ok(Event::Start(e) | Event::Empty(e)) if local(e.name().as_ref()) == "sldid" => order.extend(attr(&e, "r:id").and_then(|id| targets.get(&id).cloned())),
+            Ok(Event::Start(e) | Event::Empty(e)) if local(e.name().as_ref()) == "sldid" => {
+                order.extend(attr(&e, "r:id").and_then(|id| targets.get(&id).cloned()))
+            }
             Ok(Event::Eof) | Err(_) => break,
             _ => {}
         }
@@ -1445,7 +1489,9 @@ mod tests {
                 MdBlock::Quote(s) => format!("q:{}", spans_text(s)),
                 MdBlock::Item { depth, marker, spans } => format!("{depth}{marker}{}", spans_text(spans)),
                 MdBlock::Code { .. } => "code".into(),
-                MdBlock::Table { rows, .. } => format!("table:{}", rows.iter().map(|r| r.iter().map(|c| spans_text(c)).collect::<Vec<_>>().join(",")).collect::<Vec<_>>().join(";")),
+                MdBlock::Table { rows, .. } => {
+                    format!("table:{}", rows.iter().map(|r| r.iter().map(|c| spans_text(c)).collect::<Vec<_>>().join(",")).collect::<Vec<_>>().join(";"))
+                }
                 MdBlock::Rule => "rule".into(),
             })
             .collect()
@@ -1565,7 +1611,8 @@ c</pre><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>
 
     #[test]
     fn protected_documents_are_recognised() {
-        let manifest = r#"<manifest:manifest><manifest:file-entry manifest:full-path="content.xml"><manifest:encryption-data/></manifest:file-entry></manifest:manifest>"#;
+        let manifest =
+            r#"<manifest:manifest><manifest:file-entry manifest:full-path="content.xml"><manifest:encryption-data/></manifest:file-entry></manifest:manifest>"#;
         let e = load("a.odt", package(&[("META-INF/manifest.xml", manifest), ("content.xml", "scrambled")]), "InspiredGitHub").err().unwrap();
         assert_eq!(e, crate::preview::widgets::LOCKED);
         let method = |algorithm: &str| format!(r#"<encryption><EncryptedData><EncryptionMethod Algorithm="{algorithm}"/></EncryptedData></encryption>"#);

@@ -244,7 +244,14 @@ impl Completer {
         if let Some(first) = names.first() {
             let mut len = first.len();
             for n in &names[1..] {
-                len = first.char_indices().zip(n.chars()).take_while(|((_, a), b)| a.to_lowercase().eq(b.to_lowercase())).map(|((i, a), _)| i + a.len_utf8()).last().unwrap_or(0).min(len);
+                len = first
+                    .char_indices()
+                    .zip(n.chars())
+                    .take_while(|((_, a), b)| a.to_lowercase().eq(b.to_lowercase()))
+                    .map(|((i, a), _)| i + a.len_utf8())
+                    .last()
+                    .unwrap_or(0)
+                    .min(len);
             }
             if first[..len].chars().count() > typed.chars().count() {
                 let head = &self.items[0].text[..self.items[0].text.len() - first.len()];
@@ -364,7 +371,8 @@ mod tests {
     #[test]
     fn folders_only() {
         let q = split("/data/a", None, None).unwrap();
-        let mut c = Completer { active: true, folders_only: true, listed: Some((q.dir.clone(), Arc::new(cands(&["a.zip", "apps", "b"])))), ..Default::default() };
+        let mut c =
+            Completer { active: true, folders_only: true, listed: Some((q.dir.clone(), Arc::new(cands(&["a.zip", "apps", "b"])))), ..Default::default() };
         c.update("/data/a", None, None, false, &egui::Context::default());
         assert_eq!(c.items.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["apps"]);
         c.reset();

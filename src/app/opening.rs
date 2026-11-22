@@ -101,9 +101,7 @@ impl App {
         let dst = Endpoint::Local(tmp);
         let after = if with_dialog { After::OpenWithDialog(target) } else { After::OpenFile(target) };
         let sources = local_file_of(&loc).into_iter().collect();
-        self.spawn_job(format!("{} {}", t("Opening"), e.name), after, None, sources, move |p| {
-            ops::transfer(src, items, dst, false, Conflict::Skip, p)
-        });
+        self.spawn_job(format!("{} {}", t("Opening"), e.name), after, None, sources, move |p| ops::transfer(src, items, dst, false, Conflict::Skip, p));
     }
 
     /// Every two seconds: a copy opened from a server or an archive that an app saved is
@@ -147,35 +145,40 @@ impl App {
         }
         let th = self.theme;
         let mut act: Option<(u64, u8)> = None;
-        egui::Area::new(egui::Id::new("copy-prompts"))
-            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-18.0, 64.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
+        egui::Area::new(egui::Id::new("copy-prompts")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-18.0, 64.0)).order(egui::Order::Foreground).show(
+            ctx,
+            |ui| {
                 for c in self.temp_copies.list.iter().filter(|c| self.copy_prompts.contains(&c.id)) {
-                    egui::Frame::popup(ui.style()).fill(th.panel).corner_radius(10).inner_margin(egui::Margin::symmetric(14, 10)).stroke(egui::Stroke::new(1.0_f32, th.border)).show(ui, |ui| {
-                        ui.set_max_width(420.0);
-                        ui.label(RichText::new(format!("{} “{}”", t("Changed in another app:"), c.name)).strong().color(th.text));
-                        ui.add(egui::Label::new(RichText::new(&c.label).color(th.weak)).truncate());
-                        if !c.is_remote() {
-                            ui.label(RichText::new(t("It came from an archive, which cannot be changed: keep the copy somewhere.")).color(th.weak));
-                        }
-                        ui.horizontal(|ui| {
-                            if c.is_remote() {
-                                let b = egui::Button::new(RichText::new(t("Upload changes")).color(th.on_accent()).strong()).fill(th.accent);
-                                if ui.add(b).clicked() {
-                                    act = Some((c.id, 0));
+                    egui::Frame::popup(ui.style())
+                        .fill(th.panel)
+                        .corner_radius(10)
+                        .inner_margin(egui::Margin::symmetric(14, 10))
+                        .stroke(egui::Stroke::new(1.0_f32, th.border))
+                        .show(ui, |ui| {
+                            ui.set_max_width(420.0);
+                            ui.label(RichText::new(format!("{} “{}”", t("Changed in another app:"), c.name)).strong().color(th.text));
+                            ui.add(egui::Label::new(RichText::new(&c.label).color(th.weak)).truncate());
+                            if !c.is_remote() {
+                                ui.label(RichText::new(t("It came from an archive, which cannot be changed: keep the copy somewhere.")).color(th.weak));
+                            }
+                            ui.horizontal(|ui| {
+                                if c.is_remote() {
+                                    let b = egui::Button::new(RichText::new(t("Upload changes")).color(th.on_accent()).strong()).fill(th.accent);
+                                    if ui.add(b).clicked() {
+                                        act = Some((c.id, 0));
+                                    }
+                                } else if ui.button(t("Show copy")).clicked() {
+                                    act = Some((c.id, 1));
                                 }
-                            } else if ui.button(t("Show copy")).clicked() {
-                                act = Some((c.id, 1));
-                            }
-                            if ui.button(t("Keep local copy")).clicked() {
-                                act = Some((c.id, 2));
-                            }
+                                if ui.button(t("Keep local copy")).clicked() {
+                                    act = Some((c.id, 2));
+                                }
+                            });
                         });
-                    });
                     ui.add_space(4.0);
                 }
-            });
+            },
+        );
         let Some((id, what)) = act else { return };
         match what {
             0 => self.upload_copy(id),
@@ -268,7 +271,14 @@ impl App {
                 let f2 = flag.clone();
                 let loader: preview::Loader = Box::new(move || {
                     // It is set right after the preview is made.
-                    let cancel = (0..1000).find_map(|_| f2.get().cloned().or_else(|| { std::thread::sleep(Duration::from_millis(1)); None })).unwrap_or_default();
+                    let cancel = (0..1000)
+                        .find_map(|_| {
+                            f2.get().cloned().or_else(|| {
+                                std::thread::sleep(Duration::from_millis(1));
+                                None
+                            })
+                        })
+                        .unwrap_or_default();
                     let gone = || cancel.load(std::sync::atomic::Ordering::Relaxed);
                     let mut g = remote::use_soon(&fs, Duration::from_secs(2), &gone)?;
                     g.read_head(&rp, limit, &cancel)
@@ -431,7 +441,11 @@ fn archive_summary(path: &Path, cancel: &crate::preview::media::Cancel) -> Strin
                 t("files"),
                 human_size(total),
                 human_size(packed),
-                if archive::lock_state(path) == archive::Lock::Open { t("Press Enter to browse inside the archive.") } else { format!("🔒 {}. {}", t("Password protected"), t("Press Enter to browse inside the archive.")) },
+                if archive::lock_state(path) == archive::Lock::Open {
+                    t("Press Enter to browse inside the archive.")
+                } else {
+                    format!("🔒 {}. {}", t("Password protected"), t("Press Enter to browse inside the archive."))
+                },
                 list.join("\n"),
                 summary_rest(top.len() - list.len(), cut)
             )

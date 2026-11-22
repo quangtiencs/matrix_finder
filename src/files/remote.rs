@@ -1,8 +1,8 @@
 //! Remote file systems: FTP (suppaftp) and SFTP (libssh2).
 use crate::config::{ConnectionProfile, Protocol};
+use crate::files::vfs::Entry;
 use crate::i18n::t;
 use crate::util::{es, join_slash, Res};
-use crate::files::vfs::Entry;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -121,7 +121,9 @@ pub enum ConnectError {
     /// The server's host key is in no known_hosts file. Nothing was sent to the server
     /// yet; connect again with this fingerprint once the user has accepted it.
     #[cfg_attr(not(feature = "sftp"), allow(dead_code))]
-    UnknownHostKey { fingerprint: String },
+    UnknownHostKey {
+        fingerprint: String,
+    },
     Other(String),
 }
 
@@ -174,12 +176,7 @@ fn remove_tree(fs: &mut dyn RemoteFs, path: &str, is_dir: bool) -> Res<()> {
     }
 }
 
-fn copy_stream(
-    r: &mut dyn Read,
-    w: &mut dyn Write,
-    progress: ProgressFn,
-    cancel: &AtomicBool,
-) -> Res<()> {
+fn copy_stream(r: &mut dyn Read, w: &mut dyn Write, progress: ProgressFn, cancel: &AtomicBool) -> Res<()> {
     let mut buf = vec![0u8; 64 * 1024];
     loop {
         if cancel.load(Ordering::Relaxed) {
@@ -204,11 +201,7 @@ pub struct FtpFs {
 impl FtpFs {
     pub fn connect(p: &ConnectionProfile) -> Res<Self> {
         use std::net::ToSocketAddrs;
-        let addr = (p.host.as_str(), p.port)
-            .to_socket_addrs()
-            .map_err(es)?
-            .next()
-            .ok_or("Cannot resolve host")?;
+        let addr = (p.host.as_str(), p.port).to_socket_addrs().map_err(es)?.next().ok_or("Cannot resolve host")?;
         let mut ftp = suppaftp::FtpStream::connect_timeout(addr, Duration::from_secs(15)).map_err(es)?;
         let user = if p.user.is_empty() { "anonymous" } else { p.user.as_str() };
         ftp.login(ftp_arg(user)?, ftp_arg(&p.password)?).map_err(es)?;
@@ -378,11 +371,7 @@ fn verify_host_key(sess: &ssh2::Session, host: &str, port: u16, trusted_key: Opt
 impl SftpFs {
     pub fn connect(p: &ConnectionProfile, trusted_key: Option<&str>) -> Result<Self, ConnectError> {
         use std::net::{TcpStream, ToSocketAddrs};
-        let addr = (p.host.as_str(), p.port)
-            .to_socket_addrs()
-            .map_err(es)?
-            .next()
-            .ok_or("Cannot resolve host")?;
+        let addr = (p.host.as_str(), p.port).to_socket_addrs().map_err(es)?.next().ok_or("Cannot resolve host")?;
         let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(15)).map_err(es)?;
         let mut sess = ssh2::Session::new().map_err(es)?;
         sess.set_tcp_stream(tcp);
@@ -396,8 +385,7 @@ impl SftpFs {
                 Some(rest) => dirs::home_dir().map(|h| h.join(rest)).unwrap_or_else(|| p.key_file.clone().into()),
                 None => std::path::PathBuf::from(&p.key_file),
             };
-            sess.userauth_pubkey_file(&user, None, &key, pass)
-                .map_err(es)?;
+            sess.userauth_pubkey_file(&user, None, &key, pass).map_err(es)?;
         } else if !p.password.is_empty() {
             sess.userauth_password(&user, &p.password).map_err(es)?;
         } else {
@@ -408,25 +396,17 @@ impl SftpFs {
         }
         let sftp = sess.sftp().map_err(es)?;
         let home = if p.initial_path.is_empty() {
-            sftp.realpath(Path::new("."))
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|_| "/".into())
+            sftp.realpath(Path::new(".")).map(|p| p.to_string_lossy().to_string()).unwrap_or_else(|_| "/".into())
         } else {
             p.initial_path.clone()
         };
-        Ok(Self {
-            _session: sess,
-            sftp,
-            home,
-        })
+        Ok(Self { _session: sess, sftp, home })
     }
 }
 
 #[cfg(feature = "sftp")]
 fn whoami() -> String {
-    std::env::var("USER")
-        .or_else(|_| std::env::var("USERNAME"))
-        .unwrap_or_else(|_| "root".into())
+    std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_else(|_| "root".into())
 }
 
 #[cfg(feature = "sftp")]
@@ -444,9 +424,7 @@ impl RemoteFs for SftpFs {
                 if name == "." || name == ".." {
                     return None;
                 }
-                let mtime = st
-                    .mtime
-                    .map(|t| std::time::UNIX_EPOCH + Duration::from_secs(t));
+                let mtime = st.mtime.map(|t| std::time::UNIX_EPOCH + Duration::from_secs(t));
                 let is_link = st.file_type().is_symlink();
                 let mut is_dir = st.is_dir();
                 if is_link {
@@ -501,9 +479,7 @@ impl RemoteFs for SftpFs {
     fn rename(&mut self, from: &str, to: &str) -> Res<()> {
         use ssh2::RenameFlags;
         // Without OVERWRITE: the server refuses a name that is taken.
-        self.sftp
-            .rename(Path::new(from), Path::new(to), Some(RenameFlags::ATOMIC | RenameFlags::NATIVE))
-            .map_err(es)
+        self.sftp.rename(Path::new(from), Path::new(to), Some(RenameFlags::ATOMIC | RenameFlags::NATIVE)).map_err(es)
     }
     fn is_symlink(&mut self, path: &str) -> Res<bool> {
         let st = self.sftp.lstat(Path::new(path)).map_err(es)?;
@@ -708,13 +684,7 @@ mod live_tests {
     fn parse(var: &str, proto: Protocol) -> Option<ConnectionProfile> {
         let v = std::env::var(var).ok()?;
         let parts: Vec<&str> = v.splitn(4, ':').collect();
-        let mut p = ConnectionProfile {
-            protocol: proto,
-            host: parts[0].into(),
-            port: parts[1].parse().ok()?,
-            user: parts[2].into(),
-            ..Default::default()
-        };
+        let mut p = ConnectionProfile { protocol: proto, host: parts[0].into(), port: parts[1].parse().ok()?, user: parts[2].into(), ..Default::default() };
         let secret = parts.get(3).copied().unwrap_or("");
         if proto == Protocol::Sftp && std::path::Path::new(secret).is_file() {
             p.key_file = secret.into();

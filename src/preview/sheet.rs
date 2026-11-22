@@ -71,11 +71,8 @@ fn is_numeric_type(t: &str) -> bool {
 }
 
 pub fn finish_sheet(name: String, columns: Vec<String>, types: Option<Vec<String>>, rows: Vec<Vec<Cell>>, total: Option<u64>) -> Sheet {
-    let types = types.unwrap_or_else(|| {
-        (0..columns.len())
-            .map(|c| infer_type(rows.iter().filter_map(|r| r.get(c).and_then(|v| v.as_deref()))).to_string())
-            .collect()
-    });
+    let types =
+        types.unwrap_or_else(|| (0..columns.len()).map(|c| infer_type(rows.iter().filter_map(|r| r.get(c).and_then(|v| v.as_deref()))).to_string()).collect());
     let numeric = types.iter().map(|t| is_numeric_type(t)).collect();
     Sheet { name, columns, types, numeric, rows, total_rows: total }
 }

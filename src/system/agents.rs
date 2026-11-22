@@ -83,7 +83,11 @@ pub fn detect() -> Vec<Found> {
             } else {
                 let (path, on_path) = find_in(a.program, &dirs)?;
                 // In PATH the shell finds it by name too, unless it was asked and said no.
-                if on_path && in_shell.is_none() { a.program.to_string() } else { path.to_string_lossy().to_string() }
+                if on_path && in_shell.is_none() {
+                    a.program.to_string()
+                } else {
+                    path.to_string_lossy().to_string()
+                }
             };
             Some(Found { id: a.id, run })
         })
@@ -108,8 +112,21 @@ fn search_dirs() -> Vec<(PathBuf, bool)> {
             extra.push(h.join(".opencode").join("bin"));
         } else {
             for rel in [
-                ".local/bin", ".claude/local", ".npm-global/bin", ".npm/bin", ".bun/bin", ".opencode/bin", ".volta/bin", ".cargo/bin", ".yarn/bin", ".deno/bin",
-                ".asdf/shims", ".local/share/mise/shims", ".local/share/pnpm", "Library/pnpm", "bin",
+                ".local/bin",
+                ".claude/local",
+                ".npm-global/bin",
+                ".npm/bin",
+                ".bun/bin",
+                ".opencode/bin",
+                ".volta/bin",
+                ".cargo/bin",
+                ".yarn/bin",
+                ".deno/bin",
+                ".asdf/shims",
+                ".local/share/mise/shims",
+                ".local/share/pnpm",
+                "Library/pnpm",
+                "bin",
             ] {
                 extra.push(h.join(rel));
             }
@@ -137,7 +154,8 @@ fn search_dirs() -> Vec<(PathBuf, bool)> {
 
 /// The first `program` in `dirs` that can be run, and whether its folder is in PATH.
 fn find_in(program: &str, dirs: &[(PathBuf, bool)]) -> Option<(PathBuf, bool)> {
-    let names: Vec<String> = if cfg!(windows) { ["exe", "cmd", "bat", "ps1"].iter().map(|e| format!("{program}.{e}")).collect() } else { vec![program.to_string()] };
+    let names: Vec<String> =
+        if cfg!(windows) { ["exe", "cmd", "bat", "ps1"].iter().map(|e| format!("{program}.{e}")).collect() } else { vec![program.to_string()] };
     dirs.iter().find_map(|(d, on_path)| names.iter().map(|n| d.join(n)).find(|p| runnable(p)).map(|p| (p, *on_path)))
 }
 

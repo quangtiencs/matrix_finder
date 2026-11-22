@@ -148,7 +148,15 @@ fn sample_sheet(face: &Face, family: &str) -> Option<(Vec<u8>, usize, usize)> {
     let line_h = |size: f32| (size * 1.5).ceil();
     // A symbol font: its first glyphs in a grid instead.
     const CELL: f32 = 54.0;
-    let grid: Vec<GlyphId> = if has_latin { vec![] } else { (1..face.number_of_glyphs().min(2000)).map(GlyphId).filter(|g| face.outline_glyph(*g, &mut Outline(PathBuilder::new(), 0.0, 0.0, 0.0)).is_some()).take(160).collect() };
+    let grid: Vec<GlyphId> = if has_latin {
+        vec![]
+    } else {
+        (1..face.number_of_glyphs().min(2000))
+            .map(GlyphId)
+            .filter(|g| face.outline_glyph(*g, &mut Outline(PathBuilder::new(), 0.0, 0.0, 0.0)).is_some())
+            .take(160)
+            .collect()
+    };
     let per_row = ((SHEET_W - 48) as f32 / CELL) as usize;
     let height = if has_latin { lines.iter().map(|(s, _)| line_h(*s)).sum::<f32>() + 40.0 } else { grid.len().div_ceil(per_row) as f32 * CELL + 40.0 };
     if lines.is_empty() && grid.is_empty() {

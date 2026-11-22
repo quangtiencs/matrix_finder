@@ -70,10 +70,7 @@ fn parse_stl(b: &[u8]) -> Res<Vec<Tri>> {
             return Ok(b[84..]
                 .chunks_exact(50)
                 .take(MAX_TRIANGLES + 1)
-                .map(|c| Tri {
-                    v: [[f(c, 12), f(c, 16), f(c, 20)], [f(c, 24), f(c, 28), f(c, 32)], [f(c, 36), f(c, 40), f(c, 44)]],
-                    color: DEFAULT_COLOR,
-                })
+                .map(|c| Tri { v: [[f(c, 12), f(c, 16), f(c, 20)], [f(c, 24), f(c, 28), f(c, 32)], [f(c, 36), f(c, 40), f(c, 44)]], color: DEFAULT_COLOR })
                 .collect());
         }
     }
@@ -275,10 +272,8 @@ impl Gltf<'_> {
     }
 
     fn material_color(&self, index: Option<u64>) -> [u8; 3] {
-        let factor = index
-            .and_then(|i| self.list("materials").get(i as usize))
-            .and_then(|m| m.get("pbrMetallicRoughness"))
-            .and_then(|p| p.get("baseColorFactor"));
+        let factor =
+            index.and_then(|i| self.list("materials").get(i as usize)).and_then(|m| m.get("pbrMetallicRoughness")).and_then(|p| p.get("baseColorFactor"));
         match factor {
             // Linear colour values to display values.
             Some(_) => {
@@ -302,7 +297,9 @@ impl Gltf<'_> {
             };
             let color = self.material_color(prim.get("material").and_then(|v| v.as_u64()));
             let mut push = |a: usize, b: usize, c: usize| {
-                if let (Some(&a), Some(&b), Some(&c)) = (order.get(a).and_then(|i| points.get(*i)), order.get(b).and_then(|i| points.get(*i)), order.get(c).and_then(|i| points.get(*i))) {
+                if let (Some(&a), Some(&b), Some(&c)) =
+                    (order.get(a).and_then(|i| points.get(*i)), order.get(b).and_then(|i| points.get(*i)), order.get(c).and_then(|i| points.get(*i)))
+                {
                     out.push(Tri { v: [a, b, c], color });
                 }
             };
@@ -492,7 +489,15 @@ impl ModelView {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, name: &str, key: &str, th: &Theme) {
         let size = [0, 1, 2].map(|i| self.mesh.max[i] - self.mesh.min[i]);
-        let mut facts = format!("{} · {} {} · {} × {} × {}", self.mesh.format, crate::util::fmt_count(self.mesh.tris.len() as u64), t("triangles"), size_text(size[0]), size_text(size[1]), size_text(size[2]));
+        let mut facts = format!(
+            "{} · {} {} · {} × {} × {}",
+            self.mesh.format,
+            crate::util::fmt_count(self.mesh.tris.len() as u64),
+            t("triangles"),
+            size_text(size[0]),
+            size_text(size[1]),
+            size_text(size[2])
+        );
         if self.mesh.truncated {
             facts.push_str(&format!(" · {}", t("(truncated)")));
         }
@@ -543,7 +548,13 @@ impl ModelView {
             ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
         let hint = resp.on_hover_cursor(egui::CursorIcon::Grab);
-        ui.painter().text(hint.rect.left_bottom() + egui::vec2(6.0, -6.0), egui::Align2::LEFT_BOTTOM, t("Drag to turn · scroll to zoom · double-click to reset"), egui::FontId::proportional(11.5), th.weak);
+        ui.painter().text(
+            hint.rect.left_bottom() + egui::vec2(6.0, -6.0),
+            egui::Align2::LEFT_BOTTOM,
+            t("Drag to turn · scroll to zoom · double-click to reset"),
+            egui::FontId::proportional(11.5),
+            th.weak,
+        );
     }
 }
 
@@ -666,7 +677,13 @@ mod tests {
 
     #[test]
     fn broken_gltf_does_not_panic() {
-        for json in ["{}", "[]", "not json", r#"{"meshes":[{"primitives":[{"attributes":{"POSITION":9}}]}]}"#, r#"{"accessors":[{"bufferView":99,"componentType":5126,"count":99999999,"type":"VEC3"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}]}"#] {
+        for json in [
+            "{}",
+            "[]",
+            "not json",
+            r#"{"meshes":[{"primitives":[{"attributes":{"POSITION":9}}]}]}"#,
+            r#"{"accessors":[{"bufferView":99,"componentType":5126,"count":99999999,"type":"VEC3"}],"meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}]}"#,
+        ] {
             assert!(load("a.gltf", json.as_bytes(), None).is_err(), "{json}");
         }
     }
@@ -679,11 +696,15 @@ mod tests {
         let tris = parse_stl(&b).unwrap();
         assert_eq!(tris.len(), MAX_TRIANGLES + 1, "the rest is never turned into triangles");
         drop(b);
-        let m = load("a.stl", &{
-            let mut small = vec![0u8; 84];
-            small[80] = 0;
-            small
-        }, None);
+        let m = load(
+            "a.stl",
+            &{
+                let mut small = vec![0u8; 84];
+                small[80] = 0;
+                small
+            },
+            None,
+        );
         assert!(m.is_err(), "no triangles");
     }
 

@@ -448,7 +448,23 @@ impl Wkt<'_> {
             self.i = at;
         }
         let base = kind.trim_end_matches("ZM").trim_end_matches(['Z', 'M']);
-        let base = if matches!(base, "POINT" | "LINESTRING" | "POLYGON" | "MULTIPOINT" | "MULTILINESTRING" | "MULTIPOLYGON" | "GEOMETRYCOLLECTION" | "TRIANGLE" | "TIN" | "POLYHEDRALSURFACE") { base } else { kind.as_str() };
+        let base = if matches!(
+            base,
+            "POINT"
+                | "LINESTRING"
+                | "POLYGON"
+                | "MULTIPOINT"
+                | "MULTILINESTRING"
+                | "MULTIPOLYGON"
+                | "GEOMETRYCOLLECTION"
+                | "TRIANGLE"
+                | "TIN"
+                | "POLYHEDRALSURFACE"
+        ) {
+            base
+        } else {
+            kind.as_str()
+        };
         let name: &'static str = match base {
             "POINT" => {
                 if !self.empty() {
@@ -467,7 +483,11 @@ impl Wkt<'_> {
             "POLYGON" | "TRIANGLE" => {
                 let r = self.rings()?;
                 c.polygon(r);
-                if base == "TRIANGLE" { "Triangle" } else { "Polygon" }
+                if base == "TRIANGLE" {
+                    "Triangle"
+                } else {
+                    "Polygon"
+                }
             }
             "MULTIPOINT" => {
                 for p in self.list(|w| w.multi_point_item())?.into_iter().flatten() {
@@ -610,7 +630,11 @@ impl Wkb<'_> {
             3 | 17 => {
                 let r = self.rings(le, dims)?;
                 c.polygon(r);
-                if base == 17 { "Triangle" } else { "Polygon" }
+                if base == 17 {
+                    "Triangle"
+                } else {
+                    "Polygon"
+                }
             }
             4 => {
                 members(self, c)?;
@@ -850,7 +874,13 @@ fn kml(bytes: &[u8], format: &'static str) -> Res<GeoData> {
 fn kmz(bytes: &[u8]) -> Res<GeoData> {
     use std::io::Read;
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).map_err(|e| format!("KMZ: {e}"))?;
-    let name = zip.file_names().flatten().filter(|n| n.to_lowercase().ends_with(".kml")).min_by_key(|n| (*n != "doc.kml", n.len())).map(|n| n.into_owned()).ok_or("KMZ: no KML document inside")?;
+    let name = zip
+        .file_names()
+        .flatten()
+        .filter(|n| n.to_lowercase().ends_with(".kml"))
+        .min_by_key(|n| (*n != "doc.kml", n.len()))
+        .map(|n| n.into_owned())
+        .ok_or("KMZ: no KML document inside")?;
     let mut kml_bytes = Vec::new();
     zip.by_name(&name).map_err(|e| e.to_string())?.take(crate::preview::MAX_IMAGE as u64).read_to_end(&mut kml_bytes).map_err(|e| e.to_string())?;
     kml(&kml_bytes, "KMZ")
@@ -932,12 +962,18 @@ const GPKG_MAX_ROWS: usize = 2_000_000;
 /// vertex limit; a query that takes too long is cut short.
 pub fn geopackage(path: &std::path::Path) -> Res<GeoData> {
     use rusqlite::{Connection, OpenFlags};
-    let mut conn = Connection::open_with_flags(crate::preview::scidata::sqlite_uri(path), OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX).map_err(|e| e.to_string())?;
+    let mut conn = Connection::open_with_flags(
+        crate::preview::scidata::sqlite_uri(path),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )
+    .map_err(|e| e.to_string())?;
     conn.pragma_update(None, "trusted_schema", "OFF").map_err(|e| e.to_string())?;
     let started = std::time::Instant::now();
     conn.progress_handler(10_000, Some(move || started.elapsed() > std::time::Duration::from_secs(5))).map_err(|e| e.to_string())?;
     let columns: Vec<(String, String)> = {
-        let mut q = conn.prepare("SELECT table_name, column_name FROM gpkg_geometry_columns ORDER BY table_name").map_err(|_| t("Not a GeoPackage this preview can read."))?;
+        let mut q = conn
+            .prepare("SELECT table_name, column_name FROM gpkg_geometry_columns ORDER BY table_name")
+            .map_err(|_| t("Not a GeoPackage this preview can read."))?;
         let rows = q.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).map_err(|e| e.to_string())?;
         rows.flatten().collect()
     };
@@ -1002,7 +1038,11 @@ fn fit_scale(bbox: [f64; 4], w: f64, h: f64) -> f64 {
         // A single point.
         _ => 1.0,
     };
-    if s.is_finite() && s > 0.0 { s } else { 1.0 }
+    if s.is_finite() && s > 0.0 {
+        s
+    } else {
+        1.0
+    }
 }
 
 struct Colors {
@@ -1243,7 +1283,8 @@ impl GeoView {
         }
         let fit = fit_scale(self.data.bbox, rect.width() as f64, rect.height() as f64);
         let scale = fit * self.zoom;
-        let to_data = |p: egui::Pos2, center: Pt, scale: f64| [center[0] + (p.x - rect.center().x) as f64 / scale, center[1] - (p.y - rect.center().y) as f64 / scale];
+        let to_data =
+            |p: egui::Pos2, center: Pt, scale: f64| [center[0] + (p.x - rect.center().x) as f64 / scale, center[1] - (p.y - rect.center().y) as f64 / scale];
         let dragging = resp.dragged();
         if dragging {
             let d = resp.drag_delta();
@@ -1305,10 +1346,22 @@ impl GeoView {
         if let Some(at) = resp.hover_pos() {
             let p = to_data(at, self.center, scale);
             let d = decimals(1.0 / scale);
-            painter.text(rect.right_bottom() + egui::vec2(-6.0, -6.0), egui::Align2::RIGHT_BOTTOM, format!("{:.d$}, {:.d$}", p[0], p[1]), font.clone(), th.text);
+            painter.text(
+                rect.right_bottom() + egui::vec2(-6.0, -6.0),
+                egui::Align2::RIGHT_BOTTOM,
+                format!("{:.d$}, {:.d$}", p[0], p[1]),
+                font.clone(),
+                th.text,
+            );
         }
         let hint = resp.on_hover_cursor(if dragging { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
-        painter.text(hint.rect.left_bottom() + egui::vec2(6.0, -6.0), egui::Align2::LEFT_BOTTOM, t("Drag to move · scroll to zoom · double-click to reset"), font, th.weak);
+        painter.text(
+            hint.rect.left_bottom() + egui::vec2(6.0, -6.0),
+            egui::Align2::LEFT_BOTTOM,
+            t("Drag to move · scroll to zoom · double-click to reset"),
+            font,
+            th.weak,
+        );
     }
 }
 
@@ -1386,15 +1439,23 @@ mod tests {
 
     #[test]
     fn geojson_errors_and_sequences() {
-        for bad in [&br#"{"type":"Polygon","coordinates":[[0,0],[1,1]]}"#[..], br#"{"type":"Point","coordinates":[1]}"#, br#"{"type":"Circle","coordinates":[1,2]}"#, b"[1, 2", b"{}"] {
+        for bad in [
+            &br#"{"type":"Polygon","coordinates":[[0,0],[1,1]]}"#[..],
+            br#"{"type":"Point","coordinates":[1]}"#,
+            br#"{"type":"Circle","coordinates":[1,2]}"#,
+            b"[1, 2",
+            b"{}",
+        ] {
             assert!(load("a.geojson", bad).err().unwrap().starts_with("Not valid GeoJSON:"), "{}", String::from_utf8_lossy(bad));
         }
         assert_eq!(load("a.geojson", br#"{"type":"FeatureCollection","features":[]}"#).err().unwrap(), "This file has no geometry to show.");
-        let seq = "\u{1e}{\"type\":\"Point\",\"coordinates\":[1,2]}\n\n{\"type\":\"Feature\",\"geometry\":{\"type\":\"LineString\",\"coordinates\":[[0,0],[3,4]]}}\n";
+        let seq =
+            "\u{1e}{\"type\":\"Point\",\"coordinates\":[1,2]}\n\n{\"type\":\"Feature\",\"geometry\":{\"type\":\"LineString\",\"coordinates\":[[0,0],[3,4]]}}\n";
         let g = load("a.geojsonl", seq.as_bytes()).unwrap();
         assert_eq!((g.features, g.vertices, g.bbox), (Some(1), 3, [0.0, 0.0, 3.0, 4.0]));
         // Deep nesting is refused, not a crash.
-        let deep = format!("{}{{\"type\":\"Point\",\"coordinates\":[0,0]}}{}", "{\"type\":\"GeometryCollection\",\"geometries\":[".repeat(100), "]}".repeat(100));
+        let deep =
+            format!("{}{{\"type\":\"Point\",\"coordinates\":[0,0]}}{}", "{\"type\":\"GeometryCollection\",\"geometries\":[".repeat(100), "]}".repeat(100));
         assert!(load("a.geojson", deep.as_bytes()).is_err());
     }
 

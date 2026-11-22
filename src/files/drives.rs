@@ -80,7 +80,18 @@ pub fn list() -> Vec<Drive> {
     unique_names(&mut out);
     if out.is_empty() {
         let mount = PathBuf::from("/");
-        out.push(Drive { label: "/".into(), name: "/".into(), system: false, mount, total: 0, avail: 0, fs: String::new(), device: String::new(), removable: false, ejectable: false });
+        out.push(Drive {
+            label: "/".into(),
+            name: "/".into(),
+            system: false,
+            mount,
+            total: 0,
+            avail: 0,
+            fs: String::new(),
+            device: String::new(),
+            removable: false,
+            ejectable: false,
+        });
     }
     out
 }
@@ -234,7 +245,9 @@ pub fn eject_commands(os: Os, d: &Drive) -> Vec<Vec<String>> {
         Os::Windows => {
             let Some(letter) = drive_letter(&d.mount) else { return vec![] };
             // The Eject of Explorer's context menu. The letter is the only thing put in.
-            let script = format!("$d = (New-Object -ComObject Shell.Application).Namespace(17).ParseName('{letter}:'); if ($d) {{ $d.InvokeVerb('Eject') }} else {{ exit 2 }}");
+            let script = format!(
+                "$d = (New-Object -ComObject Shell.Application).Namespace(17).ParseName('{letter}:'); if ($d) {{ $d.InvokeVerb('Eject') }} else {{ exit 2 }}"
+            );
             vec![cmd(&["powershell", "-NoProfile", "-NonInteractive", "-Command", &script])]
         }
     }
@@ -287,7 +300,10 @@ pub fn on_drive(path: &Path, mount: &Path) -> bool {
 
 /// Whether two lists have the same drives (free space aside).
 pub fn same_drives(a: &[Drive], b: &[Drive]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.mount == y.mount && x.label == y.label && x.name == y.name && x.system == y.system && x.ejectable == y.ejectable && x.total == y.total)
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            x.mount == y.mount && x.label == y.label && x.name == y.name && x.system == y.system && x.ejectable == y.ejectable && x.total == y.total
+        })
 }
 
 /// Mount points in `old` that are gone from `new`.
@@ -522,7 +538,9 @@ mod tests {
             assert_eq!(is_ejectable(Os::Linux, p(mount), fs, removable), yes, "linux {mount}");
         }
         // Windows: removable drives with a drive letter.
-        for (mount, removable, yes) in [("C:\\", false, false), ("E:\\", true, true), ("D:\\", false, false), ("\\\\?\\Volume{1234}\\", true, false), ("E:\\x\\", true, false)] {
+        for (mount, removable, yes) in
+            [("C:\\", false, false), ("E:\\", true, true), ("D:\\", false, false), ("\\\\?\\Volume{1234}\\", true, false), ("E:\\x\\", true, false)]
+        {
             assert_eq!(is_ejectable(Os::Windows, p(mount), "NTFS", removable), yes, "windows {mount}");
         }
     }
@@ -552,7 +570,11 @@ mod tests {
         assert!(script.contains("ParseName('E:')"), "{script}");
         assert_eq!(script.matches('\'').count(), 4, "only the drive letter and the verb are quoted: {script}");
         // Never for a drive that cannot be ejected.
-        for (os, d) in [(Os::Mac, drive("/", "apfs", "Macintosh HD", false, Os::Mac)), (Os::Linux, drive("/home", "ext4", "/dev/sda2", false, Os::Linux)), (Os::Windows, drive("C:\\", "NTFS", "", false, Os::Windows))] {
+        for (os, d) in [
+            (Os::Mac, drive("/", "apfs", "Macintosh HD", false, Os::Mac)),
+            (Os::Linux, drive("/home", "ext4", "/dev/sda2", false, Os::Linux)),
+            (Os::Windows, drive("C:\\", "NTFS", "", false, Os::Windows)),
+        ] {
             assert!(eject_commands(os, &d).is_empty(), "{os:?} {}", d.mount.display());
         }
     }
@@ -569,7 +591,10 @@ mod tests {
         let e = friendly_error("Unmount was dissented by PID 4242 (/Applications/Matrix Finder.app/Contents/MacOS/matrix_finder)", 4242);
         assert_eq!(e, crate::i18n::t("Matrix Finder is still reading files on this drive. Try again in a moment."));
         // Linux.
-        for out in ["umount: /media/me/USB: target is busy.", "Error unmounting /dev/sdb1: GDBus.Error:org.freedesktop.UDisks2.Error.DeviceBusy: Error unmounting /dev/sdb1: target is busy"] {
+        for out in [
+            "umount: /media/me/USB: target is busy.",
+            "Error unmounting /dev/sdb1: GDBus.Error:org.freedesktop.UDisks2.Error.DeviceBusy: Error unmounting /dev/sdb1: target is busy",
+        ] {
             assert_eq!(friendly_error(out, 1), crate::i18n::t("A program is using this drive."), "{out}");
         }
         // Anything else: its first line.
@@ -657,7 +682,8 @@ mod tests {
         let (run, _) = fake(vec![Err(std::io::ErrorKind::NotFound.into()), Err(std::io::ErrorKind::NotFound.into())]);
         assert_eq!(eject_with(&usb(), cmds.clone(), run, || false), Err(crate::i18n::t("No program to eject drives was found.")));
         // All fail: the busy message wins over a vaguer one.
-        let (run, _) = fake(vec![Ok((false, "Unmount was dissented by PID 9 (/bin/zsh)".into())), Ok((false, "Volume USB on disk4s1 failed to unmount".into()))]);
+        let (run, _) =
+            fake(vec![Ok((false, "Unmount was dissented by PID 9 (/bin/zsh)".into())), Ok((false, "Volume USB on disk4s1 failed to unmount".into()))]);
         let e = eject_with(&usb(), cmds.clone(), run, || true).unwrap_err();
         assert!(e.contains("zsh"), "{e}");
         let (run, _) = fake(vec![Ok((false, "Unable to eject".into())), Ok((false, "Volume USB on disk4s1 failed to unmount".into()))]);
@@ -708,7 +734,15 @@ mod tests {
         now.lock().unwrap().pop();
         assert_eq!(wait(&w).unwrap().len(), 1);
         // Refresh reads at once, without waiting for the next turn.
-        let w = Watcher::spawn_with({ let n = now.clone(); move || n.lock().unwrap().clone() }, Duration::from_secs(3600), Duration::from_secs(3600), None);
+        let w = Watcher::spawn_with(
+            {
+                let n = now.clone();
+                move || n.lock().unwrap().clone()
+            },
+            Duration::from_secs(3600),
+            Duration::from_secs(3600),
+            None,
+        );
         assert!(wait(&w).is_some());
         now.lock().unwrap().push(usb());
         w.refresh();
@@ -765,10 +799,26 @@ mod tests {
     #[test]
     fn system_mounts_are_not_drives() {
         let p = Path::new;
-        for (mount, fs, yes) in [("/", "apfs", false), ("/System/Volumes/Data", "apfs", true), ("/System/Volumes/VM", "apfs", true), ("/private/var/vm", "apfs", true), ("/Volumes/USB", "hfs", false), ("/Volumes/Recovery", "apfs", false)] {
+        for (mount, fs, yes) in [
+            ("/", "apfs", false),
+            ("/System/Volumes/Data", "apfs", true),
+            ("/System/Volumes/VM", "apfs", true),
+            ("/private/var/vm", "apfs", true),
+            ("/Volumes/USB", "hfs", false),
+            ("/Volumes/Recovery", "apfs", false),
+        ] {
             assert_eq!(is_system(Os::Mac, p(mount), fs), yes, "mac {mount}");
         }
-        for (mount, fs, yes) in [("/", "ext4", false), ("/home", "ext4", false), ("/boot", "ext4", true), ("/boot/efi", "vfat", true), ("/snap/core22/1380", "squashfs", true), ("/opt/app", "squashfs", true), ("/media/me/USB", "vfat", false), ("/var/lib/docker/overlay2/x/merged", "overlay", true)] {
+        for (mount, fs, yes) in [
+            ("/", "ext4", false),
+            ("/home", "ext4", false),
+            ("/boot", "ext4", true),
+            ("/boot/efi", "vfat", true),
+            ("/snap/core22/1380", "squashfs", true),
+            ("/opt/app", "squashfs", true),
+            ("/media/me/USB", "vfat", false),
+            ("/var/lib/docker/overlay2/x/merged", "overlay", true),
+        ] {
             assert_eq!(is_system(Os::Linux, p(mount), fs), yes, "linux {mount}");
         }
         assert!(!is_system(Os::Windows, p("C:\\"), "NTFS"));
@@ -776,7 +826,11 @@ mod tests {
 
     #[test]
     fn same_names_are_told_apart() {
-        let mut v = vec![drive("/Volumes/Untitled", "hfs", "", true, Os::Mac), drive("/Volumes/Untitled 1", "hfs", "", true, Os::Mac), drive("/Volumes/USB", "hfs", "", true, Os::Mac)];
+        let mut v = vec![
+            drive("/Volumes/Untitled", "hfs", "", true, Os::Mac),
+            drive("/Volumes/Untitled 1", "hfs", "", true, Os::Mac),
+            drive("/Volumes/USB", "hfs", "", true, Os::Mac),
+        ];
         for d in &mut v[..2] {
             d.name = "Untitled".into();
         }

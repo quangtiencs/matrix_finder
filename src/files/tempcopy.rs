@@ -94,12 +94,7 @@ impl Copies {
         }
         self.polled = Some(Instant::now());
         self.unsaved = self.list.iter().any(Copy::changed);
-        self.list
-            .iter()
-            .filter(|c| !c.uploading && c.changed())
-            .filter(|c| c.asked.is_none() || c.asked != stamp(&c.path))
-            .map(|c| c.id)
-            .collect()
+        self.list.iter().filter(|c| !c.uploading && c.changed()).filter(|c| c.asked.is_none() || c.asked != stamp(&c.path)).map(|c| c.id).collect()
     }
 
     /// Some copy is edited and its changes are not uploaded (as of the last `poll`).

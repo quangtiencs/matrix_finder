@@ -21,7 +21,11 @@ fn main() -> eframe::Result<()> {
     let args = match instance::Args::parse(std::env::args().skip(1)) {
         Ok(a) => a,
         Err((text, code)) => {
-            if code == 0 { println!("{text}") } else { eprintln!("{text}") }
+            if code == 0 {
+                println!("{text}")
+            } else {
+                eprintln!("{text}")
+            }
             std::process::exit(code);
         }
     };
@@ -85,10 +89,18 @@ mod memcap {
 
     unsafe impl GlobalAlloc for Capped {
         unsafe fn alloc(&self, l: Layout) -> *mut u8 {
-            if reserve(l.size()) { System.alloc(l) } else { std::ptr::null_mut() }
+            if reserve(l.size()) {
+                System.alloc(l)
+            } else {
+                std::ptr::null_mut()
+            }
         }
         unsafe fn alloc_zeroed(&self, l: Layout) -> *mut u8 {
-            if reserve(l.size()) { System.alloc_zeroed(l) } else { std::ptr::null_mut() }
+            if reserve(l.size()) {
+                System.alloc_zeroed(l)
+            } else {
+                std::ptr::null_mut()
+            }
         }
         unsafe fn dealloc(&self, p: *mut u8, l: Layout) {
             USED.fetch_sub(l.size(), Relaxed);

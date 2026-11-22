@@ -3,8 +3,8 @@
 //! Only the headers are read, so a model of many gigabytes opens at once; the small
 //! arrays of an `.npz` are shown too.
 use crate::i18n::t;
-use crate::util::fmt_count;
 use crate::preview::sheet::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_ROWS};
+use crate::util::fmt_count;
 use crate::util::{es, human_size, Res};
 use std::io::{Read, Seek, SeekFrom};
 
@@ -54,7 +54,8 @@ fn tensor_sheet(title: String, rows: &[TensorRow], count_label: String, with_not
         .iter()
         .take(MAX_ROWS)
         .map(|r| {
-            let mut row: Vec<Cell> = vec![Some(clip_cell(r.name.clone())), Some(shape_text(&r.shape)), Some(r.dtype.clone()), r.elements.map(fmt_count), r.bytes.map(human_size)];
+            let mut row: Vec<Cell> =
+                vec![Some(clip_cell(r.name.clone())), Some(shape_text(&r.shape)), Some(r.dtype.clone()), r.elements.map(fmt_count), r.bytes.map(human_size)];
             if with_note {
                 row.push(Some(clip_cell(r.note.clone())));
             }
@@ -175,7 +176,14 @@ pub fn npz_from<R: Read + Seek>(r: R) -> Res<TableData> {
             match (&mut f).take(size).read_to_end(&mut bytes) {
                 Ok(_) => Some(bytes),
                 Err(e) => {
-                    rows.push(TensorRow { name, shape: None, dtype: String::new(), elements: None, bytes: Some(size), note: format!("{}: {e}", t("Cannot be read")) });
+                    rows.push(TensorRow {
+                        name,
+                        shape: None,
+                        dtype: String::new(),
+                        elements: None,
+                        bytes: Some(size),
+                        note: format!("{}: {e}", t("Cannot be read")),
+                    });
                     continue;
                 }
             }
@@ -469,7 +477,14 @@ fn onnx_sparse<R: Read + Seek>(pb: &mut Pb<R>, end: u64) -> Res<TensorRow> {
             pb.pos = after;
             row
         }
-        None => TensorRow { name: String::new(), shape: Some(dims.iter().map(i64::to_string).collect()), dtype: "?".into(), elements: None, bytes: None, note: String::new() },
+        None => TensorRow {
+            name: String::new(),
+            shape: Some(dims.iter().map(i64::to_string).collect()),
+            dtype: "?".into(),
+            elements: None,
+            bytes: None,
+            note: String::new(),
+        },
     };
     row.note = t("sparse");
     Ok(row)
@@ -622,7 +637,8 @@ pub fn onnx_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
     let inputs: Vec<_> = g.inputs.iter().filter(|i| !weight_names.contains(i.0.as_str())).collect();
     let total: u64 = g.weights.iter().filter_map(|r| r.elements).fold(0, u64::saturating_add);
     let opset = m.opsets.iter().find(|(d, _)| d.is_empty() || d == "ai.onnx").map(|(_, v)| v.clone());
-    let mut info = vec![format!("{} {}", fmt_count(g.weights.len() as u64), t("weights")), parameters_info(total), format!("{} {}", fmt_count(g.nodes), t("nodes"))];
+    let mut info =
+        vec![format!("{} {}", fmt_count(g.weights.len() as u64), t("weights")), parameters_info(total), format!("{} {}", fmt_count(g.nodes), t("nodes"))];
     if let Some(v) = &opset {
         info.push(format!("opset {v}"));
     }
@@ -895,7 +911,14 @@ pub fn gguf_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
         let shape = (0..dims).map(|_| g.u64()).collect::<Res<Vec<u64>>>()?;
         let kind = g.u32()?;
         offsets.push(g.u64()?);
-        rows.push(TensorRow { elements: element_count(&shape), shape: Some(shape.iter().map(u64::to_string).collect()), dtype: ggml_type(kind), bytes: None, name, note: String::new() });
+        rows.push(TensorRow {
+            elements: element_count(&shape),
+            shape: Some(shape.iter().map(u64::to_string).collect()),
+            dtype: ggml_type(kind),
+            bytes: None,
+            name,
+            note: String::new(),
+        });
     }
     // Each tensor runs to the next one; the last one to the end of the file.
     let data_start = g.r.stream_position().map_err(es)?.div_ceil(alignment) * alignment;
@@ -1007,7 +1030,13 @@ pub fn torch_from<R: Read + Seek>(mut r: R) -> Res<TableData> {
     let too_large = || t("This file is too complex to preview.");
     let (root, format) = if &magic == b"PK\x03\x04" {
         let mut zip = zip::ZipArchive::new(r).map_err(|_| torch_bad())?;
-        let name = zip.file_names().flatten().filter(|n| *n == "data.pkl" || n.ends_with("/data.pkl")).min_by_key(|n| n.len()).map(|n| n.into_owned()).ok_or_else(torch_bad)?;
+        let name = zip
+            .file_names()
+            .flatten()
+            .filter(|n| *n == "data.pkl" || n.ends_with("/data.pkl"))
+            .min_by_key(|n| n.len())
+            .map(|n| n.into_owned())
+            .ok_or_else(torch_bad)?;
         let entry = zip.by_name(&name).map_err(es)?;
         if entry.size() > TORCH_MAX_PICKLE {
             return Err(too_large());
@@ -1099,7 +1128,8 @@ mod tests {
         short[0] = 50;
         assert_eq!(safetensors_from(Cursor::new(short)).err(), Some(t("This file is cut short.")));
         // Strange entries are listed with what is known of them.
-        let d = safetensors_from(Cursor::new(safetensors(r#"{"x":{"shape":[-1]},"y":{"dtype":"F32","shape":[4294967296,4294967296,4294967296]}}"#, 0))).unwrap();
+        let d =
+            safetensors_from(Cursor::new(safetensors(r#"{"x":{"shape":[-1]},"y":{"dtype":"F32","shape":[4294967296,4294967296,4294967296]}}"#, 0))).unwrap();
         assert_eq!(cell(&d.sheets[0], 0, 1), Some("?"));
         assert_eq!(cell(&d.sheets[0], 1, 3), None);
     }
@@ -1232,9 +1262,15 @@ mod tests {
     #[test]
     fn onnx_weights_inputs_and_operators() {
         let d = onnx_from(Cursor::new(model())).unwrap();
-        assert_eq!(d.info, vec![format!("2 {}", t("weights")), format!("224 {}", t("parameters")), format!("3 {}", t("nodes")), "opset 17".into(), "pytorch 2.1".into()]);
+        assert_eq!(
+            d.info,
+            vec![format!("2 {}", t("weights")), format!("224 {}", t("parameters")), format!("3 {}", t("nodes")), "opset 17".into(), "pytorch 2.1".into()]
+        );
         let w = &d.sheets[0];
-        assert_eq!((cell(w, 0, 0), cell(w, 0, 1), cell(w, 0, 2), cell(w, 0, 3), cell(w, 0, 4)), (Some("conv1.weight"), Some("8 × 3 × 3 × 3"), Some("float32"), Some("216"), Some("864 B")));
+        assert_eq!(
+            (cell(w, 0, 0), cell(w, 0, 1), cell(w, 0, 2), cell(w, 0, 3), cell(w, 0, 4)),
+            (Some("conv1.weight"), Some("8 × 3 × 3 × 3"), Some("float32"), Some("216"), Some("864 B"))
+        );
         assert_eq!((cell(w, 1, 2), cell(w, 1, 4)), (Some("float16"), Some("16 B")));
         // The bias listed among the inputs by an older exporter is left out.
         let io = &d.sheets[1];

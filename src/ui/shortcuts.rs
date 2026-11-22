@@ -139,7 +139,15 @@ struct Def {
     mac: &'static [&'static str],
 }
 
-const fn def(action: Action, id: &'static str, group: Group, in_terminal: bool, windows: &'static [&'static str], linux: &'static [&'static str], mac: &'static [&'static str]) -> Def {
+const fn def(
+    action: Action,
+    id: &'static str,
+    group: Group,
+    in_terminal: bool,
+    windows: &'static [&'static str],
+    linux: &'static [&'static str],
+    mac: &'static [&'static str],
+) -> Def {
     Def { action, id, group, in_terminal, windows, linux, mac }
 }
 
@@ -149,6 +157,7 @@ use Group as G;
 /// Every action, in the order Settings lists them. On Windows and Linux, what must work in
 /// terminals has a `Ctrl+Shift` combination; on macOS, `Cmd` is enough. Left out on purpose:
 /// `Alt+F4`, `Ctrl+Alt+…` (it is AltGr on many keyboards), `Cmd+H`, `Cmd+M`, `Cmd+Q`, `` Cmd+` ``.
+#[rustfmt::skip]
 const DEFS: &[Def] = &[
     def(A::NextTab, "next_tab", G::Tabs, true, &["Ctrl+Tab", "Ctrl+PageDown"], &["Ctrl+Tab", "Ctrl+PageDown"], &["Cmd+Shift+CloseBracket", "Ctrl+Tab"]),
     def(A::PrevTab, "previous_tab", G::Tabs, true, &["Ctrl+Shift+Tab", "Ctrl+PageUp"], &["Ctrl+Shift+Tab", "Ctrl+PageUp"], &["Cmd+Shift+OpenBracket", "Ctrl+Shift+Tab"]),
@@ -243,7 +252,28 @@ impl Action {
     pub fn needs_file_list(self) -> bool {
         matches!(
             self,
-            A::View | A::OpenDefault | A::NewFile | A::NewFolder | A::Copy | A::Move | A::Rename | A::BatchRename | A::Delete | A::DeletePermanently | A::Compress | A::ExtractOther | A::Properties | A::Checksum | A::SelectAll | A::InvertSelection | A::Back | A::Forward | A::Filter | A::FocusPath | A::Bookmark | A::ToggleHidden
+            A::View
+                | A::OpenDefault
+                | A::NewFile
+                | A::NewFolder
+                | A::Copy
+                | A::Move
+                | A::Rename
+                | A::BatchRename
+                | A::Delete
+                | A::DeletePermanently
+                | A::Compress
+                | A::ExtractOther
+                | A::Properties
+                | A::Checksum
+                | A::SelectAll
+                | A::InvertSelection
+                | A::Back
+                | A::Forward
+                | A::Filter
+                | A::FocusPath
+                | A::Bookmark
+                | A::ToggleHidden
         )
     }
 
@@ -425,7 +455,23 @@ impl Chord {
         if matches!(self.key, Key::Escape) {
             return Some(t("Esc always cancels."));
         }
-        if plain && !self.shift && matches!(self.key, Key::Tab | Key::Enter | Key::Space | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight | Key::PageUp | Key::PageDown | Key::Home | Key::End) {
+        if plain
+            && !self.shift
+            && matches!(
+                self.key,
+                Key::Tab
+                    | Key::Enter
+                    | Key::Space
+                    | Key::ArrowUp
+                    | Key::ArrowDown
+                    | Key::ArrowLeft
+                    | Key::ArrowRight
+                    | Key::PageUp
+                    | Key::PageDown
+                    | Key::Home
+                    | Key::End
+            )
+        {
             return Some(t("This key moves around the file list."));
         }
         if plain && !is_function_key(self.key) && !matches!(self.key, Key::Delete | Key::Insert | Key::Backspace) {
@@ -449,11 +495,14 @@ fn parse_all(texts: impl IntoIterator<Item = impl AsRef<str>>) -> Vec<Chord> {
 /// The default keys of an action on an operating system.
 pub fn defaults(action: Action, os: Os) -> Vec<Chord> {
     let d = def_of(action);
-    parse_all(match os {
-        Os::Mac => d.mac,
-        Os::Windows => d.windows,
-        Os::Linux => d.linux,
-    }.iter())
+    parse_all(
+        match os {
+            Os::Mac => d.mac,
+            Os::Windows => d.windows,
+            Os::Linux => d.linux,
+        }
+        .iter(),
+    )
 }
 
 impl Shortcuts {
@@ -630,7 +679,22 @@ mod tests {
     #[test]
     fn reserved_system_keys_are_left_alone() {
         let reserved: [(Os, &[&str]); 3] = [
-            (Os::Mac, &["Cmd+H", "Cmd+M", "Cmd+Q", "Cmd+Tab", "Cmd+Backtick", "Cmd+Space", "Cmd+Shift+3", "Cmd+Shift+4", "Cmd+Shift+5", "Cmd+Alt+Escape", "Cmd+Shift+Q"]),
+            (
+                Os::Mac,
+                &[
+                    "Cmd+H",
+                    "Cmd+M",
+                    "Cmd+Q",
+                    "Cmd+Tab",
+                    "Cmd+Backtick",
+                    "Cmd+Space",
+                    "Cmd+Shift+3",
+                    "Cmd+Shift+4",
+                    "Cmd+Shift+5",
+                    "Cmd+Alt+Escape",
+                    "Cmd+Shift+Q",
+                ],
+            ),
             (Os::Windows, &["Alt+F4", "Alt+Tab", "Ctrl+Alt+Delete", "Alt+Space"]),
             (Os::Linux, &["Alt+F4", "Alt+Tab", "Ctrl+Alt+T", "Alt+F2", "Ctrl+Alt+ArrowLeft", "Ctrl+Alt+ArrowRight", "Alt+Space"]),
         ];
@@ -672,7 +736,18 @@ mod tests {
             for d in DEFS.iter().filter(|d| d.in_terminal) {
                 assert!(defaults(d.action, os).iter().any(|c| c.leaves_terminals_alone()), "{os:?}: {} has no key that works in a terminal", d.id);
             }
-            for a in [A::NextTab, A::PrevTab, A::GoToTab(0), A::GoToTab(7), A::GoToLastTab, A::LastUsedTab, A::FocusWindow(0), A::FocusWindow(3), A::NextWindow, A::PrevWindow] {
+            for a in [
+                A::NextTab,
+                A::PrevTab,
+                A::GoToTab(0),
+                A::GoToTab(7),
+                A::GoToLastTab,
+                A::LastUsedTab,
+                A::FocusWindow(0),
+                A::FocusWindow(3),
+                A::NextWindow,
+                A::PrevWindow,
+            ] {
                 let c = *defaults(a, os).iter().find(|c| c.leaves_terminals_alone()).unwrap();
                 assert_eq!(s.action_for(c.key, None, mods(c.ctrl, c.alt, c.shift, c.cmd), true), Some(a), "{os:?}");
             }
@@ -775,7 +850,10 @@ mod tests {
     #[test]
     fn every_shortcut_can_be_drawn() {
         let ctx = egui::Context::default();
-        crate::style::fonts::apply(&ctx, &crate::style::fonts::FontPrefs { ui_font: String::new(), ui_size: crate::style::fonts::DEFAULT_UI_SIZE, term_font: String::new() });
+        crate::style::fonts::apply(
+            &ctx,
+            &crate::style::fonts::FontPrefs { ui_font: String::new(), ui_size: crate::style::fonts::DEFAULT_UI_SIZE, term_font: String::new() },
+        );
         let _ = ctx.run(Default::default(), |_| {});
         let bold = egui::FontFamily::Name("bold".into());
         let mut texts: Vec<String> = vec![];

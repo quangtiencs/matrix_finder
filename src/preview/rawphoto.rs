@@ -53,11 +53,19 @@ fn type_size(kind: u16) -> u32 {
 
 impl<R: Read + Seek> Tiff<'_, R> {
     fn u16_of(&self, b: [u8; 2]) -> u16 {
-        if self.little { u16::from_le_bytes(b) } else { u16::from_be_bytes(b) }
+        if self.little {
+            u16::from_le_bytes(b)
+        } else {
+            u16::from_be_bytes(b)
+        }
     }
 
     fn u32_of(&self, b: [u8; 4]) -> u32 {
-        if self.little { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) }
+        if self.little {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        }
     }
 
     fn bytes(&mut self, at: u64, n: usize) -> Option<Vec<u8>> {
@@ -355,7 +363,13 @@ mod tests {
         f.resize(sub_at as usize, 0);
         f.extend(ifd(vec![entry(0x0201, 4, 1, large_at), entry(0x0202, 4, 1, large.len() as u32)]));
         f.resize(exif_at as usize, 0);
-        f.extend(ifd(vec![entry(0x829A, 5, 1, exposure), entry(0x829D, 5, 1, aperture), entry(0x8827, 3, 1, 400), entry(0x9003, 2, 20, date), entry(0x920A, 5, 1, focal)]));
+        f.extend(ifd(vec![
+            entry(0x829A, 5, 1, exposure),
+            entry(0x829D, 5, 1, aperture),
+            entry(0x8827, 3, 1, 400),
+            entry(0x9003, 2, 20, date),
+            entry(0x920A, 5, 1, focal),
+        ]));
         f.resize(extra_at as usize, 0);
         f.extend(extra);
         f

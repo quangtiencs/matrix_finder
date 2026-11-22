@@ -126,7 +126,12 @@ type Face = (&'static [u8], u32);
 fn load_face(family: &str, weight: u16) -> Option<Face> {
     static LOADED: OnceLock<Mutex<HashMap<fontdb::ID, Face>>> = OnceLock::new();
     let db = db();
-    let id = db.query(&fontdb::Query { families: &[fontdb::Family::Name(family)], weight: fontdb::Weight(weight), stretch: fontdb::Stretch::Normal, style: fontdb::Style::Normal })?;
+    let id = db.query(&fontdb::Query {
+        families: &[fontdb::Family::Name(family)],
+        weight: fontdb::Weight(weight),
+        stretch: fontdb::Stretch::Normal,
+        style: fontdb::Style::Normal,
+    })?;
     let mut loaded = LOADED.get_or_init(Default::default).lock().ok()?;
     if let Some(face) = loaded.get(&id) {
         return Some(*face);
@@ -270,7 +275,14 @@ fn build_base() -> FontDefinitions {
     let with = |first: &str, rest: &Vec<String>| [vec![first.to_string()], rest.clone()].concat();
     fonts.families.insert(FontFamily::Proportional, with("sans", &defaults_prop));
     fonts.families.insert(FontFamily::Monospace, with("mono", &defaults_mono));
-    for (fam, key) in [("bold", "sans-bold"), ("serif", "serif"), ("serif-bold", "serif-bold"), ("serif-italic", "serif-italic"), ("read", "sans"), ("read-bold", "sans-bold")] {
+    for (fam, key) in [
+        ("bold", "sans-bold"),
+        ("serif", "serif"),
+        ("serif-bold", "serif-bold"),
+        ("serif-italic", "serif-italic"),
+        ("read", "sans"),
+        ("read-bold", "sans-bold"),
+    ] {
         fonts.families.insert(FontFamily::Name(fam.into()), with(key, &defaults_prop));
     }
     // Terminal: JetBrains Mono (OFL), then the Nerd Font symbols (MIT) for the icons and

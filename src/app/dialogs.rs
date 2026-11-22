@@ -26,7 +26,9 @@ impl App {
             // The source, also when reached another way (a terminal's shell reports
             // /private/tmp for /tmp on macOS, or a folder through a link).
             let source = match (&loc, src) {
-                (Some(Location::Local(a)), Location::Local(b)) if terminal => a == b || std::fs::canonicalize(a).ok().is_some_and(|a| std::fs::canonicalize(b).ok() == Some(a)),
+                (Some(Location::Local(a)), Location::Local(b)) if terminal => {
+                    a == b || std::fs::canonicalize(a).ok().is_some_and(|a| std::fs::canonicalize(b).ok() == Some(a))
+                }
                 (l, s) => l.as_ref() == Some(s),
             };
             if let Some(r) = places.iter().find(|(s, _)| *s == side).map(|(_, r)| *r) {
@@ -46,7 +48,17 @@ impl App {
     /// The folder tree under Copy / Move's address, following it (`typed`: the address
     /// changed in this frame); a click on a folder fills the address in.
     #[allow(clippy::too_many_arguments)]
-    fn transfer_tree(&mut self, ui: &mut egui::Ui, th: &Theme, dst: &mut String, base: Option<&Path>, home: Option<&Path>, typed: bool, dst_id: egui::Id, max_h: f32) {
+    fn transfer_tree(
+        &mut self,
+        ui: &mut egui::Ui,
+        th: &Theme,
+        dst: &mut String,
+        base: Option<&Path>,
+        home: Option<&Path>,
+        typed: bool,
+        dst_id: egui::Id,
+        max_h: f32,
+    ) {
         let typed_dir = |dst: &str| crate::ui::pathfield::typed_dir(dst, home, base).filter(|p| p.is_dir());
         let tree = self.dialog_tree.get_or_insert_with(|| {
             let roots = crate::ui::foldertree::roots(home, &self.drives);
@@ -178,51 +190,67 @@ impl App {
         let asset = crate::system::update::asset_for(r, std::env::consts::OS, std::env::consts::ARCH);
         let title = t("Update available");
         let chrome = &self.chrome;
-        chrome.dialog_window(ctx, &title, egui::Id::new("update")).open(&mut open).resizable(false).default_width(460.0).anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)).show(ctx, |ui| {
-            close |= chrome.dialog_title(ui, th, &title);
-            ui.label(RichText::new(format!("Matrix Finder {}", crate::system::update::version_text(r.version))).size(18.0).strong().color(th.strong()));
-            let mut line = format!("{} {}", t("You have"), env!("CARGO_PKG_VERSION"));
-            if !r.date.is_empty() {
-                line.push_str(&format!(" · {} {}", t("released"), r.date));
-            }
-            ui.label(RichText::new(line).color(th.weak));
-            if !notes.is_empty() {
+        chrome
+            .dialog_window(ctx, &title, egui::Id::new("update"))
+            .open(&mut open)
+            .resizable(false)
+            .default_width(460.0)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .show(ctx, |ui| {
+                close |= chrome.dialog_title(ui, th, &title);
+                ui.label(RichText::new(format!("Matrix Finder {}", crate::system::update::version_text(r.version))).size(18.0).strong().color(th.strong()));
+                let mut line = format!("{} {}", t("You have"), env!("CARGO_PKG_VERSION"));
+                if !r.date.is_empty() {
+                    line.push_str(&format!(" · {} {}", t("released"), r.date));
+                }
+                ui.label(RichText::new(line).color(th.weak));
+                if !notes.is_empty() {
+                    ui.add_space(6.0);
+                    egui::Frame::NONE.fill(th.surface).corner_radius(6).inner_margin(8.0).show(ui, |ui| {
+                        egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+                            crate::preview::markdown::markdown_ui(ui, notes, th);
+                        });
+                    });
+                }
                 ui.add_space(6.0);
-                egui::Frame::NONE.fill(th.surface).corner_radius(6).inner_margin(8.0).show(ui, |ui| {
-                    egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
-                        crate::preview::markdown::markdown_ui(ui, notes, th);
+                ui.label(
+                    RichText::new(t("Matrix Finder does not install updates itself: download the new version and install it as you did before."))
+                        .size(12.0)
+                        .color(th.weak),
+                );
+                if asset.is_none() && cfg!(target_os = "macos") {
+                    // Releases are built for Apple silicon only.
+                    ui.label(
+                        RichText::new(t(
+                            "There is no download for this Mac (Intel): build the new version with the install script, as the release page shows.",
+                        ))
+                        .size(12.0)
+                        .color(th.weak),
+                    );
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if let Some(a) = asset {
+                        let label = format!("{} ({})", t("Download"), crate::util::human_size(a.size));
+                        if ui.button(RichText::new(label).strong()).on_hover_text(&a.name).clicked() {
+                            let _ = open::that(&a.url);
+                            close = true;
+                        }
+                    }
+                    if ui.button(t("Open release page")).clicked() {
+                        let _ = open::that(&r.url);
+                        close = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(t("Later")).clicked() {
+                            close = true;
+                        }
+                        if ui.button(t("Skip this version")).on_hover_text(t("The check at start will not offer this version again")).clicked() {
+                            skip = true;
+                        }
                     });
                 });
-            }
-            ui.add_space(6.0);
-            ui.label(RichText::new(t("Matrix Finder does not install updates itself: download the new version and install it as you did before.")).size(12.0).color(th.weak));
-            if asset.is_none() && cfg!(target_os = "macos") {
-                // Releases are built for Apple silicon only.
-                ui.label(RichText::new(t("There is no download for this Mac (Intel): build the new version with the install script, as the release page shows.")).size(12.0).color(th.weak));
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                if let Some(a) = asset {
-                    let label = format!("{} ({})", t("Download"), crate::util::human_size(a.size));
-                    if ui.button(RichText::new(label).strong()).on_hover_text(&a.name).clicked() {
-                        let _ = open::that(&a.url);
-                        close = true;
-                    }
-                }
-                if ui.button(t("Open release page")).clicked() {
-                    let _ = open::that(&r.url);
-                    close = true;
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button(t("Later")).clicked() {
-                        close = true;
-                    }
-                    if ui.button(t("Skip this version")).on_hover_text(t("The check at start will not offer this version again")).clicked() {
-                        skip = true;
-                    }
-                });
             });
-        });
         if skip {
             self.cfg.update_skip = r.tag.clone();
             self.save_cfg();
@@ -256,7 +284,10 @@ impl App {
                     ui.label(t("Edited in other apps and not uploaded:"));
                     ui.label(RichText::new(edited.join(", ")).strong());
                 });
-                ui.label(RichText::new(format!("{}\n{}", t("They are not deleted: quitting moves them to"), crate::files::tempcopy::recovered_dir().display())).color(th.weak));
+                ui.label(
+                    RichText::new(format!("{}\n{}", t("They are not deleted: quitting moves them to"), crate::files::tempcopy::recovered_dir().display()))
+                        .color(th.weak),
+                );
                 ui.add_space(4.0);
             }
             if n > 0 {
@@ -806,7 +837,15 @@ impl App {
         });
         // Esc closes every dialog; a click outside only those that hold nothing typed or chosen.
         let esc = modal.is_top_modal && !modal.any_popup_open && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape));
-        let simple = matches!(dialog, Dialog::Message { .. } | Dialog::CloseTerminals { .. } | Dialog::OpenTerminals { .. } | Dialog::TrustHostKey { .. } | Dialog::Delete { .. } | Dialog::ImportSettings { .. });
+        let simple = matches!(
+            dialog,
+            Dialog::Message { .. }
+                | Dialog::CloseTerminals { .. }
+                | Dialog::OpenTerminals { .. }
+                | Dialog::TrustHostKey { .. }
+                | Dialog::Delete { .. }
+                | Dialog::ImportSettings { .. }
+        );
         if esc || (simple && modal.backdrop_response.clicked()) {
             close = true;
         }
@@ -947,7 +986,13 @@ impl App {
                             Err(format!("{}: {new}", t("Already exists")))
                         } else {
                             // Never over a file that appeared since.
-                            crate::files::safefs::rename_item(&d.join(&old), &target).map_err(|e| if e.kind() == std::io::ErrorKind::AlreadyExists { format!("{}: {new}", t("Already exists")) } else { es(e) })
+                            crate::files::safefs::rename_item(&d.join(&old), &target).map_err(|e| {
+                                if e.kind() == std::io::ErrorKind::AlreadyExists {
+                                    format!("{}: {new}", t("Already exists"))
+                                } else {
+                                    es(e)
+                                }
+                            })
                         }
                     }
                     Location::Remote { id, path } => match self.remotes.get(id) {
@@ -1049,11 +1094,14 @@ impl App {
                     keep_open = false;
                 }
                 ui.label(t("All settings go back to their defaults: Breeze Light theme, English, UI scale, panels, terminal and safety options."));
-                ui.label(RichText::new(t("Kept: bookmarks, saved connections, backup profiles, terminal profiles, default apps and open tabs.")).color(th.weak));
+                ui.label(
+                    RichText::new(t("Kept: bookmarks, saved connections, backup profiles, terminal profiles, default apps and open tabs.")).color(th.weak),
+                );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let b = egui::Button::new(RichText::new(t("Reset")).strong().color(egui::Color32::WHITE)).fill(th.danger).min_size(egui::vec2(96.0, 30.0));
+                        let b =
+                            egui::Button::new(RichText::new(t("Reset")).strong().color(egui::Color32::WHITE)).fill(th.danger).min_size(egui::vec2(96.0, 30.0));
                         if ui.add(b).clicked() {
                             reset = true;
                         }
@@ -1169,7 +1217,8 @@ impl App {
             ui.vertical_centered(|ui| {
                 ui.horizontal(|ui| {
                     // Centre the credit line.
-                    let w = ui.fonts(|f| f.layout_no_wrap(format!("{} quangtiencs.com", t("Made by")), egui::FontId::proportional(14.0), self.theme.text).size().x);
+                    let w =
+                        ui.fonts(|f| f.layout_no_wrap(format!("{} quangtiencs.com", t("Made by")), egui::FontId::proportional(14.0), self.theme.text).size().x);
                     ui.add_space(((ui.available_width() - w) / 2.0 - 4.0).max(0.0));
                     ui.label(RichText::new(t("Made by")).color(self.theme.weak));
                     ui.hyperlink_to(RichText::new("quangtiencs.com").color(self.theme.accent), "https://quangtiencs.com");
@@ -1240,7 +1289,13 @@ fn other_folder_head(ui: &mut egui::Ui, th: &Theme, chosen: bool) -> egui::Respo
     let title_y = if chosen { rect.center().y - 9.0 } else { rect.top() + 6.0 };
     p.text(egui::pos2(x, title_y), egui::Align2::LEFT_TOP, &title, egui::FontId::new(13.5, egui::FontFamily::Name("bold".into())), th.strong());
     if !chosen {
-        p.text(egui::pos2(x, rect.top() + 25.0), egui::Align2::LEFT_TOP, t("Type a path, or pick one from the folder tree"), egui::FontId::proportional(11.5), th.weak);
+        p.text(
+            egui::pos2(x, rect.top() + 25.0),
+            egui::Align2::LEFT_TOP,
+            t("Type a path, or pick one from the folder tree"),
+            egui::FontId::proportional(11.5),
+            th.weak,
+        );
     }
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, chosen, &title));
     resp
@@ -1274,7 +1329,11 @@ fn dst_choice_row(ui: &mut egui::Ui, th: &Theme, c: &DstChoice, chosen: bool, th
     }
     let x = rect.left() + CHOICE_TEXT_X;
     let w = rect.right() - x - 8.0;
-    let title = format!("{} · {}", t("Window {n}").replace("{n}", &c.number.to_string()), if c.terminal { format!("{} · {}", t("Terminal"), c.name) } else { c.name.clone() });
+    let title = format!(
+        "{} · {}",
+        t("Window {n}").replace("{n}", &c.number.to_string()),
+        if c.terminal { format!("{} · {}", t("Terminal"), c.name) } else { c.name.clone() }
+    );
     let line = |text: &str, size: f32, color: egui::Color32, strong: bool| {
         let font = if strong { egui::FontId::new(size, egui::FontFamily::Name("bold".into())) } else { egui::FontId::proportional(size) };
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
@@ -1323,7 +1382,11 @@ fn format_chip(ui: &mut egui::Ui, th: &Theme, f: ArchiveFormat, on: bool, enable
     ui.painter().rect(r, 13.0, fill, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, &text, egui::FontId::proportional(13.0), fg);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, &text));
-    if enabled { resp.on_hover_text(f.blurb()) } else { resp.on_disabled_hover_text(f.blurb()).on_hover_text(f.blurb()) }
+    if enabled {
+        resp.on_hover_text(f.blurb())
+    } else {
+        resp.on_disabled_hover_text(f.blurb()).on_hover_text(f.blurb())
+    }
 }
 
 fn quick_apps() -> Vec<&'static str> {

@@ -67,7 +67,11 @@ impl Chrome {
             Style::Windows
         } else {
             let desk = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
-            if desk.contains("kde") || desk.contains("plasma") || desk.contains("lxqt") { Style::Kde } else { Style::Gnome }
+            if desk.contains("kde") || desk.contains("plasma") || desk.contains("lxqt") {
+                Style::Kde
+            } else {
+                Style::Gnome
+            }
         };
         let (left, right) = match style {
             Style::Gnome => gnome_layout().unwrap_or_else(|| (vec![], vec![Button::Minimize, Button::Maximize, Button::Close])),
@@ -81,9 +85,8 @@ impl Chrome {
         let desk = std::env::var("XDG_CURRENT_DESKTOP").unwrap_or_default().to_lowercase();
         let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some_and(|v| !v.is_empty());
         let rounded_desktop = ["gnome", "kde", "plasma"].iter().any(|d| desk.contains(d));
-        let rounded = integrated
-            && matches!(style, Style::Gnome | Style::Kde)
-            && (forced.is_some() || (cfg!(target_os = "linux") && wayland && rounded_desktop));
+        let rounded =
+            integrated && matches!(style, Style::Gnome | Style::Kde) && (forced.is_some() || (cfg!(target_os = "linux") && wayland && rounded_desktop));
         Self { style, integrated, left, right, mac_tall, rounded, setup_done: false }
     }
 
@@ -102,7 +105,11 @@ impl Chrome {
     /// full screen (and elsewhere, where the system draws the window).
     pub fn window_radius(&self, ctx: &egui::Context) -> f32 {
         let filled = ctx.input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false));
-        if self.rounded && !filled { self.radius() } else { 0.0 }
+        if self.rounded && !filled {
+            self.radius()
+        } else {
+            0.0
+        }
     }
 
     /// Top margin of the first row (macOS: centre it on the traffic lights).
@@ -186,7 +193,13 @@ impl Chrome {
             match self.style {
                 Style::Gnome => {
                     // Adwaita: a soft round button with a small symbolic icon.
-                    let a = if pressed { 0.26 } else if hovered { 0.18 } else { 0.10 };
+                    let a = if pressed {
+                        0.26
+                    } else if hovered {
+                        0.18
+                    } else {
+                        0.10
+                    };
                     p.circle_filled(c, 12.0, th.text.gamma_multiply(a));
                 }
                 _ => {
@@ -227,10 +240,9 @@ impl Chrome {
         let screen = ctx.screen_rect();
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let n = self.right.len() as f32;
-        egui::Area::new(egui::Id::new("caption-buttons"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(pos2(screen.right() - WIN_BTN_W * n, screen.top()))
-            .show(ctx, |ui| {
+        egui::Area::new(egui::Id::new("caption-buttons")).order(egui::Order::Foreground).fixed_pos(pos2(screen.right() - WIN_BTN_W * n, screen.top())).show(
+            ctx,
+            |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.horizontal(|ui| {
                     for &b in &self.right {
@@ -260,7 +272,8 @@ impl Chrome {
                         }
                     }
                 });
-            });
+            },
+        );
     }
 
     /// Make `rect` move the window (and double-click maximise). Register it before
@@ -379,7 +392,13 @@ impl Chrome {
                 close_glyph(p, Rect::from_center_size(btn.center(), vec2(10.0, 10.0)), Stroke::new(1.0_f32, glyph));
             }
             Style::Gnome => {
-                let a = if pressed { 0.26 } else if hovered { 0.18 } else { 0.10 };
+                let a = if pressed {
+                    0.26
+                } else if hovered {
+                    0.18
+                } else {
+                    0.10
+                };
                 p.circle_filled(btn.center(), 12.0, th.text.gamma_multiply(a));
                 close_glyph(p, gr, Stroke::new(1.6_f32, glyph));
             }

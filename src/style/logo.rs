@@ -105,7 +105,13 @@ mod tests {
     /// Renders both variants; set `MATRIX_FINDER_LOGO_OUT=dir` to also write PNGs.
     #[test]
     fn logo_renders() {
-        for (name, svg) in [("matrix_finder", LOGO_SVG), ("matrix_finder-macos", LOGO_MACOS_SVG), ("matrix_finder-small", LOGO_SMALL_SVG), ("glyph", GLYPH_SVG), ("glyph-small", GLYPH_SMALL_SVG)] {
+        for (name, svg) in [
+            ("matrix_finder", LOGO_SVG),
+            ("matrix_finder-macos", LOGO_MACOS_SVG),
+            ("matrix_finder-small", LOGO_SMALL_SVG),
+            ("glyph", GLYPH_SVG),
+            ("glyph-small", GLYPH_SMALL_SVG),
+        ] {
             for size in [16u32, 32, 64, 256, 512] {
                 let rgba = render(svg, size).expect("logo renders");
                 assert_eq!(rgba.len(), (size * size * 4) as usize);

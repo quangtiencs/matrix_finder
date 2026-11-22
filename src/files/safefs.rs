@@ -206,7 +206,8 @@ pub fn rename_noreplace(from: &Path, to: &Path) -> io::Result<()> {
 /// Rename an item to a new name, never over another file. Only the letter case changing
 /// on a disk that ignores case is the same file, and is renamed as such.
 pub fn rename_item(from: &Path, to: &Path) -> io::Result<()> {
-    let case_only = from.file_name().zip(to.file_name()).is_some_and(|(a, b)| a != b && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase());
+    let case_only =
+        from.file_name().zip(to.file_name()).is_some_and(|(a, b)| a != b && a.to_string_lossy().to_lowercase() == b.to_string_lossy().to_lowercase());
     if case_only && from.parent() == to.parent() && same_file(from, to) {
         return std::fs::rename(from, to);
     }
@@ -274,7 +275,9 @@ pub fn place(src: &Path, dst: &Path, policy: Conflict, mut written: Option<&mut 
                     Err(e) if e.kind() == ErrorKind::NotFound => continue,
                     Err(e) => return Err(e),
                     // A folder is never replaced by a file.
-                    Ok(m) if m.is_dir() => return Err(io::Error::new(ErrorKind::AlreadyExists, format!("{}: {}", crate::i18n::t("Already exists"), target.display()))),
+                    Ok(m) if m.is_dir() => {
+                        return Err(io::Error::new(ErrorKind::AlreadyExists, format!("{}: {}", crate::i18n::t("Already exists"), target.display())))
+                    }
                     Ok(_) => {}
                 }
                 // The new file is complete and synced: replacing is one atomic step.

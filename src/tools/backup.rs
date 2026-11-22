@@ -1,7 +1,7 @@
 //! Custom local backups: profiles of sources + exclude globs written to an archive file.
 //! No cloud: backups are plain archive files that can be stored anywhere.
-use crate::files::archive::{self, ArchiveFormat};
 use crate::config::BackupProfile;
+use crate::files::archive::{self, ArchiveFormat};
 use crate::files::ops::Progress;
 use crate::style::theme::Theme;
 use crate::util::{build_globset, es, Res};
@@ -10,18 +10,12 @@ use std::path::{Path, PathBuf};
 pub const MANIFEST: &str = "matrix_finder-backup.json";
 
 fn sanitize(s: &str) -> String {
-    s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
-        .collect()
+    s.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' }).collect()
 }
 
 fn file_name(profile: &BackupProfile, date: &str) -> String {
     let t = if profile.file_template.trim().is_empty() { "{name}-{date}" } else { profile.file_template.trim() };
-    format!(
-        "{}.{}",
-        t.replace("{name}", &sanitize(&profile.name)).replace("{date}", date),
-        profile.format.extension()
-    )
+    format!("{}.{}", t.replace("{name}", &sanitize(&profile.name)).replace("{date}", date), profile.format.extension())
 }
 
 /// A folder or file of a profile: `~` stands for the home folder (as the folder fields
@@ -152,74 +146,69 @@ impl BackupUi {
         let mut action = None;
         let mut open = self.open;
         let title = t("Backup");
-        chrome
-            .dialog_window(ctx, &title, egui::Id::new("backup"))
-            .open(&mut open)
-            .default_size([860.0, 560.0])
-            .max_height(720.0)
-            .show(ctx, |ui| {
-                if chrome.dialog_title(ui, theme, &title) {
-                    self.open = false;
-                }
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(t("Local backups to an archive file (no cloud).")).color(theme.weak));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(format!("⬇ {}", t("Import profiles…"))).clicked() {
-                            action = Some(BackupAction::Import);
+        chrome.dialog_window(ctx, &title, egui::Id::new("backup")).open(&mut open).default_size([860.0, 560.0]).max_height(720.0).show(ctx, |ui| {
+            if chrome.dialog_title(ui, theme, &title) {
+                self.open = false;
+            }
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(t("Local backups to an archive file (no cloud).")).color(theme.weak));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button(format!("⬇ {}", t("Import profiles…"))).clicked() {
+                        action = Some(BackupAction::Import);
+                    }
+                    if ui.button(format!("⬆ {}", t("Export profiles…"))).clicked() {
+                        action = Some(BackupAction::Export);
+                    }
+                });
+            });
+            ui.separator();
+            ui.horizontal_top(|ui| {
+                // Profile list
+                ui.vertical(|ui| {
+                    ui.set_width(190.0);
+                    ui.strong(t("Profiles"));
+                    egui::ScrollArea::vertical().id_salt("bk-list").max_height(330.0).show(ui, |ui| {
+                        for (i, p) in profiles.iter().enumerate() {
+                            if ui.selectable_label(self.selected == i, &p.name).clicked() {
+                                self.selected = i;
+                            }
                         }
-                        if ui.button(format!("⬆ {}", t("Export profiles…"))).clicked() {
-                            action = Some(BackupAction::Export);
+                    });
+                    ui.horizontal(|ui| {
+                        if ui.button("➕").on_hover_text(t("New profile")).clicked() {
+                            let mut p = BackupProfile::default();
+                            if let Some(d) = current_dir {
+                                p.sources.push(d.to_string_lossy().to_string());
+                            }
+                            profiles.push(p);
+                            self.selected = profiles.len() - 1;
+                            action = Some(BackupAction::Changed);
+                        }
+                        if ui.add_enabled(!profiles.is_empty(), egui::Button::new("📋")).on_hover_text(t("Duplicate")).clicked() {
+                            let mut p = profiles[self.selected].clone();
+                            p.name = format!("{} (2)", p.name);
+                            p.last_run = None;
+                            profiles.push(p);
+                            self.selected = profiles.len() - 1;
+                            action = Some(BackupAction::Changed);
+                        }
+                        if ui.add_enabled(!profiles.is_empty(), egui::Button::new("🗑")).on_hover_text(t("Delete")).clicked() {
+                            profiles.remove(self.selected);
+                            self.selected = self.selected.saturating_sub(1);
+                            action = Some(BackupAction::Changed);
                         }
                     });
                 });
-                ui.separator();
-                ui.horizontal_top(|ui| {
-                    // Profile list
-                    ui.vertical(|ui| {
-                        ui.set_width(190.0);
-                        ui.strong(t("Profiles"));
-                        egui::ScrollArea::vertical().id_salt("bk-list").max_height(330.0).show(ui, |ui| {
-                            for (i, p) in profiles.iter().enumerate() {
-                                if ui.selectable_label(self.selected == i, &p.name).clicked() {
-                                    self.selected = i;
-                                }
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            if ui.button("➕").on_hover_text(t("New profile")).clicked() {
-                                let mut p = BackupProfile::default();
-                                if let Some(d) = current_dir {
-                                    p.sources.push(d.to_string_lossy().to_string());
-                                }
-                                profiles.push(p);
-                                self.selected = profiles.len() - 1;
-                                action = Some(BackupAction::Changed);
-                            }
-                            if ui.add_enabled(!profiles.is_empty(), egui::Button::new("📋")).on_hover_text(t("Duplicate")).clicked() {
-                                let mut p = profiles[self.selected].clone();
-                                p.name = format!("{} (2)", p.name);
-                                p.last_run = None;
-                                profiles.push(p);
-                                self.selected = profiles.len() - 1;
-                                action = Some(BackupAction::Changed);
-                            }
-                            if ui.add_enabled(!profiles.is_empty(), egui::Button::new("🗑")).on_hover_text(t("Delete")).clicked() {
-                                profiles.remove(self.selected);
-                                self.selected = self.selected.saturating_sub(1);
-                                action = Some(BackupAction::Changed);
-                            }
-                        });
-                    });
-                    ui.add_space(8.0);
-                    ui.vertical(|ui| {
-                        if profiles.is_empty() {
-                            ui.label(t("No backup profiles yet. Press ➕ to create one."));
-                            return;
-                        }
-                        self.selected = self.selected.min(profiles.len() - 1);
-                        let p = &mut profiles[self.selected];
-                        let before = p.clone();
-                        egui::ScrollArea::vertical().id_salt("bk-form-scroll").max_height(400.0).show(ui, |ui| {
+                ui.add_space(8.0);
+                ui.vertical(|ui| {
+                    if profiles.is_empty() {
+                        ui.label(t("No backup profiles yet. Press ➕ to create one."));
+                        return;
+                    }
+                    self.selected = self.selected.min(profiles.len() - 1);
+                    let p = &mut profiles[self.selected];
+                    let before = p.clone();
+                    egui::ScrollArea::vertical().id_salt("bk-form-scroll").max_height(400.0).show(ui, |ui| {
                         egui::Grid::new("bk-form").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                             ui.label(t("Name"));
                             ui.text_edit_singleline(&mut p.name);
@@ -240,7 +229,13 @@ impl BackupUi {
                                     p.sources.remove(i);
                                 }
                                 ui.horizontal(|ui| {
-                                    let r = self.paths.show(ui, &mut self.new_source, egui::Id::new("bk-source"), opts(272.0, Some(t("Folder or file path"))), theme);
+                                    let r = self.paths.show(
+                                        ui,
+                                        &mut self.new_source,
+                                        egui::Id::new("bk-source"),
+                                        opts(272.0, Some(t("Folder or file path"))),
+                                        theme,
+                                    );
                                     let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                                     if (ui.button(t("Add")).clicked() || enter) && !self.new_source.trim().is_empty() {
                                         p.sources.push(self.new_source.trim().to_string());
@@ -328,52 +323,50 @@ impl BackupUi {
                             });
                             ui.end_row();
                         });
-                        });
-                        if let Some(l) = &p.last_run {
-                            ui.label(egui::RichText::new(format!("{}: {l}", t("Last run"))).color(theme.weak));
-                        }
-                        ui.add_space(6.0);
-                        if ui
-                            .add_enabled(!p.sources.is_empty(), egui::Button::new(egui::RichText::new(format!("▶ {}", t("Run backup now"))).strong()))
-                            .clicked()
-                        {
-                            p.last_run = Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string());
-                            action = Some(BackupAction::Run(p.clone()));
-                        }
-                        if *p != before && action.is_none() {
-                            action = Some(BackupAction::Changed);
-                        }
                     });
-                });
-                ui.separator();
-                ui.strong(t("Restore"));
-                ui.horizontal(|ui| {
-                    ui.label(t("Backup file"));
-                    ui.add(egui::TextEdit::singleline(&mut self.restore_file).desired_width(280.0));
-                    if ui.button("…").clicked() {
-                        if let Some(f) = rfd::FileDialog::new().pick_file() {
-                            self.restore_file = f.to_string_lossy().to_string();
-                        }
+                    if let Some(l) = &p.last_run {
+                        ui.label(egui::RichText::new(format!("{}: {l}", t("Last run"))).color(theme.weak));
                     }
-                });
-                ui.horizontal(|ui| {
-                    ui.label(t("Restore to"));
-                    self.paths.show(ui, &mut self.restore_dest, egui::Id::new("bk-restore-to"), opts(312.0, None), theme);
-                    if ui.button("…").clicked() {
-                        if let Some(f) = rfd::FileDialog::new().pick_folder() {
-                            self.restore_dest = f.to_string_lossy().to_string();
-                        }
+                    ui.add_space(6.0);
+                    if ui.add_enabled(!p.sources.is_empty(), egui::Button::new(egui::RichText::new(format!("▶ {}", t("Run backup now"))).strong())).clicked()
+                    {
+                        p.last_run = Some(chrono::Local::now().format("%Y-%m-%d %H:%M").to_string());
+                        action = Some(BackupAction::Run(p.clone()));
                     }
-                    let ok = !self.restore_file.is_empty() && !self.restore_dest.is_empty();
-                    if ui.add_enabled(ok, egui::Button::new(format!("⟲ {}", t("Restore")))).clicked() {
-                        // `~` and relative paths, as the fields suggest them (relative: from the
-                        // current folder).
-                        let home = dirs::home_dir();
-                        let path = |s: &str| crate::ui::pathfield::typed_dir(s, home.as_deref(), current_dir).unwrap_or_else(|| PathBuf::from(s.trim()));
-                        action = Some(BackupAction::Restore(path(&self.restore_file), path(&self.restore_dest)));
+                    if *p != before && action.is_none() {
+                        action = Some(BackupAction::Changed);
                     }
                 });
             });
+            ui.separator();
+            ui.strong(t("Restore"));
+            ui.horizontal(|ui| {
+                ui.label(t("Backup file"));
+                ui.add(egui::TextEdit::singleline(&mut self.restore_file).desired_width(280.0));
+                if ui.button("…").clicked() {
+                    if let Some(f) = rfd::FileDialog::new().pick_file() {
+                        self.restore_file = f.to_string_lossy().to_string();
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(t("Restore to"));
+                self.paths.show(ui, &mut self.restore_dest, egui::Id::new("bk-restore-to"), opts(312.0, None), theme);
+                if ui.button("…").clicked() {
+                    if let Some(f) = rfd::FileDialog::new().pick_folder() {
+                        self.restore_dest = f.to_string_lossy().to_string();
+                    }
+                }
+                let ok = !self.restore_file.is_empty() && !self.restore_dest.is_empty();
+                if ui.add_enabled(ok, egui::Button::new(format!("⟲ {}", t("Restore")))).clicked() {
+                    // `~` and relative paths, as the fields suggest them (relative: from the
+                    // current folder).
+                    let home = dirs::home_dir();
+                    let path = |s: &str| crate::ui::pathfield::typed_dir(s, home.as_deref(), current_dir).unwrap_or_else(|| PathBuf::from(s.trim()));
+                    action = Some(BackupAction::Restore(path(&self.restore_file), path(&self.restore_dest)));
+                }
+            });
+        });
         self.open &= open;
         if !self.open {
             self.paths.reset();
@@ -431,13 +424,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let profile = BackupProfile { name: "Docs".into(), keep_last: 1, ..Default::default() };
-        let names = [
-            "Docs-20200101-000000.zip",
-            "Docs-20210101-000000.zip",
-            "Docs-old-20200101-000000.zip",
-            "Docs-notes.zip",
-            "Docs-20200101.zip",
-        ];
+        let names = ["Docs-20200101-000000.zip", "Docs-20210101-000000.zip", "Docs-old-20200101-000000.zip", "Docs-notes.zip", "Docs-20200101.zip"];
         let base = std::time::SystemTime::now() - std::time::Duration::from_secs(1000);
         for (i, n) in names.iter().enumerate() {
             let f = std::fs::File::create(dir.join(n)).unwrap();

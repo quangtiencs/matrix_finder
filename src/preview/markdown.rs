@@ -106,25 +106,14 @@ fn parse_markdown_blocks(src: &str, syntax_theme: &str) -> Vec<MdBlock> {
 
     macro_rules! push_span {
         ($text:expr, $code:expr) => {{
-            let s = Span {
-                text: $text,
-                bold: bold > 0 || heading.is_some(),
-                italic: italic > 0,
-                code: $code,
-                strike: strike > 0,
-                link: link > 0,
-            };
+            let s = Span { text: $text, bold: bold > 0 || heading.is_some(), italic: italic > 0, code: $code, strike: strike > 0, link: link > 0 };
             buf.push(s);
         }};
     }
 
     let flush_item = |buf: &mut Vec<Span>, marker: &mut Option<String>, lists: &Vec<Option<u64>>, blocks: &mut Vec<MdBlock>| {
         if !buf.is_empty() || marker.is_some() {
-            blocks.push(MdBlock::Item {
-                depth: lists.len().saturating_sub(1),
-                marker: marker.take().unwrap_or_default(),
-                spans: std::mem::take(buf),
-            });
+            blocks.push(MdBlock::Item { depth: lists.len().saturating_sub(1), marker: marker.take().unwrap_or_default(), spans: std::mem::take(buf) });
         }
     };
 
@@ -269,11 +258,7 @@ fn spans_job(spans: &[Span], size: f32, theme: &Theme, base: Color32, width: f32
         let (family, slanted) = crate::style::fonts::reading_font(s.bold, s.italic);
         let mut fmt = TextFormat {
             font_id: if s.code { FontId::monospace(size * 0.88) } else { FontId::new(size, family) },
-            color: if s.link {
-                theme.accent
-            } else {
-                base
-            },
+            color: if s.link { theme.accent } else { base },
             italics: s.italic && (s.code || slanted),
             ..Default::default()
         };
@@ -318,13 +303,13 @@ pub fn markdown_ui(ui: &mut egui::Ui, blocks: &[MdBlock], theme: &Theme) {
                 ui.add_space(6.0);
             }
             MdBlock::Quote(spans) => {
-                egui::Frame::NONE
-                    .stroke(egui::Stroke::new(0.0_f32, theme.border))
-                    .inner_margin(egui::Margin { left: 10, right: 4, top: 2, bottom: 2 })
-                    .show(ui, |ui| {
+                egui::Frame::NONE.stroke(egui::Stroke::new(0.0_f32, theme.border)).inner_margin(egui::Margin { left: 10, right: 4, top: 2, bottom: 2 }).show(
+                    ui,
+                    |ui| {
                         let r = ui.label(spans_job(spans, 14.0, theme, theme.weak, width - 20.0)).rect;
                         ui.painter().vline(r.left() - 7.0, r.y_range(), egui::Stroke::new(3.0_f32, theme.accent));
-                    });
+                    },
+                );
                 ui.add_space(6.0);
             }
             MdBlock::Item { depth, marker, spans } => {
@@ -402,10 +387,8 @@ mod tests {
         assert!(blocks.iter().any(|b| matches!(b, MdBlock::Table { .. })));
         assert!(blocks.iter().any(|b| matches!(b, MdBlock::Quote(_))));
         assert!(blocks.iter().any(|b| matches!(b, MdBlock::Rule)));
-        let items: Vec<_> = blocks
-            .iter()
-            .filter_map(|b| if let MdBlock::Item { depth, marker, .. } = b { Some((*depth, marker.clone())) } else { None })
-            .collect();
+        let items: Vec<_> =
+            blocks.iter().filter_map(|b| if let MdBlock::Item { depth, marker, .. } = b { Some((*depth, marker.clone())) } else { None }).collect();
         assert_eq!(items[0], (0, "•".into()));
         assert_eq!(items[2], (1, "1.".into()));
         assert!(items.iter().any(|i| i.1.contains('☑')));

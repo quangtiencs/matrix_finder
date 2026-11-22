@@ -673,10 +673,7 @@ mod tests {
 
     #[test]
     fn split() {
-        assert_eq!(
-            shell_split(r#"open -a "My App" {dir}"#),
-            vec!["open", "-a", "My App", "{dir}"]
-        );
+        assert_eq!(shell_split(r#"open -a "My App" {dir}"#), vec!["open", "-a", "My App", "{dir}"]);
     }
 
     #[test]

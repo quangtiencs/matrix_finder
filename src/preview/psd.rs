@@ -103,7 +103,9 @@ pub fn decode<R: Read + Seek>(r: R, max_bytes: u64) -> Res<image::DynamicImage> 
         return Err(t("This image is too large to preview."));
     }
     let palette_len = f.u32()?;
-    let palette = if mode == 2 && palette_len == 768 { f.bytes(768)? } else {
+    let palette = if mode == 2 && palette_len == 768 {
+        f.bytes(768)?
+    } else {
         f.skip(u64::from(palette_len))?;
         vec![]
     };
@@ -123,7 +125,16 @@ pub fn decode<R: Read + Seek>(r: R, max_bytes: u64) -> Res<image::DynamicImage> 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn merged_image<R: Read + Seek>(f: &mut In<R>, big: bool, (width, height): (u32, u32), channels: usize, depth: u16, mode: u16, palette: &[u8], max_bytes: u64) -> Res<image::DynamicImage> {
+fn merged_image<R: Read + Seek>(
+    f: &mut In<R>,
+    big: bool,
+    (width, height): (u32, u32),
+    channels: usize,
+    depth: u16,
+    mode: u16,
+    palette: &[u8],
+    max_bytes: u64,
+) -> Res<image::DynamicImage> {
     let base = match mode {
         // Grayscale, duotone (shown as its gray), indexed.
         1 | 8 | 2 => 1,

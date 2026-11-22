@@ -219,7 +219,12 @@ fn mime_of(globs2: &str, ext: &str) -> Option<String> {
 
 /// The `Name=` of a `.desktop` file's main section.
 fn desktop_name(file: &str) -> Option<String> {
-    file.lines().skip_while(|l| l.trim() != "[Desktop Entry]").skip(1).take_while(|l| !l.starts_with('[')).find_map(|l| l.strip_prefix("Name=")).map(|n| n.trim().to_string())
+    file.lines()
+        .skip_while(|l| l.trim() != "[Desktop Entry]")
+        .skip(1)
+        .take_while(|l| !l.starts_with('['))
+        .find_map(|l| l.strip_prefix("Name="))
+        .map(|n| n.trim().to_string())
 }
 
 #[cfg(test)]
@@ -238,7 +243,8 @@ mod tests {
 
     #[test]
     fn chosen_apps_win_by_longest_extension() {
-        let apps: BTreeMap<String, String> = [("gz".to_string(), "gunzip-app".to_string()), ("tar.gz".to_string(), "tar-app".to_string()), ("pdf".to_string(), "reader".to_string())].into();
+        let apps: BTreeMap<String, String> =
+            [("gz".to_string(), "gunzip-app".to_string()), ("tar.gz".to_string(), "tar-app".to_string()), ("pdf".to_string(), "reader".to_string())].into();
         assert_eq!(program_for(&apps, "a.tar.gz"), Some("tar-app"));
         assert_eq!(program_for(&apps, "notes.GZ"), Some("gunzip-app"));
         assert_eq!(program_for(&apps, "x.y.PDF"), Some("reader"));

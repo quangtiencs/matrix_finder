@@ -6,10 +6,10 @@
 //! One [`PathField`] serves several fields: the one being typed in (or whose tree is
 //! open) owns the suggestions and the tree, as only one field has the keyboard at a time.
 
-use crate::ui::completion::Completer;
-use crate::ui::foldertree::{self, FolderTree, Popup};
 use crate::i18n::t;
 use crate::style::theme::Theme;
+use crate::ui::completion::Completer;
+use crate::ui::foldertree::{self, FolderTree, Popup};
 use egui::{Id, Key, Modifiers};
 use std::path::{Path, PathBuf};
 
@@ -192,7 +192,8 @@ impl PathField {
                 }
                 let r = ui.add(edit);
                 let accent = th.accent;
-                let b = crate::style::icons::icon_button(ui, 28.0, true, th, |p, r, c| foldertree::icon(p, r, if tree_open { accent } else { c })).on_hover_text(t("Folder tree"));
+                let b = crate::style::icons::icon_button(ui, 28.0, true, th, |p, r, c| foldertree::icon(p, r, if tree_open { accent } else { c }))
+                    .on_hover_text(t("Folder tree"));
                 b.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Folder tree")));
                 (r, b)
             })

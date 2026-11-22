@@ -17,7 +17,11 @@ const MAX_WORKBOOK_UNPACKED: u64 = 128 * 1024 * 1024;
 /// The spreadsheet readers' errors, with the one for a password turned into ours.
 fn workbook_err(e: calamine::Error) -> String {
     let text = e.to_string();
-    if text.contains("password protected") { crate::preview::widgets::LOCKED.to_string() } else { text }
+    if text.contains("password protected") {
+        crate::preview::widgets::LOCKED.to_string()
+    } else {
+        text
+    }
 }
 
 fn is_streamed_workbook(name: &str) -> bool {
@@ -48,9 +52,48 @@ fn check_workbook<R: Read + Seek>(mut r: R, streamed: bool) -> Res<()> {
 pub fn is_table(name: &str) -> bool {
     matches!(
         ext_of(name).as_str(),
-        "parquet" | "pq" | "avro" | "xlsx" | "xlsm" | "xlsb" | "xls" | "ods" | "csv" | "tsv" | "sqlite" | "sqlite3" | "db3" | "jsonl" | "ndjson" | "npy" | "feather" | "arrow" | "arrows" | "h5" | "hdf5"
-            | "npz" | "safetensors" | "onnx" | "rdata" | "rda" | "rds" | "gguf" | "pt" | "pth" | "ckpt" | "mat" | "nc" | "nc4" | "cdf" | "orc" | "dta"
-            | "sav" | "zsav" | "sas7bdat" | "duckdb" | "ddb"
+        "parquet"
+            | "pq"
+            | "avro"
+            | "xlsx"
+            | "xlsm"
+            | "xlsb"
+            | "xls"
+            | "ods"
+            | "csv"
+            | "tsv"
+            | "sqlite"
+            | "sqlite3"
+            | "db3"
+            | "jsonl"
+            | "ndjson"
+            | "npy"
+            | "feather"
+            | "arrow"
+            | "arrows"
+            | "h5"
+            | "hdf5"
+            | "npz"
+            | "safetensors"
+            | "onnx"
+            | "rdata"
+            | "rda"
+            | "rds"
+            | "gguf"
+            | "pt"
+            | "pth"
+            | "ckpt"
+            | "mat"
+            | "nc"
+            | "nc4"
+            | "cdf"
+            | "orc"
+            | "dta"
+            | "sav"
+            | "zsav"
+            | "sas7bdat"
+            | "duckdb"
+            | "ddb"
     ) || is_torch_bin(name)
         || crate::preview::records::is_record_text(name)
 }
@@ -74,8 +117,28 @@ fn is_torch_bin(name: &str) -> bool {
 
 /// Formats of which only a header or an index is read, so a file of any size opens.
 pub fn reads_header_only(name: &str) -> bool {
-    matches!(ext_of(name).as_str(), "npy" | "npz" | "safetensors" | "onnx" | "gguf" | "pt" | "pth" | "ckpt" | "mat" | "nc" | "nc4" | "cdf" | "orc" | "dta" | "sav" | "zsav" | "sas7bdat" | "duckdb" | "ddb")
-        || is_torch_bin(name)
+    matches!(
+        ext_of(name).as_str(),
+        "npy"
+            | "npz"
+            | "safetensors"
+            | "onnx"
+            | "gguf"
+            | "pt"
+            | "pth"
+            | "ckpt"
+            | "mat"
+            | "nc"
+            | "nc4"
+            | "cdf"
+            | "orc"
+            | "dta"
+            | "sav"
+            | "zsav"
+            | "sas7bdat"
+            | "duckdb"
+            | "ddb"
+    ) || is_torch_bin(name)
 }
 
 pub fn is_csv(name: &str) -> bool {
@@ -130,8 +193,7 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Res<TableData> {
     match ext_of(name).as_str() {
         "parquet" | "pq" => {
             let b = bytes::Bytes::from(bytes);
-            let r = parquet::file::serialized_reader::SerializedFileReader::new(b)
-                .map_err(|e| format!("{e} (the file may be too large to preview here)"))?;
+            let r = parquet::file::serialized_reader::SerializedFileReader::new(b).map_err(|e| format!("{e} (the file may be too large to preview here)"))?;
             parquet_from(r)
         }
         "avro" => avro_from(std::io::Cursor::new(bytes)),
@@ -162,7 +224,9 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Res<TableData> {
         "sav" | "zsav" => crate::preview::datameta::spss_from(std::io::Cursor::new(bytes)),
         "sas7bdat" => crate::preview::datameta::sas_from(std::io::Cursor::new(bytes)),
         // The tool only reads real files.
-        _ if crate::preview::records::is_record_text(name) => crate::preview::records::load(name, &bytes[..bytes.len().min(crate::preview::records::MAX_READ as usize)]),
+        _ if crate::preview::records::is_record_text(name) => {
+            crate::preview::records::load(name, &bytes[..bytes.len().min(crate::preview::records::MAX_READ as usize)])
+        }
         "duckdb" | "ddb" => {
             let dir = crate::util::TempDir::new()?;
             let path = dir.path().join("preview.duckdb");
@@ -176,8 +240,6 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Res<TableData> {
         }
     }
 }
-
-
 
 // ---------------------------------------------------------------- CSV
 
@@ -202,11 +264,7 @@ fn sniff_delimiter(name: &str, head: &[u8]) -> u8 {
 }
 
 fn csv_from<R: Read>(r: R, delim: u8) -> Res<TableData> {
-    let mut rdr = csv::ReaderBuilder::new()
-        .delimiter(delim)
-        .flexible(true)
-        .has_headers(true)
-        .from_reader(r.take(MAX_CSV_BYTES));
+    let mut rdr = csv::ReaderBuilder::new().delimiter(delim).flexible(true).has_headers(true).from_reader(r.take(MAX_CSV_BYTES));
     let mut columns: Vec<String> = rdr.headers().map_err(es)?.iter().take(MAX_COLS).map(|h| clip_cell(h.to_string())).collect();
     let mut rows = Vec::new();
     let mut more = false;
@@ -235,11 +293,7 @@ fn csv_from<R: Read>(r: R, delim: u8) -> Res<TableData> {
         b'|' => "pipe",
         _ => "comma",
     };
-    Ok(TableData {
-        format: "CSV",
-        info: vec![format!("{sep}-separated")],
-        sheets: vec![finish_sheet(String::new(), columns, None, rows, total)],
-    })
+    Ok(TableData { format: "CSV", info: vec![format!("{sep}-separated")], sheets: vec![finish_sheet(String::new(), columns, None, rows, total)] })
 }
 
 // ---------------------------------------------------------------- Excel / ODS
@@ -323,11 +377,8 @@ fn excel_from<RS: Read + Seek>(mut wb: calamine::Sheets<RS>) -> Res<TableData> {
         };
         let mut iter = range.rows();
         let header: Vec<Cell> = iter.next().map(|r| r.iter().take(MAX_COLS).map(cell).collect()).unwrap_or_default();
-        let columns: Vec<String> = header
-            .iter()
-            .enumerate()
-            .map(|(i, h)| h.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| col_letter(i)))
-            .collect();
+        let columns: Vec<String> =
+            header.iter().enumerate().map(|(i, h)| h.clone().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| col_letter(i))).collect();
         let rows: Vec<Vec<Cell>> = iter.take(MAX_ROWS).map(|r| r.iter().take(MAX_COLS).map(cell).collect()).collect();
         let total = range.height().saturating_sub(1) as u64;
         sheets.push(finish_sheet(name.clone(), columns, None, rows, Some(total)));
@@ -389,9 +440,7 @@ fn parquet_field(f: &parquet::record::Field) -> Cell {
     }
 }
 
-fn parquet_from<R: parquet::file::reader::ChunkReader + 'static>(
-    reader: parquet::file::serialized_reader::SerializedFileReader<R>,
-) -> Res<TableData> {
+fn parquet_from<R: parquet::file::reader::ChunkReader + 'static>(reader: parquet::file::serialized_reader::SerializedFileReader<R>) -> Res<TableData> {
     use parquet::file::reader::FileReader;
     let meta = reader.metadata();
     let fm = meta.file_metadata();
@@ -463,12 +512,12 @@ fn avro_value(v: &apache_avro::types::Value) -> Cell {
         V::Bytes(b) | V::Fixed(_, b) => format!("<{} bytes>", b.len()),
         V::Union(_, inner) => return avro_value(inner),
         V::Date(d) => (chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap() + chrono::Duration::days(*d as i64)).to_string(),
-        V::TimestampMillis(ms) | V::LocalTimestampMillis(ms) => chrono::DateTime::from_timestamp_millis(*ms)
-            .map(|d| d.naive_utc().to_string())
-            .unwrap_or_else(|| ms.to_string()),
-        V::TimestampMicros(us) | V::LocalTimestampMicros(us) => chrono::DateTime::from_timestamp_micros(*us)
-            .map(|d| d.naive_utc().to_string())
-            .unwrap_or_else(|| us.to_string()),
+        V::TimestampMillis(ms) | V::LocalTimestampMillis(ms) => {
+            chrono::DateTime::from_timestamp_millis(*ms).map(|d| d.naive_utc().to_string()).unwrap_or_else(|| ms.to_string())
+        }
+        V::TimestampMicros(us) | V::LocalTimestampMicros(us) => {
+            chrono::DateTime::from_timestamp_micros(*us).map(|d| d.naive_utc().to_string()).unwrap_or_else(|| us.to_string())
+        }
         V::Uuid(u) => u.to_string(),
         other => match serde_json::Value::try_from(other.clone()) {
             Ok(j) => j.to_string(),
@@ -584,10 +633,8 @@ mod tests {
     #[test]
     fn avro_roundtrip() {
         use apache_avro::{types::Record, Schema, Writer};
-        let schema = Schema::parse_str(
-            r#"{"type":"record","name":"User","fields":[{"name":"id","type":"long"},{"name":"email","type":["null","string"]}]}"#,
-        )
-        .unwrap();
+        let schema =
+            Schema::parse_str(r#"{"type":"record","name":"User","fields":[{"name":"id","type":"long"},{"name":"email","type":["null","string"]}]}"#).unwrap();
         let mut w = Writer::new(&schema, Vec::new());
         for (id, email) in [(1i64, Some("a@x.vn")), (2, None)] {
             let mut r = Record::new(&schema).unwrap();

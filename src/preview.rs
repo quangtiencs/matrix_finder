@@ -1,15 +1,15 @@
 //! File previews: images (raster + SVG), Markdown, syntax-highlighted code,
 //! plain text and a hex dump for binaries, and the views of formats read elsewhere.
 pub mod audio;
-pub mod code;
 pub mod certview;
+pub mod code;
 pub mod datameta;
 pub mod docview;
 pub mod fontview;
 pub mod geoview;
 pub mod jsonview;
-pub mod markdown;
 pub mod mail;
+pub mod markdown;
 pub mod media;
 pub mod model3d;
 pub mod pickle;
@@ -23,10 +23,10 @@ pub mod table;
 pub mod tensors;
 pub mod textdocs;
 pub mod widgets;
-use crate::style::theme::Theme;
 use crate::preview::code::{code_view, highlight, Styled};
 use crate::preview::markdown::{markdown_ui, parse_markdown, MdBlock};
 use crate::preview::widgets::{header_row, locked_ui, upload_texture, LOCKED};
+use crate::style::theme::Theme;
 use crate::util::{ext_of, human_size, Res};
 use egui::{Color32, FontId, TextureHandle};
 use std::path::{Path, PathBuf};
@@ -117,13 +117,11 @@ pub fn classify(name: &str) -> Kind {
         | "hdr" | "psd" | "psb" => Kind::Image,
         "svg" => Kind::Svg,
         "md" | "markdown" | "mdown" | "mkd" => Kind::Markdown,
-        "rs" | "py" | "pyw" | "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "java" | "kt" | "kts" | "c" | "h" | "cpp"
-        | "cc" | "cxx" | "hpp" | "hh" | "cs" | "go" | "rb" | "php" | "swift" | "scala" | "sh" | "bash" | "zsh"
-        | "fish" | "ps1" | "bat" | "cmd" | "lua" | "pl" | "pm" | "r" | "sql" | "html" | "htm" | "xml" | "css"
-        | "scss" | "sass" | "less" | "json" | "jsonc" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "hs"
-        | "ml" | "mli" | "clj" | "erl" | "ex" | "exs" | "dart" | "vue" | "svelte" | "zig" | "nim" | "d" | "groovy"
-        | "gradle" | "tex" | "m" | "mm" | "proto" | "dockerfile" | "makefile" | "cmake" | "diff" | "patch" | "vim"
-        | "el" | "lisp" | "tf" | "nix" | "graphql" => Kind::Code,
+        "rs" | "py" | "pyw" | "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "java" | "kt" | "kts" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "cs"
+        | "go" | "rb" | "php" | "swift" | "scala" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "lua" | "pl" | "pm" | "r" | "sql" | "html"
+        | "htm" | "xml" | "css" | "scss" | "sass" | "less" | "json" | "jsonc" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "hs" | "ml" | "mli"
+        | "clj" | "erl" | "ex" | "exs" | "dart" | "vue" | "svelte" | "zig" | "nim" | "d" | "groovy" | "gradle" | "tex" | "m" | "mm" | "proto"
+        | "dockerfile" | "makefile" | "cmake" | "diff" | "patch" | "vim" | "el" | "lisp" | "tf" | "nix" | "graphql" => Kind::Code,
         "txt" | "log" | "text" | "nfo" | "rst" | "adoc" | "properties" | "env" | "gitignore" | "lock" => Kind::Text,
         _ => match lower.as_str() {
             "makefile" | "dockerfile" | "cmakelists.txt" | "justfile" | "rakefile" | "gemfile" | "vagrantfile" => Kind::Code,
@@ -175,12 +173,38 @@ pub fn too_large(name: &str, size: u64, readable: Option<u64>) -> bool {
 
 enum Loaded {
     /// `details` are the photo's EXIF facts, if it has any.
-    Image { rgba: Vec<u8>, w: usize, h: usize, orig: (u32, u32), premultiplied: bool, fmt: String, more_frames: Vec<AnimFrame>, first_delay: f32, details: Vec<crate::preview::certview::Row> },
-    Code { lines: Vec<Styled>, bg: Color32, truncated: bool, lang: String },
-    Markdown { blocks: Vec<MdBlock>, source: Vec<Styled>, bg: Color32 },
+    Image {
+        rgba: Vec<u8>,
+        w: usize,
+        h: usize,
+        orig: (u32, u32),
+        premultiplied: bool,
+        fmt: String,
+        more_frames: Vec<AnimFrame>,
+        first_delay: f32,
+        details: Vec<crate::preview::certview::Row>,
+    },
+    Code {
+        lines: Vec<Styled>,
+        bg: Color32,
+        truncated: bool,
+        lang: String,
+    },
+    Markdown {
+        blocks: Vec<MdBlock>,
+        source: Vec<Styled>,
+        bg: Color32,
+    },
     /// `total` is how much was read; `more` when the file goes on past it.
-    Hex { bytes: Vec<u8>, total: usize, more: bool },
-    Table { data: crate::preview::sheet::TableData, source: Option<(Vec<Styled>, Color32)> },
+    Hex {
+        bytes: Vec<u8>,
+        total: usize,
+        more: bool,
+    },
+    Table {
+        data: crate::preview::sheet::TableData,
+        source: Option<(Vec<Styled>, Color32)>,
+    },
     Pdf(Box<crate::preview::docview::PdfView>),
     Notebook(Box<crate::preview::docview::NotebookView>),
     Model(Box<crate::preview::model3d::ModelView>),
@@ -298,14 +322,21 @@ impl Drop for LoadingTurn {
 }
 
 #[cfg(test)]
-fn in_background(cancel: Option<crate::preview::media::Cancel>, job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static) -> Receiver<Loaded> {
+fn in_background(
+    cancel: Option<crate::preview::media::Cancel>,
+    job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static,
+) -> Receiver<Loaded> {
     in_background_waking(cancel, Wake::default(), job)
 }
 
 /// Load in the background: on a roomy stack, and turning a panic into a message, so a
 /// file that breaks a parser shows an error instead of loading forever. The UI is woken
 /// when the result is sent.
-fn in_background_waking(cancel: Option<crate::preview::media::Cancel>, wake: Wake, job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static) -> Receiver<Loaded> {
+fn in_background_waking(
+    cancel: Option<crate::preview::media::Cancel>,
+    wake: Wake,
+    job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static,
+) -> Receiver<Loaded> {
     let (tx, rx) = channel();
     let _ = std::thread::Builder::new().name("preview".into()).stack_size(LOADER_STACK).spawn(move || {
         let _turn = match &cancel {
@@ -377,7 +408,11 @@ impl Preview {
 
     /// The archive whose password was asked for, once.
     pub fn take_password_request(&mut self) -> Option<PathBuf> {
-        if std::mem::take(&mut self.password_wanted) { self.archive.clone() } else { None }
+        if std::mem::take(&mut self.password_wanted) {
+            self.archive.clone()
+        } else {
+            None
+        }
     }
 
     /// `limit` is how much of the file `loader` reads at most.
@@ -391,7 +426,12 @@ impl Preview {
                 let cut_short = bytes.len() >= limit;
                 match decode(&n, bytes, &theme, max_texture, &cancel, &|early| drop(tx.send(early))) {
                     // What it failed on is the missing rest of the file.
-                    Loaded::Error(_) if cut_short => Loaded::Error(format!("{} ({} {})", crate::i18n::t("This file is too large to preview here."), crate::i18n::t("limit:"), human_size(limit as u64))),
+                    Loaded::Error(_) if cut_short => Loaded::Error(format!(
+                        "{} ({} {})",
+                        crate::i18n::t("This file is too large to preview here."),
+                        crate::i18n::t("limit:"),
+                        human_size(limit as u64)
+                    )),
                     Loaded::Hex { bytes, total, .. } => Loaded::Hex { bytes, total, more: cut_short },
                     loaded => loaded,
                 }
@@ -511,8 +551,12 @@ impl Preview {
             Some(Loaded::Model(m)) => format!("model {}", m.describe()),
             Some(Loaded::Geo(g)) => format!("geo {}", g.describe()),
             Some(Loaded::Json(j)) => format!("json {}", j.describe()),
-            Some(Loaded::Document(d)) => format!("doc {} {:?} {:?} sections={} first={:?}", d.format, d.title, d.author, d.sections.len(), d.sections.first().map(|s| s.blocks.len())),
-            Some(Loaded::Summary(s)) => format!("summary {} pic={} {:?}", s.format, s.picture.as_ref().map_or("no".to_string(), |p| format!("{}x{}", p.w, p.h)), s.rows),
+            Some(Loaded::Document(d)) => {
+                format!("doc {} {:?} {:?} sections={} first={:?}", d.format, d.title, d.author, d.sections.len(), d.sections.first().map(|s| s.blocks.len()))
+            }
+            Some(Loaded::Summary(s)) => {
+                format!("summary {} pic={} {:?}", s.format, s.picture.as_ref().map_or("no".to_string(), |p| format!("{}x{}", p.w, p.h)), s.rows)
+            }
             Some(Loaded::Info(s)) => format!("info {s}"),
             Some(Loaded::Error(e)) => format!("ERROR {e}"),
         }
@@ -632,7 +676,9 @@ impl Preview {
                 if !self.frames.is_empty() && ui.button(if self.paused { t("Play") } else { t("Pause") }).clicked() {
                     self.paused = !self.paused;
                 }
-                if matches!(&self.loaded, Some(Loaded::Image { details, .. }) if !details.is_empty()) && ui.selectable_label(self.show_source, t("Details")).clicked() {
+                if matches!(&self.loaded, Some(Loaded::Image { details, .. }) if !details.is_empty())
+                    && ui.selectable_label(self.show_source, t("Details")).clicked()
+                {
                     self.show_source = !self.show_source;
                 }
             }
@@ -737,12 +783,7 @@ impl Preview {
                         ui.centered_and_justified(|ui| {
                             let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
                             checkerboard(ui.painter(), rect, theme);
-                            ui.painter().image(
-                                tex.id(),
-                                rect,
-                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                Color32::WHITE,
-                            );
+                            ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                         });
                     });
                 }
@@ -878,11 +919,7 @@ fn table_ui(
             });
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(
-                egui::TextEdit::singleline(filter)
-                    .hint_text(egui::RichText::new(t("Filter rows…")).color(theme.weak))
-                    .desired_width(180.0),
-            );
+            ui.add(egui::TextEdit::singleline(filter).hint_text(egui::RichText::new(t("Filter rows…")).color(theme.weak)).desired_width(180.0));
         });
     });
     let Some(sheet) = data.sheets.get(*sheet_idx) else { return };
@@ -894,11 +931,11 @@ fn table_ui(
     let visible: Vec<usize> = if needle.is_empty() {
         (0..sheet.rows.len()).collect()
     } else {
-        (0..sheet.rows.len())
-            .filter(|&i| sheet.rows[i].iter().any(|c| c.as_deref().is_some_and(|v| v.to_lowercase().contains(&needle))))
-            .collect()
+        (0..sheet.rows.len()).filter(|&i| sheet.rows[i].iter().any(|c| c.as_deref().is_some_and(|v| v.to_lowercase().contains(&needle)))).collect()
     };
-    let shown_info = if sheet.total_rows.is_some_and(|n| n as usize > sheet.rows.len()) || sheet.total_rows.is_none() && sheet.rows.len() >= crate::preview::sheet::MAX_ROWS {
+    let shown_info = if sheet.total_rows.is_some_and(|n| n as usize > sheet.rows.len())
+        || sheet.total_rows.is_none() && sheet.rows.len() >= crate::preview::sheet::MAX_ROWS
+    {
         format!("{} {} {}", t("Showing the first"), crate::util::fmt_count(sheet.rows.len() as u64), t("rows"))
     } else {
         String::new()
@@ -947,7 +984,12 @@ fn table_ui(
                     header.col(|ui| {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 0.0;
-                            ui.add(egui::Label::new(egui::RichText::new(name).font(FontId::new(12.5, egui::FontFamily::Name("bold".into()))).color(theme.strong())).truncate());
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(name).font(FontId::new(12.5, egui::FontFamily::Name("bold".into()))).color(theme.strong()),
+                                )
+                                .truncate(),
+                            );
                             let ty = sheet.types.get(c).map(String::as_str).unwrap_or("");
                             ui.add(egui::Label::new(egui::RichText::new(ty).size(10.5).color(theme.accent.gamma_multiply(0.85))).truncate());
                         });
@@ -1348,7 +1390,17 @@ fn decode_animation(ext: &str, bytes: &[u8], cancel: &crate::preview::media::Can
         return None;
     }
     let first = out.remove(0);
-    Some(Loaded::Image { rgba: first.rgba, w: first.w, h: first.h, orig, premultiplied: false, fmt: ext.to_uppercase(), more_frames: out, first_delay: first.delay, details: vec![] })
+    Some(Loaded::Image {
+        rgba: first.rgba,
+        w: first.w,
+        h: first.h,
+        orig,
+        premultiplied: false,
+        fmt: ext.to_uppercase(),
+        more_frames: out,
+        first_delay: first.delay,
+        details: vec![],
+    })
 }
 
 /// A picture for a summary, sized for the view.
@@ -1389,7 +1441,11 @@ fn video_summary(path: &Path, max_texture: usize, cancel: &crate::preview::media
     early(Loaded::Summary(Summary { format: format.clone(), picture: None, rows: rows.clone(), picture_pending: true }));
     let picture = video_thumbnail(path, info.duration, cancel).and_then(|png| decode_oriented(&png).ok()).map(|img| summary_picture(img, max_texture));
     if picture.is_none() {
-        rows.push(crate::preview::certview::Row::Note(if cfg!(target_os = "macos") { t("No thumbnail: macOS cannot read this video. Install FFmpeg to see one.") } else { t("No thumbnail: install FFmpeg to see one.") }));
+        rows.push(crate::preview::certview::Row::Note(if cfg!(target_os = "macos") {
+            t("No thumbnail: macOS cannot read this video. Install FFmpeg to see one.")
+        } else {
+            t("No thumbnail: install FFmpeg to see one.")
+        }));
     }
     Loaded::Summary(Summary { format, picture, rows, picture_pending: false })
 }
@@ -1470,7 +1526,11 @@ fn is_comic(name: &str) -> bool {
 
 /// An iWork document or a comic book, from a file on disk.
 fn package_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
-    if is_comic(name) { comic_summary(name, path, max_texture) } else { iwork_summary(name, path, max_texture) }
+    if is_comic(name) {
+        comic_summary(name, path, max_texture)
+    } else {
+        iwork_summary(name, path, max_texture)
+    }
 }
 
 /// Pages, Keynote and Numbers files keep a picture of their first page or slide.
@@ -1511,8 +1571,8 @@ fn iwork_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
 
 /// A comic book: how many pages, and the first one as its cover.
 fn comic_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
-    use crate::preview::certview::Row;
     use crate::i18n::t;
+    use crate::preview::certview::Row;
     let entries = match crate::files::archive::list(path) {
         Ok(e) => e,
         Err(e) => return Loaded::Error(e),
@@ -1529,9 +1589,14 @@ fn comic_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
         .and_then(|e| crate::files::archive::read_entry(path, &e.path, MAX_IMAGE).ok())
         .and_then(|b| decode_oriented(&b).ok())
         .map(|img| summary_picture(img, max_texture));
-    let mut rows = vec![Row::Field(t("Pages"), crate::util::fmt_count(pages.len() as u64)), Row::Field(t("Size"), human_size(pages.iter().map(|e| e.size).sum()))];
+    let mut rows =
+        vec![Row::Field(t("Pages"), crate::util::fmt_count(pages.len() as u64)), Row::Field(t("Size"), human_size(pages.iter().map(|e| e.size).sum()))];
     if picture.is_none() && !pages.is_empty() {
-        rows.push(Row::Note(if crate::files::archive::lock_state(path) == crate::files::archive::Lock::Open { t("The cover could not be read.") } else { t("Password protected") }));
+        rows.push(Row::Note(if crate::files::archive::lock_state(path) == crate::files::archive::Lock::Open {
+            t("The cover could not be read.")
+        } else {
+            t("Password protected")
+        }));
     }
     rows.push(Row::Note(t("Press Enter to browse inside the archive.")));
     Loaded::Summary(Summary { format: format!("{} · {}", t("Comic book"), ext_of(name).to_uppercase()), picture, rows, picture_pending: false })
@@ -1702,7 +1767,12 @@ fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, ca
         Kind::Pdf => {
             if bytes.len() >= MAX_IMAGE {
                 // The list of its objects is at the end of the file.
-                return Loaded::Error(format!("{} ({} {})", crate::i18n::t("This file is too large to preview here."), crate::i18n::t("limit:"), human_size(MAX_IMAGE as u64)));
+                return Loaded::Error(format!(
+                    "{} ({} {})",
+                    crate::i18n::t("This file is too large to preview here."),
+                    crate::i18n::t("limit:"),
+                    human_size(MAX_IMAGE as u64)
+                ));
             }
             Loaded::Pdf(Box::new(crate::preview::docview::start_pdf(bytes, max_texture)))
         }

@@ -219,11 +219,13 @@ fn write_api_json(path: &Path) {
 fn write_weather_h5(path: &Path) {
     let (hours, stations) = (24usize, 5usize);
     let mut r = Rng(7);
-    let temp: Vec<f32> = (0..hours * stations).map(|i| {
-        let (h, s) = (i / stations, i % stations);
-        let day = (std::f32::consts::TAU * (h as f32 - 9.0) / 24.0).sin();
-        ((24.0 + s as f32 * 1.5 + 5.0 * day + (r.next() % 100) as f32 / 100.0) * 10.0).round() / 10.0
-    }).collect();
+    let temp: Vec<f32> = (0..hours * stations)
+        .map(|i| {
+            let (h, s) = (i / stations, i % stations);
+            let day = (std::f32::consts::TAU * (h as f32 - 9.0) / 24.0).sin();
+            ((24.0 + s as f32 * 1.5 + 5.0 * day + (r.next() % 100) as f32 / 100.0) * 10.0).round() / 10.0
+        })
+        .collect();
     let humidity: Vec<f32> = temp.iter().map(|t| ((120.0 - t * 1.6) * 10.0).round() / 10.0).collect();
     let mut b = hdf5_pure::FileBuilder::new();
     b.create_dataset("temperature_c").with_f32_data(&temp).with_shape(&[hours as u64, stations as u64]);
@@ -269,10 +271,12 @@ fn write_safetensors(path: &Path) {
 fn write_snowflake_geojson(path: &Path) {
     let (cx, cy, r) = (105.8524f64, 21.0287f64, 0.01f64);
     // A triangle, counter-clockwise, each side then cut in a Koch bump four times.
-    let mut ring: Vec<[f64; 2]> = (0..3).map(|i| {
-        let a = std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * i as f64 / 3.0;
-        [cx + r * a.cos(), cy + r * a.sin()]
-    }).collect();
+    let mut ring: Vec<[f64; 2]> = (0..3)
+        .map(|i| {
+            let a = std::f64::consts::FRAC_PI_2 + std::f64::consts::TAU * i as f64 / 3.0;
+            [cx + r * a.cos(), cy + r * a.sin()]
+        })
+        .collect();
     for _ in 0..4 {
         let mut next = Vec::with_capacity(ring.len() * 4);
         for i in 0..ring.len() {
@@ -287,11 +291,13 @@ fn write_snowflake_geojson(path: &Path) {
         ring = next;
     }
     ring.push(ring[0]);
-    let mut star: Vec<[f64; 2]> = (0..10).map(|i| {
-        let a = std::f64::consts::FRAC_PI_2 - std::f64::consts::TAU * i as f64 / 10.0;
-        let k = if i % 2 == 0 { 0.42 } else { 0.17 };
-        [cx + r * k * a.cos(), cy + r * k * a.sin()]
-    }).collect();
+    let mut star: Vec<[f64; 2]> = (0..10)
+        .map(|i| {
+            let a = std::f64::consts::FRAC_PI_2 - std::f64::consts::TAU * i as f64 / 10.0;
+            let k = if i % 2 == 0 { 0.42 } else { 0.17 };
+            [cx + r * k * a.cos(), cy + r * k * a.sin()]
+        })
+        .collect();
     star.push(star[0]);
     let round = |v: &[[f64; 2]]| v.iter().map(|p| [(p[0] * 1e6).round() / 1e6, (p[1] * 1e6).round() / 1e6]).collect::<Vec<_>>();
     let doc = serde_json::json!({
@@ -330,7 +336,9 @@ fn write_torus_stl(path: &Path) {
 
 fn write_epub(path: &Path) {
     use std::io::Write;
-    let chapter = |title: &str, body: &str| format!("<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{title}</title></head><body><h1>{title}</h1>{body}</body></html>");
+    let chapter = |title: &str, body: &str| {
+        format!("<html xmlns=\"http://www.w3.org/1999/xhtml\"><head><title>{title}</title></head><body><h1>{title}</h1>{body}</body></html>")
+    };
     let one = chapter(
         "The Long Road South",
         "<p>The train left <b>Hà Nội</b> before dawn, and by noon the rice fields had given way to <i>limestone hills</i> that rose straight out of the green.</p><p>She kept three things in her bag:</p><ul><li>a notebook</li><li>her grandmother's letters</li><li>a ticket with no return date</li></ul><blockquote><p>Every road is long until you have walked it.</p></blockquote><p>By evening the air smelled of salt, and the conductor called out <b>Đà Nẵng</b> as if it were a question.</p>",
@@ -339,7 +347,12 @@ fn write_epub(path: &Path) {
     let mut z = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
     let o = zip::write::SimpleFileOptions::default();
     let opf = r#"<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>A Short Story</dc:title><dc:creator>Matrix Finder demo</dc:creator></metadata><manifest><item id="a" href="one.xhtml"/><item id="b" href="two.xhtml"/></manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>"#;
-    for (name, text) in [("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>"#), ("OPS/book.opf", opf), ("OPS/one.xhtml", one.as_str()), ("OPS/two.xhtml", two.as_str())] {
+    for (name, text) in [
+        ("META-INF/container.xml", r#"<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>"#),
+        ("OPS/book.opf", opf),
+        ("OPS/one.xhtml", one.as_str()),
+        ("OPS/two.xhtml", two.as_str()),
+    ] {
         z.start_file(name, o).unwrap();
         z.write_all(text.as_bytes()).unwrap();
     }
@@ -418,9 +431,7 @@ fn write_pdf(path: &Path, title: &str, pages: usize) {
         let content = objs.len() + 1;
         objs.push(format!("<< /Length {} >>\nstream\n{s}endstream", s.len()));
         kids.push(objs.len() + 1);
-        objs.push(format!(
-            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {content} 0 R >>"
-        ));
+        objs.push(format!("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents {content} 0 R >>"));
     }
     objs[1] = format!("<< /Type /Pages /Kids [{}] /Count {pages} >>", kids.iter().map(|k| format!("{k} 0 R")).collect::<Vec<_>>().join(" "));
     let mut out = String::from("%PDF-1.4\n");
@@ -519,7 +530,11 @@ fn demo_root() -> PathBuf {
     if let Some(root) = std::env::var_os("MATRIX_FINDER_DEMO_ROOT") {
         return root.into();
     }
-    if cfg!(unix) { PathBuf::from("/tmp/matrix_finder") } else { std::env::temp_dir().join("matrix_finder") }
+    if cfg!(unix) {
+        PathBuf::from("/tmp/matrix_finder")
+    } else {
+        std::env::temp_dir().join("matrix_finder")
+    }
 }
 
 fn build_demo() -> Demo {
@@ -624,7 +639,10 @@ fn build_demo() -> Demo {
     write_safetensors(&formats.join("tiny-llm.safetensors"));
     write_sqlite(&formats.join("shop.sqlite"), &rows[..600]);
     write_epub(&formats.join("A Short Story.epub"));
-    let jsonl: String = rows[..200].iter().map(|o| format!("{}\n", serde_json::json!({"order": o.id, "city": o.city, "product": o.product, "qty": o.qty, "paid": o.paid}))).collect();
+    let jsonl: String = rows[..200]
+        .iter()
+        .map(|o| format!("{}\n", serde_json::json!({"order": o.id, "city": o.city, "product": o.product, "qty": o.qty, "paid": o.paid})))
+        .collect();
     touch(&formats.join("orders.jsonl"), jsonl.as_bytes());
     // Git repositories among the demo folders, so the list shows their branches (made
     // after the archives above, which must not hold a `.git`). Skipped without git.
@@ -653,8 +671,21 @@ fn build_demo() -> Demo {
         std::fs::create_dir_all(h2.join(d)).unwrap();
     }
     for f in [
-        "app.py", "backup.zip", "data.json", "index.html", "letter.docx", "logo.svg", "main.rs", "movie.mp4", "notes.md", "photo.jpg",
-        "readme.txt", "report.pdf", "setup.sh", "sheet.xlsx", "slides.pptx",
+        "app.py",
+        "backup.zip",
+        "data.json",
+        "index.html",
+        "letter.docx",
+        "logo.svg",
+        "main.rs",
+        "movie.mp4",
+        "notes.md",
+        "photo.jpg",
+        "readme.txt",
+        "report.pdf",
+        "setup.sh",
+        "sheet.xlsx",
+        "slides.pptx",
     ] {
         touch(&h2.join(f), b"{}");
     }
@@ -717,10 +748,14 @@ fn app_harness(cfg: &Settings, chrome: &str) -> Harness<'static, App> {
     let app = h.state_mut();
     // Only the root file system: the sidebar must not show this machine's volumes.
     fn root() -> Vec<crate::files::drives::Drive> {
-        crate::files::drives::list().into_iter().filter(|d| d.mount == Path::new("/")).map(|mut d| {
-            d.label = "/".into();
-            d
-        }).collect()
+        crate::files::drives::list()
+            .into_iter()
+            .filter(|d| d.mount == Path::new("/"))
+            .map(|mut d| {
+                d.label = "/".into();
+                d
+            })
+            .collect()
     }
     app.drives = root();
     app.drive_watch = crate::files::drives::Watcher::spawn_with(root, Duration::from_secs(3600), Duration::from_secs(3600), None);
@@ -1436,7 +1471,12 @@ sys.stdout.write("[<u[?1049l")
     // An input method (Telex here): what it composes is only drawn, with the input
     // method's window placed at the cursor; what it commits is typed.
     let start = read().len();
-    for e in [Event::Ime(egui::ImeEvent::Enabled), Event::Ime(egui::ImeEvent::Preedit("vie".into())), Event::Text("x".into()), Event::Ime(egui::ImeEvent::Preedit("việ".into()))] {
+    for e in [
+        Event::Ime(egui::ImeEvent::Enabled),
+        Event::Ime(egui::ImeEvent::Preedit("vie".into())),
+        Event::Text("x".into()),
+        Event::Ime(egui::ImeEvent::Preedit("việ".into())),
+    ] {
         push(&mut h, e);
         settle(&mut h, 1);
     }
@@ -1501,7 +1541,9 @@ fn settings_fonts_and_terminal_themes() {
     assert_eq!(Settings::load().term_font, "builtin:dejavu");
 
     // The interface size scales interface text, and only that.
-    let width = |h: &Harness<'static, App>, family: egui::FontFamily| h.ctx.fonts(|f| f.layout_no_wrap("MMMMMMMMMM".into(), egui::FontId::new(14.0, family), egui::Color32::WHITE).size().x);
+    let width = |h: &Harness<'static, App>, family: egui::FontFamily| {
+        h.ctx.fonts(|f| f.layout_no_wrap("MMMMMMMMMM".into(), egui::FontId::new(14.0, family), egui::Color32::WHITE).size().x)
+    };
     let term_family = || egui::FontFamily::Name("term".into());
     let (ui_before, term_before) = (width(&h, egui::FontFamily::Proportional), width(&h, term_family()));
     let app = h.state_mut();
@@ -1879,7 +1921,12 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         let mut cfg = settings(mode.theme, d);
         cfg.terminal_profiles = vec![
             TerminalProfile { name: "Default".into(), ..TerminalProfile::default() },
-            TerminalProfile { name: "Python venv".into(), shell: "/bin/zsh".into(), startup: "source .venv/bin/activate\nclear".into(), ..TerminalProfile::default() },
+            TerminalProfile {
+                name: "Python venv".into(),
+                shell: "/bin/zsh".into(),
+                startup: "source .venv/bin/activate\nclear".into(),
+                ..TerminalProfile::default()
+            },
             TerminalProfile { name: "Night shift".into(), theme: "Tokyo Night".into(), ..TerminalProfile::default() },
             TerminalProfile { name: "Ghostty".into(), terminal: TerminalKind::Ghostty, ..TerminalProfile::default() },
         ];
@@ -2182,10 +2229,7 @@ fn compose(header: bool) -> RgbaImage {
     const GAP: u32 = 36;
     const RADIUS: f32 = 12.0;
     const HEAD: u32 = 300;
-    let tiles: Vec<RgbaImage> = SHOWCASE
-        .iter()
-        .map(|(mode, name)| image::open(out_dir().join(mode).join(format!("{name}.png"))).unwrap().to_rgba8())
-        .collect();
+    let tiles: Vec<RgbaImage> = SHOWCASE.iter().map(|(mode, name)| image::open(out_dir().join(mode).join(format!("{name}.png"))).unwrap().to_rgba8()).collect();
     let (tw, th) = tiles[0].dimensions();
     let head = if header { HEAD } else { 0 };
     let (cw, ch) = (PAD * 2 + GAP + tw * 2, head + PAD * 2 + GAP + th * 2);
@@ -2466,7 +2510,18 @@ fn search_file_contents_like_grep() {
 fn keyboard_tabs_and_windows() {
     let d = demo_env();
     let mut cfg = settings("Breeze Light", &d);
-    for (id, key) in [("tab_1", "Ctrl+Shift+1"), ("tab_2", "Ctrl+Shift+2"), ("last_used_tab", "Ctrl+Shift+Backslash"), ("window_1", "Ctrl+Shift+F1"), ("window_2", "Ctrl+Shift+F2"), ("window_3", "Ctrl+Shift+F3"), ("next_window", "Ctrl+Shift+CloseBracket"), ("previous_window", "Ctrl+Shift+OpenBracket"), ("next_tab", "Ctrl+Tab"), ("close_window", "Ctrl+W")] {
+    for (id, key) in [
+        ("tab_1", "Ctrl+Shift+1"),
+        ("tab_2", "Ctrl+Shift+2"),
+        ("last_used_tab", "Ctrl+Shift+Backslash"),
+        ("window_1", "Ctrl+Shift+F1"),
+        ("window_2", "Ctrl+Shift+F2"),
+        ("window_3", "Ctrl+Shift+F3"),
+        ("next_window", "Ctrl+Shift+CloseBracket"),
+        ("previous_window", "Ctrl+Shift+OpenBracket"),
+        ("next_tab", "Ctrl+Tab"),
+        ("close_window", "Ctrl+W"),
+    ] {
         cfg.shortcuts.insert(id.to_string(), vec![key.to_string()]);
     }
     let mut h = app_harness(&cfg, "gnome");
@@ -2553,7 +2608,17 @@ fn transfers_open_in_a_tab() {
 
     // Show: the destination opens in a new files tab, and Transfers stays as it was.
     let home = h.state().panes[h.state().active].tab().loc.clone();
-    h.state_mut().history.push(FinishedJob { title: "Copied".into(), ok: true, cancelled: false, msg: String::new(), bytes: 1, items: false, secs: 1.0, dest: Some(docs.clone()), at: "12:00".into() });
+    h.state_mut().history.push(FinishedJob {
+        title: "Copied".into(),
+        ok: true,
+        cancelled: false,
+        msg: String::new(),
+        bytes: 1,
+        items: false,
+        secs: 1.0,
+        dest: Some(docs.clone()),
+        at: "12:00".into(),
+    });
     settle(&mut h, 2);
     h.get_by_label(&t("Show")).click();
     settle(&mut h, 3);
@@ -2924,7 +2989,25 @@ fn too_large_files_are_not_opened() {
     let d = demo_env();
     let dir = d.demo.join("too-large");
     std::fs::create_dir_all(&dir).unwrap();
-    let names = ["a.png", "a.pdf", "a.csv", "a.parquet", "a.sqlite", "a.h5", "a.xlsx", "a.mp4", "a.stl", "a.geojson", "a.heic", "a.nef", "a.epub", "a.txt", "a.bin", "a.zip", "a.tar.gz"];
+    let names = [
+        "a.png",
+        "a.pdf",
+        "a.csv",
+        "a.parquet",
+        "a.sqlite",
+        "a.h5",
+        "a.xlsx",
+        "a.mp4",
+        "a.stl",
+        "a.geojson",
+        "a.heic",
+        "a.nef",
+        "a.epub",
+        "a.txt",
+        "a.bin",
+        "a.zip",
+        "a.tar.gz",
+    ];
     let size = 20u64 * 1024 * 1024 * 1024;
     for name in names {
         let path = dir.join(name);
@@ -3002,10 +3085,15 @@ fn broken_settings_are_kept_and_told() {
     std::env::set_var("MATRIX_FINDER_CHROME", "gnome");
     let broken = r#"{"connections":[{"name":"srv","protocol":"Sftp","host":"h","port":22,"user":"me","password":"pw"}"#;
     std::fs::write(&file, broken).unwrap();
-    let mut h = Harness::builder().with_size(egui::vec2(W, H)).with_pixels_per_point(1.0).wgpu().build_eframe(|cc| App::new(cc, crate::ui::chrome::Chrome::detect(true), None));
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(W, H))
+        .with_pixels_per_point(1.0)
+        .wgpu()
+        .build_eframe(|cc| App::new(cc, crate::ui::chrome::Chrome::detect(true), None));
     settle(&mut h, 3);
     assert!(matches!(&h.state().dialog, Some(Dialog::Message { title, .. }) if *title == t("The settings file could not be read")));
-    let kept: Vec<PathBuf> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains("settings.json.broken-")).collect();
+    let kept: Vec<PathBuf> =
+        std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.path()).filter(|p| p.to_string_lossy().contains("settings.json.broken-")).collect();
     assert_eq!(kept.len(), 1);
     assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), broken);
     // Saving writes a good file, and leaves the one set aside alone.
@@ -3092,7 +3180,11 @@ fn hovered_tab_turns_darker() {
     let tab = egui::Rect::from_min_max(pos2(280.0, 52.0), pos2(400.0, 70.0));
     // Its background: the median brightness, which the title and close button leave alone.
     let background = |img: &RgbaImage| {
-        let mut px: Vec<f32> = img.enumerate_pixels().filter(|(x, y, _)| tab.contains(pos2(*x as f32, *y as f32))).map(|(_, _, p)| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+        let mut px: Vec<f32> = img
+            .enumerate_pixels()
+            .filter(|(x, y, _)| tab.contains(pos2(*x as f32, *y as f32)))
+            .map(|(_, _, p)| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0)
+            .collect();
         px.sort_by(f32::total_cmp);
         px[px.len() / 2]
     };
@@ -3129,27 +3221,31 @@ fn long_names_leave_room_for_the_buttons() {
         std::fs::write(dir.join(format!("{long}.{ext}")), bytes).unwrap();
     }
     for frac in [0.0, 0.6] {
-    let mut cfg = settings("Breeze Light", &d);
-    cfg.quick_view = true;
-    if frac > 0.0 {
-        cfg.quick_view_frac = frac;
-    }
-    let mut h = app_harness(&cfg, "gnome");
-    for (ext, _, button) in &files {
-        let name = format!("{long}.{ext}");
-        h.state_mut().shot_pane(0, &dir, Some(&name));
-        wait_until(&mut h, 5.0, |a| a.quick.as_ref().is_some_and(|q| q.name == name && q.is_ready()));
-        settle(&mut h, 3);
-        let button = h.get_by_label(&t(button)).bounding_box().unwrap();
-        // The title, not the file's row in the list or the status bar.
-        let title = h.get_all_by_label(&name).filter_map(|n| n.bounding_box()).find(|r| r.y1 < 150.0 && r.x0 > f64::from(W) * 0.35).unwrap_or_else(|| panic!("no title for {ext}"));
-        let beside = title.y0 < button.y1 && title.y1 > button.y0;
-        assert!(!beside || title.x1 <= button.x0, "{ext}: the name ({:.0}…{:.0}) runs under {:.0}", title.x0, title.x1, button.x0);
-        assert!(title.x1 - title.x0 > 100.0, "{ext}: some of the name shows ({:.0}…{:.0})", title.x0, title.x1);
-        if let Ok(out) = std::env::var("MF_SHOT_DIR") {
-            h.render().unwrap().save(format!("{out}/long-{ext}-{frac}.png")).unwrap();
+        let mut cfg = settings("Breeze Light", &d);
+        cfg.quick_view = true;
+        if frac > 0.0 {
+            cfg.quick_view_frac = frac;
         }
-    }
+        let mut h = app_harness(&cfg, "gnome");
+        for (ext, _, button) in &files {
+            let name = format!("{long}.{ext}");
+            h.state_mut().shot_pane(0, &dir, Some(&name));
+            wait_until(&mut h, 5.0, |a| a.quick.as_ref().is_some_and(|q| q.name == name && q.is_ready()));
+            settle(&mut h, 3);
+            let button = h.get_by_label(&t(button)).bounding_box().unwrap();
+            // The title, not the file's row in the list or the status bar.
+            let title = h
+                .get_all_by_label(&name)
+                .filter_map(|n| n.bounding_box())
+                .find(|r| r.y1 < 150.0 && r.x0 > f64::from(W) * 0.35)
+                .unwrap_or_else(|| panic!("no title for {ext}"));
+            let beside = title.y0 < button.y1 && title.y1 > button.y0;
+            assert!(!beside || title.x1 <= button.x0, "{ext}: the name ({:.0}…{:.0}) runs under {:.0}", title.x0, title.x1, button.x0);
+            assert!(title.x1 - title.x0 > 100.0, "{ext}: some of the name shows ({:.0}…{:.0})", title.x0, title.x1);
+            if let Ok(out) = std::env::var("MF_SHOT_DIR") {
+                h.render().unwrap().save(format!("{out}/long-{ext}-{frac}.png")).unwrap();
+            }
+        }
     }
     std::fs::remove_dir_all(&dir).unwrap();
 }
@@ -3337,7 +3433,8 @@ fn quick_view_samples() {
     let mut h = app_harness(&cfg, "gnome");
     h.state_mut().shot_pane(0, &dir, None);
     settle(&mut h, 3);
-    let mut names: Vec<String> = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+    let mut names: Vec<String> =
+        std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.path().is_file()).map(|e| e.file_name().to_string_lossy().into_owned()).collect();
     names.sort();
     for name in names {
         h.state_mut().panes[0].tab_mut().select_name(&name);
@@ -3471,12 +3568,16 @@ fn eject_drives_from_the_sidebar() {
     let lister = {
         let mount = mount.clone();
         move || -> Vec<crate::files::drives::Drive> {
-            crate::files::drives::list().into_iter().filter(|x| x.mount == Path::new("/") || x.mount == mount).map(|mut x| {
-                if x.mount == Path::new("/") {
-                    x.label = "/".into();
-                }
-                x
-            }).collect()
+            crate::files::drives::list()
+                .into_iter()
+                .filter(|x| x.mount == Path::new("/") || x.mount == mount)
+                .map(|mut x| {
+                    if x.mount == Path::new("/") {
+                        x.label = "/".into();
+                    }
+                    x
+                })
+                .collect()
         }
     };
     h.state_mut().drive_watch = crate::files::drives::Watcher::spawn_with(lister, Duration::from_millis(200), Duration::from_secs(3600), None);
@@ -3580,7 +3681,8 @@ fn drives_section_follows_the_setting() {
     };
     let now = std::sync::Arc::new(std::sync::Mutex::new(vec![root.clone(), data.clone()]));
     let n2 = now.clone();
-    h.state_mut().drive_watch = crate::files::drives::Watcher::spawn_with(move || n2.lock().unwrap().clone(), Duration::from_millis(50), Duration::from_secs(3600), None);
+    h.state_mut().drive_watch =
+        crate::files::drives::Watcher::spawn_with(move || n2.lock().unwrap().clone(), Duration::from_millis(50), Duration::from_secs(3600), None);
     let rows = |h: &Harness<'static, App>| h.state().drive_rows.iter().map(|r| r.1.clone()).collect::<Vec<_>>();
     let wait_rows = |h: &mut Harness<'static, App>, want: &[&str]| {
         for _ in 0..100 {
@@ -3750,7 +3852,10 @@ fn sidebar_button_next_to_the_app_menu() {
             settle(&mut h, 3);
             assert_eq!(h.state().cfg.show_sidebar, want, "{chrome}: from the menu");
             assert_eq!(Settings::load().show_sidebar, want, "{chrome}: saved");
-            assert!(h.query_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar"))))).is_none(), "{chrome}: the menu closes");
+            assert!(
+                h.query_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar"))))).is_none(),
+                "{chrome}: the menu closes"
+            );
         }
     }
 }
@@ -4020,7 +4125,10 @@ fn address_bar_folder_tree() {
     };
     // The address bar of the window on the left.
     let open = |h: &mut Harness<'static, App>| {
-        h.query_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree")).min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0)).unwrap().click();
+        h.query_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree"))
+            .min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0))
+            .unwrap()
+            .click();
         settle(h, 3);
         assert!(h.state().panes[0].tab().tree.is_some(), "the tree opens");
     };
@@ -4098,7 +4206,10 @@ fn dialog_tree(h: &Harness<'static, App>) -> Option<TreeSeen> {
 /// Open the dialog's folder tree (the lowest "Folder tree" button: the address bars have
 /// one too) and wait for the row of `p`.
 fn open_dialog_tree(h: &mut Harness<'static, App>, p: &Path) -> egui::Rect {
-    h.query_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree")).max_by(|a, b| a.bounding_box().unwrap().y0.total_cmp(&b.bounding_box().unwrap().y0)).unwrap().click();
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree"))
+        .max_by(|a, b| a.bounding_box().unwrap().y0.total_cmp(&b.bounding_box().unwrap().y0))
+        .unwrap()
+        .click();
     settle(h, 3);
     for _ in 0..60 {
         if let Some(r) = dialog_tree(h).and_then(|t| t.0.iter().find(|r| r.0 == p).map(|r| r.1)) {
@@ -4153,7 +4264,8 @@ fn compress_dialog() {
     assert!(chip(&h, "zip").is_some() && chip(&h, "7z").is_some() && chip(&h, "tar.zst").is_some());
     assert!(chip(&h, "gz").is_none() && chip(&h, "xz").is_none(), "single-file formats are for one file");
     assert!(has_text(&h, &ArchiveFormat::Zip.blurb()), "what the format is good for");
-    let makes = |h: &Harness<'static, App>, name: &str, dir: &Path| h.query_all_by_label(name).count() >= 1 && h.query_by_label(&dir.display().to_string()).is_some();
+    let makes =
+        |h: &Harness<'static, App>, name: &str, dir: &Path| h.query_all_by_label(name).count() >= 1 && h.query_by_label(&dir.display().to_string()).is_some();
     assert!(makes(&h, "photos.zip", &dest), "the file it makes");
     assert!(has_text(&h, &taken), "a warning: photos.zip is there already");
     assert_eq!(h.query_all_by_role(Role::Slider).count(), 1, "the level");
@@ -4434,7 +4546,10 @@ fn quick_filter_ticks_several_kinds() {
     };
     let menu_open = |h: &Harness<'static, App>| h.ctx.memory(|m| m.is_popup_open(egui::Id::new(("quick-filter", h.state().panes[0].tab().uid))));
     let funnel = |h: &mut Harness<'static, App>| {
-        h.query_all_by_role_and_label(Role::Button, &t("Quick filter")).min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0)).unwrap().click();
+        h.query_all_by_role_and_label(Role::Button, &t("Quick filter"))
+            .min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0))
+            .unwrap()
+            .click();
         settle(h, 2);
     };
     let tick = |h: &mut Harness<'static, App>, name: &str| {
@@ -4760,7 +4875,9 @@ fn transfer_destinations() {
     settle(&mut h, 3);
     h.state_mut().run_cmd(Cmd::Copy);
     settle(&mut h, 3);
-    let win = |n: usize, dir: &Path| format!("{} · {}: {}", t("Window {n}").replace("{n}", &n.to_string()), dir.file_name().unwrap().to_string_lossy(), dir.display());
+    let win = |n: usize, dir: &Path| {
+        format!("{} · {}: {}", t("Window {n}").replace("{n}", &n.to_string()), dir.file_name().unwrap().to_string_lossy(), dir.display())
+    };
     let selected = |h: &Harness<'static, App>, label: &str| h.get_by_label(label).toggled() == Some(egui::accesskit::Toggled::True);
     let other = t("Another folder");
     let fields = |h: &Harness<'static, App>| h.query_all_by_role(egui::accesskit::Role::TextInput).count();
