@@ -2,11 +2,18 @@
 //! to disk, and only then renamed into place. The final rename never replaces anything
 //! unless the user chose Overwrite, so an existing file survives a crash, a cancel, a full
 //! disk, or another job that writes the same name at the same time.
-use crate::ops::Conflict;
 use std::collections::HashSet;
 use std::fs::{File, OpenOptions};
 use std::io::{self, ErrorKind};
 use std::path::{Path, PathBuf};
+
+/// What to do when the target name is already taken.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Conflict {
+    Overwrite,
+    Skip,
+    Rename,
+}
 
 /// Whether anything is at `p`, a dangling symbolic link included.
 pub fn exists(p: &Path) -> bool {

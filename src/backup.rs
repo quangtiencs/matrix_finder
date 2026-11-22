@@ -4,8 +4,7 @@ use crate::archive::{self, ArchiveFormat};
 use crate::config::BackupProfile;
 use crate::ops::Progress;
 use crate::theme::Theme;
-use crate::util::{es, Res};
-use globset::{Glob, GlobSet, GlobSetBuilder};
+use crate::util::{build_globset, es, Res};
 use std::path::{Path, PathBuf};
 
 pub const MANIFEST: &str = "matrix_finder-backup.json";
@@ -14,18 +13,6 @@ fn sanitize(s: &str) -> String {
     s.chars()
         .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' || c == '.' { c } else { '_' })
         .collect()
-}
-
-pub fn build_globset(patterns: &[String]) -> Res<Option<GlobSet>> {
-    let pats: Vec<&String> = patterns.iter().filter(|p| !p.trim().is_empty()).collect();
-    if pats.is_empty() {
-        return Ok(None);
-    }
-    let mut b = GlobSetBuilder::new();
-    for p in pats {
-        b.add(Glob::new(p.trim()).map_err(|e| format!("Bad pattern '{p}': {e}"))?);
-    }
-    b.build().map(Some).map_err(es)
 }
 
 fn file_name(profile: &BackupProfile, date: &str) -> String {

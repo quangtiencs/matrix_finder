@@ -72,7 +72,7 @@ struct Shared {
 
 static SHARED: LazyLock<(Mutex<Shared>, Condvar)> = LazyLock::new(|| (Mutex::new(Shared { slots: HashMap::new(), queue: vec![], ctx: None, started: false }), Condvar::new()));
 /// The `git` program, found once.
-static GIT: LazyLock<Option<PathBuf>> = LazyLock::new(|| crate::media::find_tool("git"));
+static GIT: LazyLock<Option<PathBuf>> = LazyLock::new(|| crate::util::find_tool("git"));
 
 /// What is known of `dir` (a local folder on screen); asks for it to be looked at if
 /// that is due. `status`: also find out whether everything is committed.
@@ -281,7 +281,7 @@ fn safe_git(git: &Path, dir: &Path) -> Command {
 /// fails or takes too long.
 fn status(dir: &Path) -> Option<Status> {
     let git = GIT.as_ref()?;
-    let tmp = crate::media::TempDir::new().ok()?;
+    let tmp = crate::util::TempDir::new().ok()?;
     let out_path = tmp.path().join("status");
     let mut cmd = safe_git(git, dir);
     cmd.args(["status", "--porcelain=v2", "--branch", "--ignore-submodules=all", "--untracked-files=normal"]);
@@ -357,7 +357,7 @@ mod tests {
             eprintln!("skipped: no git");
             return;
         }
-        let tmp = crate::media::TempDir::new().unwrap();
+        let tmp = crate::util::TempDir::new().unwrap();
         let repo = tmp.path().join("repo");
         std::fs::create_dir_all(&repo).unwrap();
         git(&repo, &["init", "-q", "-b", "work"]);

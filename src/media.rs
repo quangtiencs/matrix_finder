@@ -2,9 +2,9 @@
 //! thumbnails use tools the system already has (ImageIO's `sips` and Quick Look's
 //! `qlmanage` on macOS) or common ones (libheif, ImageMagick, FFmpeg). Video facts
 //! come from reading the file's own headers, so they work without any tool.
-use crate::util::Res;
+use crate::util::{find_tool, Res, TempDir};
 use std::io::{Read, Seek, SeekFrom};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,15 +16,6 @@ pub type Cancel = Arc<AtomicBool>;
 /// One external tool at a time: moving the cursor through a folder of videos must not
 /// start a process per file.
 static TOOL_LOCK: Mutex<()> = Mutex::new(());
-
-/// A program on PATH, or where package managers put it (apps started from the desktop
-/// on macOS do not get the shell's PATH).
-pub fn find_tool(name: &str) -> Option<PathBuf> {
-    let on_path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
-    let extra = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin"].map(PathBuf::from);
-    let names = if cfg!(windows) { vec![format!("{name}.exe"), name.to_string()] } else { vec![name.to_string()] };
-    on_path.iter().chain(extra.iter()).find_map(|d| names.iter().map(|n| d.join(n)).find(|p| p.is_file()))
-}
 
 /// How long a tool may take before it is given up on.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(20);
@@ -92,30 +83,6 @@ pub fn tool_output(mut cmd: Command, cancel: &Cancel) -> Option<Vec<u8>> {
     let mut bytes = Vec::new();
     f.take(64 * 1024 * 1024).read_to_end(&mut bytes).ok()?;
     Some(bytes)
-}
-
-/// A private temporary folder, removed with everything in it when dropped. It is new,
-/// only the user can open it and its name cannot be guessed, so files written in it
-/// cannot be redirected by another user (see `util::private_temp_dir`).
-pub struct TempDir(PathBuf);
-
-/// The name the preview's temporary folders start with.
-pub const TEMP_PREFIX: &str = "preview";
-
-impl TempDir {
-    pub fn new() -> Res<Self> {
-        crate::util::private_temp_dir(TEMP_PREFIX).map(Self).map_err(|e| e.to_string())
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
 }
 
 // ---------------------------------------------------------------- HEIC, HEIF, AVIF
@@ -658,17 +625,6 @@ fn matroska_codec(id: &str) -> String {
     }
 }
 
-/// `83` gives `1:23`, `3723.5` gives `1:02:03`.
-pub fn format_duration(seconds: f64) -> String {
-    let total = seconds.round() as u64;
-    let (h, m, s) = (total / 3600, total / 60 % 60, total % 60);
-    if h > 0 {
-        format!("{h}:{m:02}:{s:02}")
-    } else {
-        format!("{m}:{s:02}")
-    }
-}
-
 // ---------------------------------------------------------------- video thumbnails
 
 /// A frame of the video as PNG bytes: from FFmpeg, or else macOS's Quick Look.
@@ -813,12 +769,5 @@ mod tests {
             let _ = video_info(&mut Cursor::new(bytes));
         }
         assert_eq!(video_info(&mut Cursor::new(Vec::new())), VideoInfo::default());
-    }
-
-    #[test]
-    fn durations() {
-        assert_eq!(format_duration(83.0), "1:23");
-        assert_eq!(format_duration(3723.5), "1:02:04");
-        assert_eq!(format_duration(0.2), "0:00");
     }
 }

@@ -814,7 +814,7 @@ mod tests {
         if Os::current() != Os::Mac {
             return;
         }
-        let dir = crate::media::TempDir::new().unwrap();
+        let dir = crate::util::TempDir::new().unwrap();
         let img = dir.path().join("t.dmg");
         let name = format!("MFEject{}", std::process::id());
         let ok = std::process::Command::new("hdiutil").args(["create", "-size", "4m", "-fs", "HFS+", "-volname", &name]).arg(&img).output().unwrap();

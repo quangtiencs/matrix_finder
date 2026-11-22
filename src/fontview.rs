@@ -55,7 +55,7 @@ pub fn load(name: &str, bytes: &[u8]) -> Res<FontPreview> {
     add(t("Version"), lookup(name_id::VERSION));
     add(t("Designer"), lookup(name_id::DESIGNER));
     add(t("Maker"), lookup(name_id::MANUFACTURER));
-    add(t("Glyphs"), Some(crate::table::fmt_count(u64::from(face.number_of_glyphs()))));
+    add(t("Glyphs"), Some(crate::util::fmt_count(u64::from(face.number_of_glyphs()))));
     add(t("Weight"), Some(face.weight().to_number().to_string()));
     add(t("Monospaced"), Some(if face.is_monospaced() { t("Yes") } else { t("No") }));
     if face.is_variable() {

@@ -1,4 +1,5 @@
 //! Small helpers shared across the application.
+use std::cmp::Ordering;
 use std::fmt::Display;
 use std::time::SystemTime;
 
@@ -450,6 +451,113 @@ pub fn read_regular_string(path: &std::path::Path) -> std::io::Result<String> {
     String::from_utf8(read_regular(path)?).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
 }
 
+/// Compare strings treating digit runs as numbers (file2 < file10).
+pub fn natural_cmp(a: &str, b: &str) -> Ordering {
+    let (mut ai, mut bi) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (ai.peek().copied(), bi.peek().copied()) {
+            (None, None) => return a.cmp(b),
+            (None, _) => return Ordering::Less,
+            (_, None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let mut na = String::new();
+                while let Some(c) = ai.peek().copied().filter(|c| c.is_ascii_digit()) {
+                    na.push(c);
+                    ai.next();
+                }
+                let mut nb = String::new();
+                while let Some(c) = bi.peek().copied().filter(|c| c.is_ascii_digit()) {
+                    nb.push(c);
+                    bi.next();
+                }
+                let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
+                let o = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb));
+                if o != Ordering::Equal {
+                    return o;
+                }
+            }
+            (Some(x), Some(y)) => {
+                let o = x.to_lowercase().cmp(y.to_lowercase());
+                if o != Ordering::Equal {
+                    return o;
+                }
+                ai.next();
+                bi.next();
+            }
+        }
+    }
+}
+
+/// A program on PATH, or where package managers put it (apps started from the desktop
+/// on macOS do not get the shell's PATH).
+pub fn find_tool(name: &str) -> Option<std::path::PathBuf> {
+    let on_path = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect::<Vec<_>>()).unwrap_or_default();
+    let extra = ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin"].map(std::path::PathBuf::from);
+    let names = if cfg!(windows) { vec![format!("{name}.exe"), name.to_string()] } else { vec![name.to_string()] };
+    on_path.iter().chain(extra.iter()).find_map(|d| names.iter().map(|n| d.join(n)).find(|p| p.is_file()))
+}
+
+/// A private temporary folder, removed with everything in it when dropped. It is new,
+/// only the user can open it and its name cannot be guessed, so files written in it
+/// cannot be redirected by another user (see `private_temp_dir`).
+pub struct TempDir(std::path::PathBuf);
+
+/// The name the preview's temporary folders start with.
+pub const TEMP_PREFIX: &str = "preview";
+
+impl TempDir {
+    pub fn new() -> Res<Self> {
+        private_temp_dir(TEMP_PREFIX).map(Self).map_err(|e| e.to_string())
+    }
+
+    pub fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+/// `83` gives `1:23`, `3723.5` gives `1:02:03`.
+pub fn format_duration(seconds: f64) -> String {
+    let total = seconds.round() as u64;
+    let (h, m, s) = (total / 3600, total / 60 % 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+/// A count with thousands separators: `1234567` gives `1,234,567`.
+pub fn fmt_count(n: u64) -> String {
+    let s = n.to_string();
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i > 0 && (s.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// A glob set from the non-empty patterns, or `None` when there are none.
+pub fn build_globset(patterns: &[String]) -> Res<Option<globset::GlobSet>> {
+    let pats: Vec<&String> = patterns.iter().filter(|p| !p.trim().is_empty()).collect();
+    if pats.is_empty() {
+        return Ok(None);
+    }
+    let mut b = globset::GlobSetBuilder::new();
+    for p in pats {
+        b.add(globset::Glob::new(p.trim()).map_err(|e| format!("Bad pattern '{p}': {e}"))?);
+    }
+    b.build().map(Some).map_err(es)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -589,5 +697,25 @@ mod tests {
         assert_eq!(short_path_candidates("~/a/b/c/d"), ["~/a/b/c/d", "~/…/c/d", "~/…/d"]);
         assert_eq!(short_path_candidates("/usr/local/bin"), ["/usr/local/bin", "/…/local/bin", "/…/bin"]);
         assert_eq!(short_path_candidates("~/"), ["~/"]);
+    }
+
+    #[test]
+    fn natural() {
+        let mut v = vec!["file10", "file2", "File1", "a"];
+        v.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(v, vec!["a", "File1", "file2", "file10"]);
+    }
+
+    #[test]
+    fn durations() {
+        assert_eq!(format_duration(83.0), "1:23");
+        assert_eq!(format_duration(3723.5), "1:02:04");
+        assert_eq!(format_duration(0.2), "0:00");
+    }
+
+    #[test]
+    fn counts() {
+        assert_eq!(fmt_count(1234567), "1,234,567");
+        assert_eq!(fmt_count(999), "999");
     }
 }

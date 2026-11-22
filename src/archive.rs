@@ -1,6 +1,7 @@
 //! Reading and writing archives: zip, 7z, rar (read; write via `rar` CLI),
 //! tar (+gz/xz/zst/bz2) and single-file gz/xz/zst/bz2 streams.
-use crate::ops::{Conflict, Progress};
+use crate::ops::Progress;
+use crate::safefs::Conflict;
 use crate::safefs::{self, TempFile};
 use crate::util::{es, Res};
 use crate::vfs::Entry;
@@ -1786,7 +1787,7 @@ mod tests {
         assert!(!dest.exists(), "no partial archive");
         assert_eq!(names_in(&d), ["src"], "nor a temporary one");
         // Excluding it is the way out, and everything else then gets in.
-        let ex = crate::backup::build_globset(&["**/locked".to_string()]).unwrap();
+        let ex = crate::util::build_globset(&["**/locked".to_string()]).unwrap();
         create(std::slice::from_ref(&src), ex.as_ref(), &dest, ArchiveFormat::Zip, 3, &[], &Progress::default()).unwrap();
         let names: Vec<String> = list(&dest).unwrap().into_iter().map(|e| e.path).collect();
         assert!(names.contains(&"src/a.txt".to_string()) && names.contains(&"src/z.txt".to_string()), "{names:?}");
@@ -1803,8 +1804,8 @@ mod password_tests {
 
     const PASSWORD: &str = "correct horse";
 
-    fn temp_file(name: &str, bytes: &[u8]) -> (crate::media::TempDir, PathBuf) {
-        let dir = crate::media::TempDir::new().unwrap();
+    fn temp_file(name: &str, bytes: &[u8]) -> (crate::util::TempDir, PathBuf) {
+        let dir = crate::util::TempDir::new().unwrap();
         let path = dir.path().join(name);
         std::fs::write(&path, bytes).unwrap();
         (dir, path)
@@ -1844,7 +1845,7 @@ mod password_tests {
             assert!(entry_is_locked(&p, "secret.txt"));
             assert!(!entry_is_locked(&p, "plain.txt"));
             // Asking for only the plain file works; everything asks for the password, leaving nothing behind.
-            let out = crate::media::TempDir::new().unwrap();
+            let out = crate::util::TempDir::new().unwrap();
             extract(&p, out.path(), &["plain.txt".to_string()], "", Conflict::Overwrite, &Progress::default()).unwrap();
             assert!(out.path().join("plain.txt").exists());
             assert!(!check_password(&p, "wrong"), "{kind}");
@@ -1854,7 +1855,7 @@ mod password_tests {
             assert!(!entry_is_locked(&p, "secret.txt"));
             assert_eq!(read_entry(&p, "secret.txt", 100).unwrap(), b"top secret");
             assert_eq!(read_entry(&p, "plain.txt", 100).unwrap(), b"for everyone");
-            let out = crate::media::TempDir::new().unwrap();
+            let out = crate::util::TempDir::new().unwrap();
             extract(&p, out.path(), &[], "", Conflict::Overwrite, &Progress::default()).unwrap();
             assert_eq!(std::fs::read(out.path().join("secret.txt")).unwrap(), b"top secret");
             assert_eq!(std::fs::read(out.path().join("plain.txt")).unwrap(), b"for everyone");
@@ -1905,7 +1906,7 @@ mod password_tests {
             let file = entries.iter().find(|e| !e.is_dir).expect("a file");
             let contents = read_entry(&p, &file.path, 1000).unwrap();
             assert_eq!(contents.len() as u64, file.size.min(1000));
-            let out = crate::media::TempDir::new().unwrap();
+            let out = crate::util::TempDir::new().unwrap();
             extract(&p, out.path(), &[], "", Conflict::Overwrite, &Progress::default()).unwrap();
             assert!(out.path().join(&file.path).is_file());
             assert_eq!(lock_state(&p), Lock::Open);
@@ -1941,13 +1942,13 @@ mod password_tests {
         assert!(check_password(&p, PASSWORD));
         remember_password(&p, "wrong-91");
         assert_eq!(read_entry(&p, "secret.txt", 100).unwrap_err(), wrong_password());
-        let out = crate::media::TempDir::new().unwrap();
+        let out = crate::util::TempDir::new().unwrap();
         let e = extract(&p, out.path(), &[], "", Conflict::Overwrite, &Progress::default()).unwrap_err();
         assert!(e.contains(&wrong_password()), "{e}");
         assert!(!out.path().join("secret.txt").exists(), "no empty file left behind");
         remember_password(&p, PASSWORD);
         assert_eq!(read_entry(&p, "secret.txt", 100).unwrap(), b"top secret");
-        let out = crate::media::TempDir::new().unwrap();
+        let out = crate::util::TempDir::new().unwrap();
         extract(&p, out.path(), &[], "", Conflict::Overwrite, &Progress::default()).unwrap();
         assert_eq!(std::fs::read(out.path().join("secret.txt")).unwrap(), b"top secret");
     }

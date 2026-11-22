@@ -350,7 +350,7 @@ pub fn load_mbox(bytes: &[u8], cut_short: bool, syntax_theme: &str) -> Res<Docum
         sections.push(Section { title, blocks: m.blocks });
     }
     let more = total > MAX_MESSAGES || cut_short;
-    let title = Some(format!("{}{} {}", crate::table::fmt_count(total.min(MAX_MESSAGES) as u64), if more { "+" } else { "" }, t("messages")));
+    let title = Some(format!("{}{} {}", crate::util::fmt_count(total.min(MAX_MESSAGES) as u64), if more { "+" } else { "" }, t("messages")));
     Ok(Document { format: "Mailbox", title, author: None, sections })
 }
 

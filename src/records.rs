@@ -2,7 +2,8 @@
 //! subtitles (`.srt`, `.vtt`). Only the start of a file is read (`MAX_READ`), which
 //! holds more records than the table shows.
 use crate::i18n::t;
-use crate::table::{clip_cell, finish_sheet, fmt_count, Cell, TableData, MAX_ROWS};
+use crate::util::fmt_count;
+use crate::table::{clip_cell, finish_sheet, Cell, TableData, MAX_ROWS};
 use crate::util::{ext_of, Res};
 
 pub const MAX_READ: u64 = 32 * 1024 * 1024;
@@ -281,7 +282,7 @@ fn subtitles(text: &str) -> Res<TableData> {
     if rows.is_empty() {
         return Err(t("No subtitles found in this file."));
     }
-    let info = vec![format!("{} {}", fmt_count(total as u64), t("cues")), crate::media::format_duration(last_end)];
+    let info = vec![format!("{} {}", fmt_count(total as u64), t("cues")), crate::util::format_duration(last_end)];
     let columns = vec!["#".to_string(), t("Start"), t("End"), t("Text")];
     Ok(TableData { format: if vtt { "WebVTT" } else { "SubRip" }, info, sheets: vec![sheet_of(t("Subtitles"), columns, rows, total)] })
 }

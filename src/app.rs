@@ -6,7 +6,8 @@ use crate::diskusage::DuAction;
 use crate::i18n::{self, t};
 use crate::icons;
 use crate::palette::{self, Act, PalItem, Palette};
-use crate::ops::{self, Conflict, Endpoint, Job};
+use crate::ops::{self, Endpoint, Job};
+use crate::safefs::Conflict;
 use crate::layout::{Layout, SplitDir};
 use crate::pane::{pane_ui, Cmd, ListCtx, Pane, PaneEvent, PaneUiCtx, Tab};
 use crate::tabs::{Strip, TabEvent, TabInfo, Workspace};
@@ -342,7 +343,7 @@ impl App {
         let (cfg, store) = crate::config::Store::open();
         i18n::set_language(&cfg.language);
         // Previews' temporary folders left by a Matrix Finder that crashed.
-        crate::util::clean_stale_temp_dirs(&[crate::media::TEMP_PREFIX]);
+        crate::util::clean_stale_temp_dirs(&[crate::util::TEMP_PREFIX]);
         let theme = theme::by_name(&cfg.theme);
         let mut cfg = cfg;
         if cfg.theme != theme::SYSTEM {
@@ -2902,7 +2903,7 @@ impl App {
                 .inner_margin(egui::Margin::symmetric(10, 6))
                 .show(ui, |ui| {
                     ui.set_width(width - 20.0);
-                    let count = if matches == 1 { t("1 match") } else { format!("{} {}", crate::table::fmt_count(matches as u64), t("matches")) };
+                    let count = if matches == 1 { t("1 match") } else { format!("{} {}", crate::util::fmt_count(matches as u64), t("matches")) };
                     let count_w = ctx.fonts(|f| f.layout_no_wrap(count.clone(), egui::FontId::proportional(11.5), th.weak).size().x);
                     // The count only when the query fits beside it; the query is what matters.
                     let with_count = text_w + count_w + 40.0 <= width - 20.0;

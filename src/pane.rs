@@ -6,7 +6,7 @@ use crate::icons;
 use crate::layout::SplitDir;
 use crate::remote::SharedRemote;
 use crate::theme::Theme;
-use crate::util::{format_time, human_size, Res};
+use crate::util::{format_time, human_size, natural_cmp, Res};
 use crate::vfs::{list_local, Entry, Location};
 use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense};
 use std::cmp::Ordering;
@@ -1005,43 +1005,6 @@ impl Location {
 
 pub fn remote_label(ctx: &ListCtx, id: u64) -> String {
     ctx.remotes.get(&id).map(|r| r.0.clone()).unwrap_or_else(|| "remote:".into())
-}
-
-/// Compare strings treating digit runs as numbers (file2 < file10).
-pub fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let (mut ai, mut bi) = (a.chars().peekable(), b.chars().peekable());
-    loop {
-        match (ai.peek().copied(), bi.peek().copied()) {
-            (None, None) => return a.cmp(b),
-            (None, _) => return Ordering::Less,
-            (_, None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let mut na = String::new();
-                while let Some(c) = ai.peek().copied().filter(|c| c.is_ascii_digit()) {
-                    na.push(c);
-                    ai.next();
-                }
-                let mut nb = String::new();
-                while let Some(c) = bi.peek().copied().filter(|c| c.is_ascii_digit()) {
-                    nb.push(c);
-                    bi.next();
-                }
-                let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
-                let o = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb));
-                if o != Ordering::Equal {
-                    return o;
-                }
-            }
-            (Some(x), Some(y)) => {
-                let o = x.to_lowercase().cmp(y.to_lowercase());
-                if o != Ordering::Equal {
-                    return o;
-                }
-                ai.next();
-                bi.next();
-            }
-        }
-    }
 }
 
 /// A mini window of a tab: a file view or a terminal.
@@ -2923,17 +2886,6 @@ pub fn filter_help() -> String {
     }
     s.push_str(&format!("{}: name, ext, size, type, modified, age, hidden, source", t("Fields")));
     s
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn natural() {
-        let mut v = vec!["file10", "file2", "File1", "a"];
-        v.sort_by(|a, b| natural_cmp(a, b));
-        assert_eq!(v, vec!["a", "File1", "file2", "file10"]);
-    }
 }
 
 #[cfg(test)]

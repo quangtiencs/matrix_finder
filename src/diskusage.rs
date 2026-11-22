@@ -271,7 +271,7 @@ impl DiskUsage {
         let (key, desc) = self.sort;
         kids.sort_by(|a, b| {
             let o = match key {
-                DuSort::Name => crate::pane::natural_cmp(&a.name.to_lowercase(), &b.name.to_lowercase()),
+                DuSort::Name => crate::util::natural_cmp(&a.name.to_lowercase(), &b.name.to_lowercase()),
                 DuSort::Size => a.size.cmp(&b.size),
                 DuSort::Files => a.files.cmp(&b.files),
             };

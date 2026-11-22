@@ -3480,7 +3480,7 @@ fn eject_drives_from_the_sidebar() {
         }
     };
     h.state_mut().drive_watch = crate::drives::Watcher::spawn_with(lister, Duration::from_millis(200), Duration::from_secs(3600), None);
-    let images = crate::media::TempDir::new().unwrap();
+    let images = crate::util::TempDir::new().unwrap();
     assert_eq!(mount_test_image(images.path(), &name), mount);
     let home = d.home.clone();
     let has = |app: &App, m: &Path| app.drives.iter().any(|x| x.mount == m);

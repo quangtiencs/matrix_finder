@@ -4,7 +4,8 @@
 //! size) and to show data frames, matrices and vectors as tables. Nothing in the file
 //! is ever run: functions, environments and byte code are only stepped over.
 use crate::i18n::t;
-use crate::table::{clip_cell, finish_sheet, fmt_count, Cell, Sheet, TableData, MAX_COLS, MAX_ROWS};
+use crate::util::fmt_count;
+use crate::table::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_COLS, MAX_ROWS};
 use crate::util::{es, Res};
 use std::io::{BufRead, BufReader, Read};
 use std::time::{Duration, Instant};

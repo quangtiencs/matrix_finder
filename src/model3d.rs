@@ -492,7 +492,7 @@ impl ModelView {
 
     pub fn ui(&mut self, ui: &mut egui::Ui, name: &str, key: &str, th: &Theme) {
         let size = [0, 1, 2].map(|i| self.mesh.max[i] - self.mesh.min[i]);
-        let mut facts = format!("{} · {} {} · {} × {} × {}", self.mesh.format, crate::table::fmt_count(self.mesh.tris.len() as u64), t("triangles"), size_text(size[0]), size_text(size[1]), size_text(size[2]));
+        let mut facts = format!("{} · {} {} · {} × {} × {}", self.mesh.format, crate::util::fmt_count(self.mesh.tris.len() as u64), t("triangles"), size_text(size[0]), size_text(size[1]), size_text(size[2]));
         if self.mesh.truncated {
             facts.push_str(&format!(" · {}", t("(truncated)")));
         }

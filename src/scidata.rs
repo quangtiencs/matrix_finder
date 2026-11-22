@@ -921,7 +921,7 @@ mod tests {
 
     #[test]
     fn sqlite_tables_views_and_blobs() {
-        let dir = crate::media::TempDir::new().unwrap();
+        let dir = crate::util::TempDir::new().unwrap();
         let path = dir.path().join("a b#c?.sqlite");
         let c = rusqlite::Connection::open(&path).unwrap();
         c.execute_batch("CREATE TABLE t(id INTEGER, name TEXT, pic BLOB); CREATE VIEW v AS SELECT name FROM t; CREATE TABLE \"odd \"\"name\"(x);").unwrap();

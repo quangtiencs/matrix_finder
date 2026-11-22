@@ -1,7 +1,7 @@
 //! Background jobs (copy / move / delete / pack / unpack / backup) with progress.
 use crate::i18n::t;
 use crate::remote::SharedRemote;
-use crate::safefs::{self, TempFile, Written};
+use crate::safefs::{self, Conflict, TempFile, Written};
 use crate::util::{es, human_size, join_slash, Res};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -177,13 +177,6 @@ impl Job {
             Err(_) => Some(Err("Job aborted".into())),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Conflict {
-    Overwrite,
-    Skip,
-    Rename,
 }
 
 /// One end of a transfer: a directory somewhere.

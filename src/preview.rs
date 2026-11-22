@@ -647,8 +647,8 @@ impl Preview {
                 if let Some(sh) = data.sheets.get(self.sheet) {
                     parts.push(format!("{} {}", sh.columns.len(), t("columns")));
                     parts.push(match sh.total_rows {
-                        Some(n) => format!("{} {}", crate::table::fmt_count(n), t("rows")),
-                        None => format!("{}+ {}", crate::table::fmt_count(sh.rows.len() as u64), t("rows")),
+                        Some(n) => format!("{} {}", crate::util::fmt_count(n), t("rows")),
+                        None => format!("{}+ {}", crate::util::fmt_count(sh.rows.len() as u64), t("rows")),
                     });
                 }
                 parts.extend(data.info.iter().cloned());
@@ -1001,7 +1001,7 @@ fn table_ui(
             .collect()
     };
     let shown_info = if sheet.total_rows.is_some_and(|n| n as usize > sheet.rows.len()) || sheet.total_rows.is_none() && sheet.rows.len() >= crate::table::MAX_ROWS {
-        format!("{} {} {}", t("Showing the first"), crate::table::fmt_count(sheet.rows.len() as u64), t("rows"))
+        format!("{} {} {}", t("Showing the first"), crate::util::fmt_count(sheet.rows.len() as u64), t("rows"))
     } else {
         String::new()
     };
@@ -1011,7 +1011,7 @@ fn table_ui(
             if !s.is_empty() {
                 s.push_str(" · ");
             }
-            s.push_str(&format!("{} {}", crate::table::fmt_count(visible.len() as u64), t("matching rows")));
+            s.push_str(&format!("{} {}", crate::util::fmt_count(visible.len() as u64), t("matching rows")));
         }
         ui.label(egui::RichText::new(s).size(11.5).color(theme.weak));
     }
@@ -1610,7 +1610,8 @@ fn field_row(label: String, value: Option<String>, rows: &mut Vec<crate::certvie
 
 fn video_summary(path: &Path, max_texture: usize, cancel: &crate::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
     use crate::i18n::t;
-    use crate::media::{format_duration, video_info, video_thumbnail};
+    use crate::media::{video_info, video_thumbnail};
+    use crate::util::format_duration;
     let info = match crate::util::open_regular(path) {
         Ok(f) => video_info(&mut std::io::BufReader::new(f)),
         Err(e) => return Loaded::Error(e.to_string()),
@@ -1762,14 +1763,14 @@ fn comic_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
         !file.starts_with('.') && !p.starts_with("__MACOSX/") && matches!(ext_of(file).as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp")
     };
     let mut pages: Vec<&crate::archive::ArchEntry> = entries.iter().filter(|e| !e.is_dir && is_page(&e.path)).collect();
-    pages.sort_by(|a, b| crate::pane::natural_cmp(&a.path, &b.path));
+    pages.sort_by(|a, b| crate::util::natural_cmp(&a.path, &b.path));
     let picture = pages
         .first()
         .filter(|e| e.size <= MAX_IMAGE as u64)
         .and_then(|e| crate::archive::read_entry(path, &e.path, MAX_IMAGE).ok())
         .and_then(|b| decode_oriented(&b).ok())
         .map(|img| summary_picture(img, max_texture));
-    let mut rows = vec![Row::Field(t("Pages"), crate::table::fmt_count(pages.len() as u64)), Row::Field(t("Size"), human_size(pages.iter().map(|e| e.size).sum()))];
+    let mut rows = vec![Row::Field(t("Pages"), crate::util::fmt_count(pages.len() as u64)), Row::Field(t("Size"), human_size(pages.iter().map(|e| e.size).sum()))];
     if picture.is_none() && !pages.is_empty() {
         rows.push(Row::Note(if crate::archive::lock_state(path) == crate::archive::Lock::Open { t("The cover could not be read.") } else { t("Password protected") }));
     }
@@ -1859,7 +1860,7 @@ fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, 
 
 /// Run `f` on a temporary copy of a file that has no path of its own (in an archive or on a server).
 fn with_temp_file(name: &str, bytes: &[u8], f: impl FnOnce(&Path) -> Loaded) -> Loaded {
-    let dir = match crate::media::TempDir::new() {
+    let dir = match crate::util::TempDir::new() {
         Ok(d) => d,
         Err(e) => return Loaded::Error(e),
     };

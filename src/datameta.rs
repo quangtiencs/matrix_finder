@@ -4,7 +4,8 @@
 //! label) from the file's header, so a file of any size opens at once. A header that
 //! is damaged, or larger than any real one, is refused with a message instead.
 use crate::i18n::t;
-use crate::table::{clip_cell, finish_sheet, fmt_count, Cell, Sheet, TableData, MAX_ROWS};
+use crate::util::fmt_count;
+use crate::table::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_ROWS};
 use crate::util::{es, human_size, Res};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -1182,7 +1183,7 @@ pub fn sas_from<R: Read + Seek>(r: R) -> Res<TableData> {
 /// What the DuckDB tool says about a database: its tables and views, their columns and
 /// estimated row counts. The database is opened read-only, and nothing of its data is read.
 fn duckdb_query(path: &Path, sql: &str, cancel: &crate::media::Cancel) -> Option<Vec<serde_json::Map<String, serde_json::Value>>> {
-    let tool = crate::media::find_tool("duckdb")?;
+    let tool = crate::util::find_tool("duckdb")?;
     let mut cmd = std::process::Command::new(tool);
     cmd.args(["-json", "-init"]).arg(if cfg!(windows) { "NUL" } else { "/dev/null" }).args(["-c", &duckdb_script(path, sql)?]);
     let out = crate::media::tool_output(cmd, cancel)?;
@@ -1251,7 +1252,7 @@ pub fn duckdb_from(path: &Path, cancel: &crate::media::Cancel) -> Res<TableData>
         cancel,
     );
     let Some(tables) = tables else {
-        let note = if crate::media::find_tool("duckdb").is_some() { t("The DuckDB tool could not open this database.") } else { t("Install DuckDB to see the tables of this database.") };
+        let note = if crate::util::find_tool("duckdb").is_some() { t("The DuckDB tool could not open this database.") } else { t("Install DuckDB to see the tables of this database.") };
         let sheets = vec![key_values(t("Metadata"), header.into_iter().chain([(t("Note"), note)]).collect())];
         return Ok(TableData { format: "DuckDB", info: vec![], sheets });
     };

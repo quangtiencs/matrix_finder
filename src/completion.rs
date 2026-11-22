@@ -129,7 +129,7 @@ fn read(dir: &Path) -> Vec<Cand> {
             out.push(Cand { name, archive: true });
         }
     }
-    out.sort_by(|a, b| crate::pane::natural_cmp(&a.name, &b.name));
+    out.sort_by(|a, b| crate::util::natural_cmp(&a.name, &b.name));
     out
 }
 

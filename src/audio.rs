@@ -106,7 +106,7 @@ pub fn read<R: Read + Seek>(r: R, ext: &str) -> Res<AudioInfo> {
     let props = file.properties();
     let duration = props.duration().as_secs_f64();
     if duration > 0.0 {
-        rows.push(Row::Field(t("Duration"), crate::media::format_duration(duration)));
+        rows.push(Row::Field(t("Duration"), crate::util::format_duration(duration)));
     }
     push(&mut rows, t("Bitrate"), props.audio_bitrate().or(props.overall_bitrate()).filter(|b| *b > 0).map(|b| format!("{b} kbps")));
     push(&mut rows, t("Sample rate"), props.sample_rate().filter(|r| *r > 0).map(|r| format!("{} kHz", (f64::from(r) / 100.0).round() / 10.0)));
@@ -160,7 +160,7 @@ mod tests {
         assert_eq!(info.format, "WAV");
         let field = |l: &str| info.rows.iter().find_map(|r| if let Row::Field(k, v) = r { (k == &t(l)).then(|| v.clone()) } else { None });
         assert_eq!(field("Title").as_deref(), Some("Quiet"));
-        assert_eq!(field("Duration").as_deref(), Some(crate::media::format_duration(2.0).as_str()));
+        assert_eq!(field("Duration").as_deref(), Some(crate::util::format_duration(2.0).as_str()));
         assert_eq!(field("Sample rate").as_deref(), Some("8 kHz"));
         assert_eq!(field("Channels"), Some(t("mono")));
         assert_eq!(field("Bit depth").as_deref(), Some("16-bit"));

@@ -3,7 +3,8 @@
 //! Only the headers are read, so a model of many gigabytes opens at once; the small
 //! arrays of an `.npz` are shown too.
 use crate::i18n::t;
-use crate::table::{clip_cell, finish_sheet, fmt_count, Cell, Sheet, TableData, MAX_ROWS};
+use crate::util::fmt_count;
+use crate::table::{clip_cell, finish_sheet, Cell, Sheet, TableData, MAX_ROWS};
 use crate::util::{es, human_size, Res};
 use std::io::{Read, Seek, SeekFrom};
 
@@ -126,7 +127,7 @@ pub fn safetensors_from<R: Read>(mut r: R) -> Res<TableData> {
             note: String::new(),
         });
     }
-    rows.sort_by(|a, b| crate::pane::natural_cmp(&a.name, &b.name));
+    rows.sort_by(|a, b| crate::util::natural_cmp(&a.name, &b.name));
     let total: u64 = rows.iter().filter_map(|r| r.elements).fold(0, u64::saturating_add);
     let bytes: u64 = rows.iter().filter_map(|r| r.bytes).fold(0, u64::saturating_add);
     let mut info = vec![format!("{} {}", fmt_count(rows.len() as u64), t("tensors")), parameters_info(total), human_size(bytes)];

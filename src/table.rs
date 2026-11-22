@@ -161,7 +161,7 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Res<TableData> {
         }
         // SQLite only reads real files.
         "sqlite" | "sqlite3" | "db3" => {
-            let dir = crate::media::TempDir::new()?;
+            let dir = crate::util::TempDir::new()?;
             let path = dir.path().join("preview.sqlite");
             std::fs::write(&path, bytes).map_err(es)?;
             crate::scidata::sqlite_from_path(&path)
@@ -184,7 +184,7 @@ pub fn load_bytes(name: &str, bytes: Vec<u8>) -> Res<TableData> {
         // The tool only reads real files.
         _ if crate::records::is_record_text(name) => crate::records::load(name, &bytes[..bytes.len().min(crate::records::MAX_READ as usize)]),
         "duckdb" | "ddb" => {
-            let dir = crate::media::TempDir::new()?;
+            let dir = crate::util::TempDir::new()?;
             let path = dir.path().join("preview.duckdb");
             std::fs::write(&path, bytes).map_err(es)?;
             crate::datameta::duckdb_from(&path, &std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
@@ -207,22 +207,6 @@ pub fn clip_cell(s: String) -> String {
     } else {
         s
     }
-}
-
-fn group_digits(n: u64) -> String {
-    let s = n.to_string();
-    let mut out = String::new();
-    for (i, c) in s.chars().enumerate() {
-        if i > 0 && (s.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(c);
-    }
-    out
-}
-
-pub fn fmt_count(n: u64) -> String {
-    group_digits(n)
 }
 
 // ---------------------------------------------------------------- type inference
@@ -735,7 +719,6 @@ mod tests {
         assert_eq!(col_letter(0), "A");
         assert_eq!(col_letter(25), "Z");
         assert_eq!(col_letter(26), "AA");
-        assert_eq!(fmt_count(1234567), "1,234,567");
     }
 }
 

@@ -66,7 +66,7 @@ pub fn list_dirs(dir: &Path, show_hidden: bool) -> Vec<String> {
             out.push(name);
         }
     }
-    out.sort_by(|a, b| crate::pane::natural_cmp(a, b));
+    out.sort_by(|a, b| crate::util::natural_cmp(a, b));
     out
 }
 

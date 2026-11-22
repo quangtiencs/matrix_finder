@@ -154,7 +154,7 @@ pub fn load(name: &str, bytes: &[u8]) -> Res<GeoData> {
         "shp" => shapefile(bytes),
         "gpkg" => {
             // SQLite only reads real files.
-            let dir = crate::media::TempDir::new()?;
+            let dir = crate::util::TempDir::new()?;
             let path = dir.path().join("preview.gpkg");
             std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
             geopackage(&path)
@@ -1198,13 +1198,13 @@ impl GeoView {
         let d = &self.data;
         let mut parts = vec![d.format.to_string()];
         if let Some(n) = d.features {
-            parts.push(format!("{} {}", crate::table::fmt_count(n as u64), if n == 1 { t("feature") } else { t("features") }));
+            parts.push(format!("{} {}", crate::util::fmt_count(n as u64), if n == 1 { t("feature") } else { t("features") }));
         }
-        let kinds: Vec<String> = d.kinds.iter().map(|(k, n)| format!("{} {k}", crate::table::fmt_count(*n as u64))).collect();
+        let kinds: Vec<String> = d.kinds.iter().map(|(k, n)| format!("{} {k}", crate::util::fmt_count(*n as u64))).collect();
         if !kinds.is_empty() {
             parts.push(kinds.join(", "));
         }
-        parts.push(format!("{} {}", crate::table::fmt_count(d.vertices as u64), t("vertices")));
+        parts.push(format!("{} {}", crate::util::fmt_count(d.vertices as u64), t("vertices")));
         if let Some(s) = d.srid {
             parts.push(format!("SRID {s}"));
         }

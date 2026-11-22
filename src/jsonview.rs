@@ -413,11 +413,11 @@ impl JsonView {
 
     fn facts(&self) -> String {
         let what = match &self.root {
-            Node::Obj(v) => format!("{} {}", crate::table::fmt_count(v.len() as u64), if v.len() == 1 { t("key") } else { t("keys") }),
-            Node::Arr(v) => format!("{} {}", crate::table::fmt_count(v.len() as u64), if v.len() == 1 { t("item") } else { t("items") }),
+            Node::Obj(v) => format!("{} {}", crate::util::fmt_count(v.len() as u64), if v.len() == 1 { t("key") } else { t("keys") }),
+            Node::Arr(v) => format!("{} {}", crate::util::fmt_count(v.len() as u64), if v.len() == 1 { t("item") } else { t("items") }),
             _ => t("a single value"),
         };
-        format!("JSON · {what} · {} {} · {} {}", crate::table::fmt_count(self.values as u64), t("values"), t("depth"), self.depth)
+        format!("JSON · {what} · {} {} · {} {}", crate::util::fmt_count(self.values as u64), t("values"), t("depth"), self.depth)
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, name: &str, key: &str, th: &Theme) {
@@ -503,7 +503,7 @@ impl JsonView {
                 let indent = rect.left() + 6.0 + row.depth as f32 * 16.0;
                 let p = ui.painter_at(rect);
                 if let RowKind::More(n) = row.kind {
-                    let text = format!("… {} {}", crate::table::fmt_count(n as u64), t("hidden · click to show more"));
+                    let text = format!("… {} {}", crate::util::fmt_count(n as u64), t("hidden · click to show more"));
                     p.text(egui::pos2(indent + 16.0, rect.center().y), egui::Align2::LEFT_CENTER, text, font.clone(), if resp.hovered() { th.accent } else { th.weak });
                     if resp.clicked() {
                         action = Some(Action::More(row.at.clone()));
@@ -634,7 +634,7 @@ impl ValueColors {
 
 /// What a row shows of its value: scalars in full (long strings cut), folders by size.
 fn summary(n: &Node, c: &ValueColors, open: bool) -> (String, Color32) {
-    let count = |len: usize, one: &str, many: &str| format!("{} {}", crate::table::fmt_count(len as u64), if len == 1 { t(one) } else { t(many) });
+    let count = |len: usize, one: &str, many: &str| format!("{} {}", crate::util::fmt_count(len as u64), if len == 1 { t(one) } else { t(many) });
     match n {
         Node::Null => ("null".into(), c.literal),
         Node::Bool(b) => (b.to_string(), c.literal),
