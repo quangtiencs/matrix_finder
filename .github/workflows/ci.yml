@@ -1,0 +1,75 @@
+# Formatting, unit tests on Linux (x86_64 and arm64), macOS and Windows, and
+# `cargo audit`. The GUI tests (#[ignore], src/app/gui_tests.rs) need a GPU and are
+# not run here. The weekly run catches new RustSec advisories between releases.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup update --no-self-update stable && rustup default stable && rustup component add rustfmt
+      - run: cargo fmt --check
+
+  test:
+    name: Test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: Linux x86_64, os: ubuntu-24.04 }
+          - { name: Linux arm64, os: ubuntu-24.04-arm }
+          - { name: macOS arm64, os: macos-15 }
+          - { name: Windows x86_64, os: windows-2025 }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: System packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libssl-dev
+      - name: Rust
+        shell: bash
+        run: rustup update --no-self-update stable && rustup default stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Build
+        run: cargo build --locked --all-targets
+      - name: Test
+        run: cargo test --locked
+
+  audit:
+    name: Security audit
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@fe3acb53a98b62c772db35de75ce0e4595e7ca8c # v2.90.8
+        with:
+          tool: cargo-audit
+      # Fails on a vulnerability that .cargo/audit.toml does not list; "unmaintained"
+      # warnings are reported but do not fail.
+      - run: cargo audit

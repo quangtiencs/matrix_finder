@@ -35,6 +35,7 @@ make linux-packages [ARCH=amd64]    # .deb + .rpm in target/linux, built in Dock
 ```
 
 - The code is formatted with rustfmt (`rustfmt.toml`: `max_width = 160`, `use_small_heuristics = "Max"`). Run `cargo fmt` after editing Rust code and before committing; `cargo fmt --check` (`make fmt-check`) must pass. Use `#[rustfmt::skip]` only for data tables that read best one row per line (like `DEFS` in `ui/shortcuts.rs`). A commit that only reformats code is listed in `.git-blame-ignore-revs`.
+- CI (`.github/workflows/ci.yml`) runs `cargo fmt --check`, `cargo test` on Linux x86_64/arm64, macOS and Windows, and `cargo audit` on pushes to `main`, pull requests and weekly. Code that only Windows compiles is first checked there.
 - Feature `sftp` (default) pulls in `ssh2`; `vendored-openssl` is used by the DMG script.
 - Ignored tests: `src/app/gui_tests.rs` drives the real `App` headlessly with `egui_kittest` + wgpu (keyboard, drag and drop, settings, Quick View stress, `export_screenshots`); they set `HOME` to a demo folder under the temp dir, so they don't touch real settings. `files/remote.rs` live tests need `MATRIX_FINDER_TEST_FTP` / `MATRIX_FINDER_TEST_SFTP`. `main.rs` has a test-only capped global allocator (`memcap`) used by memory-limit tests.
 
