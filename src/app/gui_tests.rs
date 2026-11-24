@@ -1059,6 +1059,7 @@ fn window_drag_and_drop() {
 
 /// File types opening with a chosen app, and going back to the system's default. A
 /// small script stands in for the apps; no test here starts a real one.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn default_apps_choose_and_reset() {
@@ -1187,6 +1188,7 @@ fn terminal_close_asks_while_a_program_runs() {
 
 /// The AI button in a terminal's info bar: it starts the chosen agent at the prompt,
 /// is greyed out while a program runs, and Settings chooses the agent or turns it off.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn terminal_ai_button() {
@@ -3088,6 +3090,7 @@ fn password_protected_archives() {
 
 /// Past the limit a file gets only the message. It is unreadable here, so any attempt
 /// to open it would show an error instead; and a file under the limit still previews.
+#[cfg(unix)]
 #[test]
 #[ignore]
 fn too_large_files_are_not_opened() {
