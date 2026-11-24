@@ -1,5 +1,5 @@
 # Convenience targets. `cargo build --release` still works as usual.
-.PHONY: release test fmt fmt-check icons screenshots app dmg dmg-universal linux-packages
+.PHONY: release test fmt fmt-check icons screenshots app dmg dmg-universal linux-packages licenses
 
 release:
 	cargo build --release
@@ -38,3 +38,8 @@ dmg-universal:
 # built in Docker on Ubuntu 22.04. ARCH=amd64 or arm64 (default: this machine's).
 linux-packages:
 	scripts/linux/build-packages.sh $(if $(ARCH),--arch $(ARCH))
+
+# THIRD-PARTY-LICENSES.md: the licenses of every crate, C library, font and icon built in.
+# Run after changing dependencies (CI fails while it is out of date).
+licenses:
+	python3 scripts/third-party-licenses.py

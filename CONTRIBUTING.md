@@ -243,3 +243,14 @@ build(macos): build a universal DMG
 
 Tags are `v<version>` from `Cargo.toml` (e.g. `v0.1.0`); the GitHub release carries
 the Apple silicon DMG from `make dmg` (Intel Macs build from source).
+
+### Licenses
+
+Matrix Finder is MIT (`LICENSE`). `THIRD-PARTY-LICENSES.md` lists every Rust crate, C
+library, font and icon built into the program, with their license texts; it is generated
+by `make licenses` (`scripts/third-party-licenses.py`, from the crates' own license files)
+and CI fails while it is out of date, so run it after adding, removing or updating a
+dependency. A new dependency must have a license that allows shipping it in a binary
+without opening Matrix Finder's own code (no GPL/AGPL); a new bundled C library, font or
+icon set is added to the lists at the top of the script. Both files go into the macOS app
+(`Contents/Resources`) and the Linux packages (`/usr/share/doc` or `/usr/share/licenses`).
