@@ -74,6 +74,14 @@ MATRIX_FINDER_TEST_SFTP=host:22:user:/path/to/private_key cargo test live_sftp -
 
 GUI tests drive the real app headlessly (`egui_kittest` + wgpu) and are ignored by default; run them one at a time, as they share a demo folder: `cargo test -- --ignored --test-threads=1 <name>`.
 
+### Continuous integration
+
+`.github/workflows/ci.yml` runs on every push to `main`, on pull requests and once a week:
+`cargo fmt --check`, `cargo test` on Linux (x86_64 and arm64), macOS (Apple silicon) and
+Windows, and `cargo audit` (with the exceptions in `.cargo/audit.toml`). The GUI tests
+are not run there. Actions are pinned to a commit; update the SHA and the version comment
+together.
+
 ## Code style
 
 The code is formatted with rustfmt, set up in `rustfmt.toml` (long lines: `max_width = 160`
