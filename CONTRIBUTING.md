@@ -27,7 +27,7 @@ make linux-packages                 # or: scripts/linux/build-packages.sh [--arc
 This builds `target/linux/matrix-finder_<version>-1_<arch>.deb` (Ubuntu, Debian) and `target/linux/matrix-finder-<version>-1.<arch>.rpm` (Fedora) from one binary compiled in Docker on Ubuntu 22.04 (glibc 2.35, OpenSSL 3), so they install on Ubuntu 22.04+, Debian 12+ and current Fedora. It needs Docker; another architecture than the machine's is emulated and slow (`ARCH=amd64 make linux-packages`).
 
 - The packages hold the files `scripts/install.sh` puts in `~/.local`, under `/usr`: the binary, `assets/linux/org.matrixfinder.MatrixFinder.desktop` and the icons. Their dependencies and files are in `Cargo.toml` (`[package.metadata.deb]`, `[package.metadata.generate-rpm]`); the graphics, X11 and Wayland libraries are listed by hand because the window loads them at run time.
-- A copy from the install script comes first on `PATH` and in the menu, so it would start instead of the package. After installing, the package names such a copy and how to remove it (`scripts/linux/deb/postinst`, also the rpm's); the install script refuses to install next to a package, refuses `--prefix /usr`, and never deletes a file that belongs to a package.
+- A copy from the install script comes first on `PATH` and in the menu, so it would start instead of the package. After installing, the package names such a copy and how to remove it (`scripts/linux/deb/postinst`, also the rpm's), and the app says so at every start while it runs from the script's copy (`system/copies.rs`); the install script refuses to install next to a package, refuses `--prefix /usr`, and never deletes a file that belongs to a package.
 
 ### macOS app and DMG
 
@@ -187,6 +187,7 @@ src/
     ├── activation.rs  Linux startup notification: hands the desktop's token to the window
     ├── defaultapps.rs which app opens which file type, and the system's own choice
     ├── agents.rs      AI coding agents for the AI button: which are installed, their logos
+    ├── copies.rs      Linux: the install script's copy running over a .deb/.rpm package's
     └── update.rs      checking GitHub for a newer release (only when asked)
 assets/agents/     logos of the AI coding agents (LobeHub Icons, MIT)
 assets/fonts/      Source Sans 3, Source Serif 4, Source Code Pro (SIL OFL 1.1)
