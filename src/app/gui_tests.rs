@@ -1711,6 +1711,23 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         shot(&mut h, "panels");
     }
 
+    // The same two panels with a file's menu open on Layout: how a window is split.
+    if want("panels-layout") {
+        let mut h = app_harness(&settings(mode.theme, d), gnome);
+        let app = h.state_mut();
+        app.shot_pane(0, &d.demo, Some("bundle.zip"));
+        app.shot_pane(1, &d.demo.join("home"), Some(".."));
+        app.shot_focus(0);
+        wait_for_git(&mut h, d);
+        // The archive.tar row of the left window.
+        right_click(&mut h, pos2(330.0, 524.0));
+        if let Some(p) = node_center(&h, &t("Layout"), 300.0) {
+            move_to(&mut h, p);
+            settle(&mut h, 4);
+        }
+        shot(&mut h, "panels-layout");
+    }
+
     if want("native-themes") {
         let mut tiles = vec![];
         for (theme, chrome) in mode.native {
@@ -2291,7 +2308,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
 /// The four scenes of `docs/showcase.png`, left to right and top to bottom:
 /// (mode, scene). Light and dark both appear; `terminal-tabs` is light files beside a dark terminal in either mode.
 /// The four windows of `docs/showcase.png`: the Breeze Light interface, with a dark terminal.
-const SHOWCASE: [(&str, &str); 4] = [("light", "panels"), ("light", "terminal-tabs"), ("light", "quickview-hdf5"), ("light", "quickview-json")];
+const SHOWCASE: [(&str, &str); 4] = [("light", "panels-layout"), ("light", "terminal-tabs"), ("light", "quickview-hdf5"), ("light", "quickview-json")];
 
 /// Coverage (0..=1) of a rectangle with rounded corners at pixel (`x`, `y`).
 fn rounded_coverage(x: u32, y: u32, w: u32, h: u32, radius: f32) -> f32 {
