@@ -77,10 +77,11 @@ GUI tests drive the real app headlessly (`egui_kittest` + wgpu) and are ignored 
 ### Continuous integration
 
 `.github/workflows/ci.yml` runs on every push to `main`, on pull requests and once a week:
-`cargo fmt --check`, `cargo test` on Linux (x86_64 and arm64), macOS (Apple silicon) and
-Windows, and `cargo audit` (with the exceptions in `.cargo/audit.toml`). The GUI tests
-are not run there. Actions are pinned to a commit; update the SHA and the version comment
-together.
+`cargo fmt --check`, `cargo test` on Linux (x86_64 and arm64) and macOS (Apple silicon),
+a build of the app and its tests on Windows (several tests still assume Unix paths, so
+they are not run there), and `cargo audit` (with the exceptions in `.cargo/audit.toml`).
+The GUI tests are not run in CI. Actions are pinned to a commit; update the SHA and the
+version comment together.
 
 ## Code style
 
