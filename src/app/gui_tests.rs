@@ -1496,6 +1496,112 @@ sys.stdout.write("[<u[?1049l")
     assert!(!mode(h.state()).intersects(TermMode::KITTY_KEYBOARD_PROTOCOL));
 }
 
+/// Cmd/Ctrl+click on a link opens it even while the program in the terminal takes the
+/// mouse (as Claude Code does): first a question that shows where it goes, then the
+/// browser chosen in the settings; "Don't ask again" holds for that terminal.
+#[cfg(unix)]
+#[test]
+#[ignore]
+fn terminal_links_open_after_asking() {
+    let d = demo_env();
+    let (log, opened) = (d.home.join("link-input.bin"), d.home.join("opened.txt"));
+    let _ = std::fs::remove_file(&log);
+    let _ = std::fs::remove_file(&opened);
+    // A screen full of links, the mouse reported to the program, its input logged.
+    let script = r#"
+import os, sys, tty
+fd = sys.stdin.fileno()
+tty.setraw(fd)
+out = open(os.path.expanduser("~/link-input.bin"), "wb", buffering=0)
+cols, rows = os.get_terminal_size(fd)
+sys.stdout.write("\x1b[?1049h\x1b[?1000h\x1b[?1006h\x1b[H")
+for r in range(rows - 1):
+    sys.stdout.write(("https://example.com/docs/" + "x" * cols)[: cols - 1] + "\r\n")
+sys.stdout.flush()
+while True:
+    b = os.read(fd, 1024)
+    out.write(b)
+    if b"\x11" in b:
+        break
+sys.stdout.write("\x1b[?1000l\x1b[?1006l\x1b[?1049l")
+"#;
+    touch(&d.home.join("links.py"), script.as_bytes());
+    // The "browser" writes down the links it is given.
+    let browser = d.home.join("browser.sh");
+    touch(&browser, format!("#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\n", opened.display()).as_bytes());
+    std::fs::set_permissions(&browser, <std::fs::Permissions as std::os::unix::fs::PermissionsExt>::from_mode(0o755)).unwrap();
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.browser = format!("\"{}\"", browser.display());
+    assert!(cfg.term_confirm_links, "asks by default");
+    let mut h = app_harness(&cfg, "gnome");
+    let home = d.home.clone();
+    let uid = h.state_mut().shot_terminal(&home, None, None);
+    term_type(&mut h, 0, uid, "python3 ~/links.py\r");
+    let mode = |app: &App| app.panes[0].tab().term.as_ref().map(|t| t.mode()).unwrap_or(TermMode::empty());
+    wait_until(&mut h, 10.0, |app| mode(app).contains(TermMode::ALT_SCREEN | TermMode::MOUSE_REPORT_CLICK));
+    wait_until(&mut h, 1.0, |_| false);
+    let read = || String::from_utf8_lossy(&std::fs::read(&log).unwrap_or_default()).into_owned();
+    let links = || std::fs::read_to_string(&opened).unwrap_or_default();
+    let at = pos2(W * 0.5, H * 0.5);
+    let cmd_click = |h: &mut Harness<'static, App>| cmd_click_at(h, at);
+
+    // The question, with the site; the program does not get the click.
+    cmd_click(&mut h);
+    let url = match &h.state().dialog {
+        Some(Dialog::OpenLink { url, .. }) => url.clone(),
+        _ => panic!("no question before opening the link"),
+    };
+    assert!(url.starts_with("https://example.com/docs/x"), "{url}");
+    assert!(h.query_by_label("example.com").is_some(), "the site is shown");
+    assert!(!read().contains("\x1b[<0;"), "the program got the click: {:?}", read());
+    // Cancel opens nothing.
+    let p = node_center(&h, &t("Cancel"), 0.0).expect("Cancel");
+    click_at(&mut h, p);
+    assert!(h.state().dialog.is_none());
+    wait_until(&mut h, 1.0, |_| false);
+    assert_eq!(links(), "");
+
+    // Open, and stop asking in this terminal.
+    cmd_click(&mut h);
+    let p = node_center(&h, &t("Don't ask again in this terminal"), 0.0).expect("checkbox");
+    click_at(&mut h, p);
+    assert!(matches!(&h.state().dialog, Some(Dialog::OpenLink { stop_asking: true, .. })));
+    let p = node_center(&h, &t("Open link"), 0.0).expect("Open link");
+    click_at(&mut h, p);
+    wait_until(&mut h, 5.0, |_| !links().is_empty());
+    assert_eq!(links(), format!("{url}\n"));
+    assert!(h.state().dialog.is_none());
+
+    // Again: no question this time.
+    cmd_click(&mut h);
+    assert!(h.state().dialog.is_none(), "asked again");
+    wait_until(&mut h, 5.0, |_| links().lines().count() == 2);
+    assert_eq!(links().lines().count(), 2);
+
+    // A plain click still goes to the program.
+    click_at(&mut h, at);
+    wait_until(&mut h, 2.0, |_| read().contains("\x1b[<0;"));
+    assert!(read().contains("\x1b[<0;"), "plain click: {:?}", read());
+    if let Some(t) = h.state().panes[0].tab().term.as_ref() {
+        t.write(vec![0x11]);
+    }
+    wait_until(&mut h, 3.0, |app| !mode(app).contains(TermMode::ALT_SCREEN));
+
+    // At the shell's prompt (no mouse reporting) too.
+    term_type(&mut h, 0, uid, "stty sane; clear; for i in $(seq 60); do echo https://example.org/shell/$i; done\r");
+    cmd_click_at(&mut h, pos2(300.0, H * 0.5));
+    wait_until(&mut h, 5.0, |_| links().lines().count() == 3);
+    assert!(links().lines().nth(2).is_some_and(|l| l.starts_with("https://example.org/shell/")), "{}", links());
+}
+
+fn cmd_click_at(h: &mut Harness<'static, App>, at: Pos2) {
+    move_to(h, at);
+    button(h, at, PointerButton::Primary, true, Modifiers::COMMAND);
+    button(h, at, PointerButton::Primary, false, Modifiers::COMMAND);
+    h.input_mut().modifiers = Modifiers::NONE;
+    settle(h, 3);
+}
+
 #[test]
 #[ignore]
 fn settings_fonts_and_terminal_themes() {

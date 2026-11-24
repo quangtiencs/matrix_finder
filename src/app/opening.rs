@@ -3,6 +3,27 @@
 use super::*;
 
 impl App {
+    /// Open a web or mail link: web links in the browser chosen in the settings (or the
+    /// system's default one), mail links in the system's mail app.
+    pub(super) fn open_web(&mut self, url: &str) {
+        let browser = if is_web_link(url) { self.cfg.browser.trim() } else { "" };
+        if let Err(e) = terminal::open_url(browser, url) {
+            self.toast(format!("{}: {e}", t("Cannot open the link")), true);
+        }
+    }
+
+    /// The browser that opens web links, named for the user.
+    pub(super) fn browser_label(&self, ctx: &egui::Context) -> String {
+        let b = self.cfg.browser.trim();
+        if !b.is_empty() {
+            return crate::system::defaultapps::program_name(b);
+        }
+        match crate::system::defaultapps::system_app(ctx, "html") {
+            Some(Some(app)) => format!("{app} ({})", t("system default")),
+            _ => t("System default"),
+        }
+    }
+
     /// Enter / double-click on the cursor entry.
     pub(super) fn open_cursor(&mut self) {
         let a = self.active;
@@ -451,5 +472,39 @@ fn archive_summary(path: &Path, cancel: &crate::preview::media::Cancel) -> Strin
             )
         }
         Err(e) => format!("{}: {e}", t("Cannot read archive")),
+    }
+}
+
+/// An http(s) link (others, like mailto, go to their own app).
+fn is_web_link(url: &str) -> bool {
+    url.split_once(':').is_some_and(|(s, _)| s.eq_ignore_ascii_case("http") || s.eq_ignore_ascii_case("https"))
+}
+
+/// Where a link really goes, for the question before opening it: the host of a web link
+/// (without any `user@` in front, which can make a link look like another site's), the
+/// address of a mail link.
+pub(super) fn link_place(url: &str) -> Option<String> {
+    let (scheme, rest) = url.split_once(':')?;
+    if scheme.eq_ignore_ascii_case("mailto") {
+        let to = rest.split(['?', '#']).next().unwrap_or_default();
+        return (!to.is_empty()).then(|| to.to_string());
+    }
+    let authority = rest.strip_prefix("//")?.split(['/', '?', '#']).next().unwrap_or_default();
+    let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+    (!host.is_empty()).then(|| host.to_ascii_lowercase())
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[test]
+    fn link_places() {
+        assert_eq!(link_place("https://Example.com/a?b#c").as_deref(), Some("example.com"));
+        assert_eq!(link_place("https://google.com@evil.example:8080/x").as_deref(), Some("evil.example:8080"));
+        assert_eq!(link_place("mailto:a@b.c?subject=x").as_deref(), Some("a@b.c"));
+        assert_eq!(link_place("https://"), None);
+        assert!(is_web_link("HTTPS://x.y") && is_web_link("http://x.y"));
+        assert!(!is_web_link("mailto:a@b.c") && !is_web_link("file:///tmp"));
     }
 }

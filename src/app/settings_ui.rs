@@ -1006,6 +1006,7 @@ impl App {
                         changed |= toggle_row(ui, th, &mut self.cfg.term_restore, &t("Reopen terminal tabs at start"), &hint);
                     });
                 });
+                changed |= self.link_settings(ui, th);
                 changed |= self.agent_settings(ui, th);
             }
             SettingsPage::Backup => {
@@ -1024,6 +1025,68 @@ impl App {
                 });
             }
         }
+        changed
+    }
+
+    /// Settings → Terminal → Links: the browser that opens web links, and the question
+    /// before a link clicked in a terminal is opened.
+    fn link_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
+        use crate::system::defaultapps as apps;
+        let mut changed = false;
+        let key = if cfg!(target_os = "macos") { "⌘+Click" } else { "Ctrl+Click" };
+        settings_section(
+            ui,
+            th,
+            &t("Links"),
+            &t("{key} on a link in a terminal opens it, also while a program there (vim, tmux, Claude Code) uses the mouse.").replace("{key}", key),
+        );
+        let current = self.browser_label(ui.ctx());
+        let system = match apps::system_app(ui.ctx(), "html") {
+            Some(Some(app)) => format!("{app} ({})", t("system default")),
+            _ => t("System default"),
+        };
+        let missing = apps::program_missing(&self.cfg.browser);
+        card(ui, th, |ui| {
+            row(ui, th, &t("Web browser"), &t("Opens web links from terminals and the update check"), |ui| {
+                let text = if missing { RichText::new(&current).color(th.danger) } else { RichText::new(&current) };
+                let combo = egui::ComboBox::from_id_salt("browser").selected_text(text).width(240.0).show_ui(ui, |ui| {
+                    let chosen = self.cfg.browser.trim().to_string();
+                    if ui.selectable_label(chosen.is_empty(), &system).clicked() {
+                        self.cfg.browser.clear();
+                        changed = true;
+                    }
+                    let found = apps::browsers();
+                    for (name, program) in &found {
+                        if ui.selectable_label(&chosen == program, name).clicked() {
+                            self.cfg.browser = program.clone();
+                            changed = true;
+                        }
+                    }
+                    // A browser chosen with Other app… stays in the list.
+                    if !chosen.is_empty() && !found.iter().any(|(_, p)| p == &chosen) {
+                        let _ = ui.selectable_label(true, apps::program_name(&chosen)).on_hover_text(&chosen);
+                    }
+                    ui.separator();
+                    if ui.selectable_label(false, t("Other app…")).clicked() {
+                        if let Some(app) = pick_application() {
+                            self.cfg.browser = app;
+                            changed = true;
+                        }
+                    }
+                });
+                if missing {
+                    combo.response.on_hover_text(t("This program was not found"));
+                }
+            });
+            row_line(ui, th);
+            changed |= toggle_row(
+                ui,
+                th,
+                &mut self.cfg.term_confirm_links,
+                &t("Ask before opening a link"),
+                &t("Shows where the link goes first. The question can be turned off for one terminal until it closes."),
+            );
+        });
         changed
     }
 

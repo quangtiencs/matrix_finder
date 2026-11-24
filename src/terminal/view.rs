@@ -104,6 +104,8 @@ pub struct TermResponse {
     pub restart: bool,
     /// Open this folder in a file tab.
     pub open_dir: Option<PathBuf>,
+    /// Open this web or mail link (the app asks first, then opens it in the browser).
+    pub open_url: Option<String>,
     pub font_delta: f32,
     /// Split the window: direction, and `true` for a terminal (`false`: files).
     pub split: Option<(crate::ui::layout::SplitDir, bool)>,
@@ -186,6 +188,12 @@ pub struct TermSession {
     reported_focus: Option<bool>,
     /// Link under the right-click menu.
     menu_link: Option<Arc<str>>,
+    /// Link a Cmd/Ctrl+click went down on while the program takes the mouse: the click
+    /// is the terminal's, not the program's, and opens the link when it is let go there.
+    link_press: Option<Arc<str>>,
+    /// Ask before opening a link clicked in this terminal (turned off from that question,
+    /// for this session only).
+    pub ask_links: bool,
     pub want_focus: bool,
     /// Colour theme from the terminal profile (`None` = the app theme).
     pub theme: Option<&'static Theme>,
@@ -288,6 +296,8 @@ impl TermSession {
             skip_text: false,
             reported_focus: None,
             menu_link: None,
+            link_press: None,
+            ask_links: true,
             want_focus: true,
             theme: None,
             profile: None,
@@ -1214,10 +1224,26 @@ impl TermSession {
             }
         }
 
-        // Mouse reporting to programs (vim, htop, tmux…). Shift bypasses it.
+        // Mouse reporting to programs (vim, htop, tmux…). Shift bypasses it, and a
+        // Cmd/Ctrl+click on a link opens the link instead (as in other terminals).
         if reporting {
             for e in &events {
                 match e {
+                    egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers, .. }
+                        if self.report_button.is_none()
+                            && (modifiers.command || modifiers.ctrl)
+                            && rect.contains(*pos)
+                            && self.link_at(*pos, origin).is_some() =>
+                    {
+                        self.link_press = self.link_at(*pos, origin).map(|l| l.url.clone());
+                        out.focus = true;
+                    }
+                    egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: false, .. } if self.link_press.is_some() => {
+                        let url = self.link_press.take().unwrap();
+                        if self.link_at(*pos, origin).is_some_and(|l| l.url == url) {
+                            open_link(&url, out);
+                        }
+                    }
                     egui::Event::PointerButton { pos, button, pressed, .. } if rect.contains(*pos) || self.report_button.is_some() => {
                         let b = match button {
                             PointerButton::Primary => 0,
@@ -1462,9 +1488,7 @@ impl TermSession {
 /// shows its folder here and is never opened (it could be a script or an app).
 fn open_link(url: &str, out: &mut TermResponse) {
     match link_target(url) {
-        Some(LinkTarget::Web) => {
-            let _ = open::that_detached(url);
-        }
+        Some(LinkTarget::Web) => out.open_url = Some(url.to_string()),
         Some(LinkTarget::Folder(dir)) => out.open_dir = Some(dir),
         None => {}
     }

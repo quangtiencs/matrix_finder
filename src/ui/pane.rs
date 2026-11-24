@@ -1303,7 +1303,7 @@ pub fn pane_ui(ui: &mut egui::Ui, pane: &mut Pane, side: usize, c: &PaneUiCtx) -
                 radius: radius as f32 - 1.0,
             };
             let r = term.ui(ui, &opts);
-            if r.focus || r.close || r.restart || r.open_dir.is_some() || r.font_delta != 0.0 || r.split.is_some() {
+            if r.focus || r.close || r.restart || r.open_dir.is_some() || r.open_url.is_some() || r.font_delta != 0.0 || r.split.is_some() {
                 ev.push(PaneEvent::Term(r));
             }
         } else if pane.tab().settings {

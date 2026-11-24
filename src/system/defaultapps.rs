@@ -50,6 +50,80 @@ pub fn program_missing(program: &str) -> bool {
     !crate::terminal::which(first)
 }
 
+/// The web browsers installed here: (name, program), the program as `open_url` takes it.
+pub fn browsers() -> Vec<(String, String)> {
+    let mut found = Vec::new();
+    if cfg!(target_os = "macos") {
+        const APPS: [&str; 13] = [
+            "Safari",
+            "Google Chrome",
+            "Firefox",
+            "Arc",
+            "Brave Browser",
+            "Microsoft Edge",
+            "Opera",
+            "Vivaldi",
+            "Orion",
+            "Zen",
+            "Chromium",
+            "DuckDuckGo",
+            "Firefox Developer Edition",
+        ];
+        let dirs: Vec<PathBuf> = ["/Applications", "/System/Cryptexes/App/System/Applications"]
+            .iter()
+            .map(PathBuf::from)
+            .chain(dirs::home_dir().map(|h| h.join("Applications")))
+            .collect();
+        for name in APPS {
+            if let Some(app) = dirs.iter().map(|d| d.join(format!("{name}.app"))).find(|p| p.is_dir()) {
+                found.push((name.to_string(), app.to_string_lossy().into_owned()));
+            }
+        }
+    } else if cfg!(windows) {
+        const EXES: [(&str, &str); 4] = [
+            ("Microsoft Edge", "Microsoft\\Edge\\Application\\msedge.exe"),
+            ("Google Chrome", "Google\\Chrome\\Application\\chrome.exe"),
+            ("Firefox", "Mozilla Firefox\\firefox.exe"),
+            ("Brave", "BraveSoftware\\Brave-Browser\\Application\\brave.exe"),
+        ];
+        let roots: Vec<PathBuf> = ["ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"].iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
+        for (name, rel) in EXES {
+            if let Some(exe) = roots.iter().map(|r| r.join(rel)).find(|p| p.is_file()) {
+                found.push((name.to_string(), format!("\"{}\"", exe.to_string_lossy())));
+            }
+        }
+    } else {
+        const CMDS: [(&str, &str); 10] = [
+            ("Firefox", "firefox"),
+            ("Google Chrome", "google-chrome"),
+            ("Google Chrome", "google-chrome-stable"),
+            ("Chromium", "chromium"),
+            ("Chromium", "chromium-browser"),
+            ("Brave", "brave-browser"),
+            ("Microsoft Edge", "microsoft-edge"),
+            ("Vivaldi", "vivaldi"),
+            ("Opera", "opera"),
+            ("GNOME Web", "epiphany"),
+        ];
+        for (name, cmd) in CMDS {
+            if !found.iter().any(|(n, _)| n == name) && crate::util::find_tool(cmd).is_some() {
+                found.push((name.to_string(), cmd.to_string()));
+            }
+        }
+    }
+    found
+}
+
+/// A short name for a program chosen as in `default_apps`: "Firefox" for
+/// `/Applications/Firefox.app`, `firefox` for `firefox --new-window`.
+pub fn program_name(program: &str) -> String {
+    let parts = shell_split(program);
+    let Some(first) = parts.first() else { return String::new() };
+    let path = Path::new(first);
+    let name = if first.ends_with(".app") || first.to_ascii_lowercase().ends_with(".exe") { path.file_stem() } else { path.file_name() };
+    name.map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| first.clone())
+}
+
 // ------------------------------------------------------------ the system's choice
 
 /// The system's default app for a type, looked up in the background. `None` while
