@@ -31,7 +31,7 @@ model checkpoint holds without opening Python. A terminal sits next to your file
 
 <br>
 
-**Install:** the [macOS DMG](https://github.com/quangtiencs/matrix_finder/releases/latest) (Apple silicon), or the script on macOS and Linux ([details](#install)):
+**Install:** the [macOS DMG](https://github.com/quangtiencs/matrix_finder/releases/latest) (Apple silicon), the [.deb and .rpm packages](https://github.com/quangtiencs/matrix_finder/releases/latest) (Ubuntu, Debian, Fedora), or the script on macOS and Linux ([details](#install)):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash
@@ -123,7 +123,9 @@ More in [`docs/light`](docs/light) and [`docs/dark`](docs/dark).
 
 **macOS (Apple silicon):** download the DMG from the [latest release](https://github.com/quangtiencs/matrix_finder/releases/latest) and drag **Matrix Finder** to **Applications**. It is ad-hoc signed: the first time, right-click the app and choose **Open**.
 
-**macOS (Intel), Linux (Debian, Ubuntu, Fedora…):** the install script installs what it needs (it asks first), builds the newest release and installs it. Run it again to upgrade; `--uninstall` removes it.
+**Linux (Ubuntu 22.04+, Debian 12+, Fedora):** download the `.deb` or `.rpm` for your machine (amd64/x86_64 or arm64/aarch64) from the [latest release](https://github.com/quangtiencs/matrix_finder/releases/latest) and install it with `sudo apt install ./matrix-finder_<version>-1_amd64.deb` or `sudo dnf install ./matrix-finder-<version>-1.x86_64.rpm`. A copy installed earlier with the script below would keep starting instead: remove it first with the script's `--uninstall`.
+
+**macOS (Intel), other Linux distributions:** the install script installs what it needs (it asks first), builds the newest release and installs it in your home folder. Run it again to upgrade; `--uninstall` removes it. It does not install next to a `.deb` or `.rpm` package.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash
