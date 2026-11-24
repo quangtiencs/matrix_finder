@@ -81,6 +81,16 @@ impl App {
             let (at, group) = self.next_slot();
             self.new_files_tab(at, group, Some(Location::Local(dir)));
         }
+        if let Some(url) = r.open_url {
+            let term = self.panes[side].tab().term.as_ref();
+            match term.filter(|s| self.cfg.term_confirm_links && s.ask_links) {
+                Some(s) => {
+                    let term = s.id;
+                    self.show_dialog(Dialog::OpenLink { url, term, stop_asking: false }, false);
+                }
+                None => self.open_web(&url),
+            }
+        }
         if let Some((dir, terminal)) = r.split {
             self.split_pane(side, dir, terminal);
         }

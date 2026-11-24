@@ -452,6 +452,9 @@ pub struct Settings {
     /// The apps chosen to open file types: extension (lower case) → program.
     /// A type that is not listed opens with the operating system's default app.
     pub default_apps: std::collections::BTreeMap<String, String>,
+    /// The web browser that opens web links (from terminals, the update check): a program
+    /// as in `default_apps`. Empty: the operating system's default browser.
+    pub browser: String,
     pub terminal_profiles: Vec<TerminalProfile>,
     /// Index into `terminal_profiles` used by the terminal shortcut and button.
     pub default_terminal: usize,
@@ -466,6 +469,8 @@ pub struct Settings {
     pub term_close_on_exit: bool,
     /// Ask before closing a terminal (window, tab, the app) that is running a program.
     pub term_confirm_close: bool,
+    /// Ask before opening a link clicked in a terminal (each terminal can stop asking).
+    pub term_confirm_links: bool,
     /// An AI button in a terminal's info bar that starts an AI coding agent.
     pub term_agents: bool,
     /// The agent it starts (`agents::Agent::id`); empty: the first one installed.
@@ -588,6 +593,7 @@ impl Default for Settings {
             update_skip: String::new(),
             shortcuts: Default::default(),
             default_apps: Default::default(),
+            browser: String::new(),
             terminal_profiles: vec![TerminalProfile::default()],
             default_terminal: 0,
             term_font: String::new(),
@@ -598,6 +604,7 @@ impl Default for Settings {
             term_scroll_wheel: 3.0,
             term_close_on_exit: true,
             term_confirm_close: true,
+            term_confirm_links: true,
             term_agents: true,
             term_agent: String::new(),
             term_restore: false,

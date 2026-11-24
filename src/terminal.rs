@@ -339,6 +339,24 @@ pub fn open_with(program: &str, path: &Path) -> Res<()> {
     spawn(c)
 }
 
+/// Open a web or mail link with `browser` (a program as in `open_with`), or with the
+/// system's default app for it when `browser` is empty. The link is one argument, never
+/// read by a shell.
+pub fn open_url(browser: &str, url: &str) -> Res<()> {
+    let parts = shell_split(browser);
+    let Some((prog, args)) = parts.split_first() else { return open::that_detached(url).map_err(es) };
+    if cfg!(target_os = "macos") && prog.ends_with(".app") {
+        return spawn({
+            let mut c = Command::new("open");
+            c.arg("-a").arg(prog).arg(url);
+            c
+        });
+    }
+    let mut c = Command::new(prog);
+    c.args(args).arg(url);
+    spawn(c)
+}
+
 /// Show the file in the OS file manager.
 pub fn reveal(path: &Path) -> Res<()> {
     if cfg!(target_os = "macos") {

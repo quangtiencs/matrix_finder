@@ -55,7 +55,7 @@ fn main() -> eframe::Result<()> {
             // app's icon and name: the app id on Wayland, and (winit keeps one name for both)
             // the window class on X11, which the file's StartupWMClass matches.
             .with_app_id("org.matrixfinder.MatrixFinder")
-            // Settings → Files & layout → Window (kept in range when the settings load).
+            // Settings → Appearance → Window (kept in range when the settings load).
             .with_inner_size([cfg.window_width, cfg.window_height])
             .with_min_inner_size(config::WINDOW_MIN)
             .with_drag_and_drop(true),

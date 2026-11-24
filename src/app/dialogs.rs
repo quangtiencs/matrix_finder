@@ -187,6 +187,7 @@ impl App {
         let mut open = true;
         let mut close = false;
         let mut skip = false;
+        let mut link: Option<String> = None;
         let asset = crate::system::update::asset_for(r, std::env::consts::OS, std::env::consts::ARCH);
         let title = t("Update available");
         let chrome = &self.chrome;
@@ -233,12 +234,12 @@ impl App {
                     if let Some(a) = asset {
                         let label = format!("{} ({})", t("Download"), crate::util::human_size(a.size));
                         if ui.button(RichText::new(label).strong()).on_hover_text(&a.name).clicked() {
-                            let _ = open::that(&a.url);
+                            link = Some(a.url.clone());
                             close = true;
                         }
                     }
                     if ui.button(t("Open release page")).clicked() {
-                        let _ = open::that(&r.url);
+                        link = Some(r.url.clone());
                         close = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -257,6 +258,9 @@ impl App {
         }
         if !open || close || skip {
             self.update_found = None;
+        }
+        if let Some(url) = link {
+            self.open_web(&url);
         }
     }
 
@@ -770,6 +774,21 @@ impl App {
                         ui.label(RichText::new(t("and {n} more").replace("{n}", &(dirs.len() - SHOWN).to_string())).color(th.weak));
                     }
                 }
+                Dialog::OpenLink { url, stop_asking, .. } => {
+                    ui.heading(t("Open this link?"));
+                    ui.add_space(4.0);
+                    // A program chooses what a link shows and where it goes: show the place first.
+                    if let Some(place) = super::opening::link_place(url) {
+                        ui.add(egui::Label::new(RichText::new(place).strong().size(15.0).color(th.strong())).truncate());
+                    }
+                    egui::ScrollArea::vertical().max_height(96.0).show(ui, |ui| {
+                        ui.add(egui::Label::new(RichText::new(url.as_str()).monospace().size(12.0).color(th.weak)).wrap());
+                    });
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(format!("{} {}", t("Opens in"), self.browser_label(ui.ctx()))).size(12.0).color(th.weak));
+                    ui.add_space(6.0);
+                    ui.checkbox(stop_asking, t("Don't ask again in this terminal"));
+                }
                 Dialog::ImportSettings { path, .. } => {
                     ui.heading(t("Replace all settings?"));
                     ui.add(egui::Label::new(RichText::new(path.display().to_string()).color(th.weak)).truncate());
@@ -816,6 +835,7 @@ impl App {
                     Dialog::CloseTerminals { .. } => t("Close"),
                     Dialog::OpenTerminals { dirs } => t("Open {n} terminals").replace("{n}", &dirs.len().to_string()),
                     Dialog::ImportSettings { .. } => t("Replace settings"),
+                    Dialog::OpenLink { .. } => t("Open link"),
                     _ => t("OK"),
                 };
                 let danger = matches!(dialog, Dialog::Delete { trash: false, .. } | Dialog::CloseTerminals { .. } | Dialog::ImportSettings { .. });
@@ -842,6 +862,7 @@ impl App {
             Dialog::Message { .. }
                 | Dialog::CloseTerminals { .. }
                 | Dialog::OpenTerminals { .. }
+                | Dialog::OpenLink { .. }
                 | Dialog::TrustHostKey { .. }
                 | Dialog::Delete { .. }
                 | Dialog::ImportSettings { .. }
@@ -1013,6 +1034,14 @@ impl App {
                 }
             }
             Dialog::CloseTerminals { target: CloseTarget::Tabs(uids), .. } => self.close_tabs(&uids),
+            Dialog::OpenLink { url, term, stop_asking } => {
+                if stop_asking {
+                    if let Some(s) = all_panes!(self).find_map(|p| p.tab_mut().term.as_mut().filter(|s| s.id == term)) {
+                        s.ask_links = false;
+                    }
+                }
+                self.open_web(&url);
+            }
             Dialog::OpenTerminals { dirs } => {
                 for d in &dirs {
                     self.launch_profile(self.cfg.default_terminal, d);

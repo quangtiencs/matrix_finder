@@ -125,6 +125,13 @@ enum Dialog {
     OpenTerminals {
         dirs: Vec<PathBuf>,
     },
+    /// Opening a link clicked in terminal `term` (`TermSession::id`); `stop_asking`
+    /// turns the question off for that terminal.
+    OpenLink {
+        url: String,
+        term: egui::Id,
+        stop_asking: bool,
+    },
 }
 
 /// What a confirmed `Dialog::CloseTerminals` closes.
