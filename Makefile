@@ -1,5 +1,5 @@
 # Convenience targets. `cargo build --release` still works as usual.
-.PHONY: release test fmt fmt-check icons screenshots app dmg dmg-universal
+.PHONY: release test fmt fmt-check icons screenshots app dmg dmg-universal linux-packages
 
 release:
 	cargo build --release
@@ -33,3 +33,8 @@ dmg:
 
 dmg-universal:
 	scripts/macos/build-dmg.sh --universal
+
+# Linux: target/linux/matrix-finder_<version>-1_<arch>.deb and matrix-finder-<version>-1.<arch>.rpm,
+# built in Docker on Ubuntu 22.04. ARCH=amd64 or arm64 (default: this machine's).
+linux-packages:
+	scripts/linux/build-packages.sh $(if $(ARCH),--arch $(ARCH))
