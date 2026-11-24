@@ -12,8 +12,9 @@
 #
 # Options:
 #   --system        Linux: install for all users under /usr/local (asks for sudo)
-#   --prefix DIR    Linux: install under DIR (default ~/.local); macOS: put the
-#                   matrix_finder command in DIR/bin
+#   --prefix DIR    Linux: install under DIR (default ~/.local; not /usr, which
+#                   belongs to the package manager); macOS: put the matrix_finder
+#                   command in DIR/bin
 #   --app-dir DIR   macOS: folder for the app (default /Applications, or
 #                   ~/Applications when /Applications is not writable)
 #   --no-deps       do not install system packages or Rust; only check
@@ -22,6 +23,10 @@
 # Running it again upgrades (or downgrades) in place: files of the earlier install
 # that the new version no longer has are removed, and settings are kept. A running
 # Matrix Finder is left alone; quit and reopen it to use the new version.
+#
+# Linux packages (.deb, .rpm) install into /usr. This script does not install next to
+# one (the copy that comes first on PATH and in the menu would start, the other one
+# never), and never removes a file that belongs to a package.
 #
 # Environment: MATRIX_FINDER_REPO (git URL to build from), FEATURES (cargo
 # features; macOS default "--features vendored-openssl").
@@ -80,7 +85,8 @@ Usage: install.sh [options]
   --uninstall         remove what this script installed (settings are kept)
 
   --system            Linux: install for all users under /usr/local (sudo)
-  --prefix DIR        Linux: install under DIR (default ~/.local);
+  --prefix DIR        Linux: install under DIR (default ~/.local; not /usr,
+                      which belongs to the .deb/.rpm packages);
                       macOS: put the matrix_finder command in DIR/bin
   --app-dir DIR       macOS: folder for the app (default /Applications,
                       or ~/Applications when that is not writable)
@@ -132,6 +138,14 @@ esac
 # Absolute paths: the build runs in the source folder.
 absolute() { case "$1" in /*) echo "$1" ;; *) echo "$PWD/$1" ;; esac; }
 [ -z "$prefix" ] || prefix=$(absolute "$prefix")
+# /usr (and / with it, /bin being /usr/bin) is the package manager's: a package would
+# overwrite these files without a word, and an uninstall here would then delete its files.
+if [ "$os" = linux ] && [ "$mode" = install ] && [ -n "$prefix" ]; then
+    case "${prefix%/}/" in
+        /usr/local/*) ;;
+        /|/usr/*|/bin/*|/sbin/*|/lib/*) die "--prefix ${prefix%/}: that folder belongs to the package manager; use the default (~/.local), --system (/usr/local) or a folder of your own" ;;
+    esac
+fi
 [ -z "$app_dir" ] || app_dir=$(absolute "$app_dir")
 
 # ---------------------------------------------------------------- helpers
@@ -179,6 +193,21 @@ cargo_field() {
 
 on_path() { case ":$PATH:" in *":$1:"*) return 0 ;; *) return 1 ;; esac; }
 
+# Linux: the package (deb or rpm) that installed PATH; nothing when none did.
+package_owner() {
+    [ "$os" = linux ] || return 0
+    local o=""
+    if command -v dpkg-query >/dev/null 2>&1; then
+        # "matrix-finder: /usr/bin/matrix_finder"
+        o=$(dpkg-query -S -- "$1" 2>/dev/null) || o=""
+        o=${o%%:*}
+    fi
+    if [ -z "$o" ] && command -v rpm >/dev/null 2>&1; then
+        o=$(rpm -qf --qf '%{NAME}\n' -- "$1" 2>/dev/null) || o=""
+    fi
+    printf '%s' "${o%%$'\n'*}"
+}
+
 if [ "$os" = mac ]; then
     state_dir="$HOME/Library/Application Support/matrix_finder"
     cache_dir="$HOME/Library/Caches/matrix_finder"
@@ -200,6 +229,13 @@ remove_path() {
     case "$p" in /*/*) ;; *) warn "not removing '$p'"; return 0 ;; esac
     [ "$p" != "$HOME" ] || return 0
     [ -e "$p" ] || [ -L "$p" ] || return 0
+    # A package installed over it (e.g. after --prefix /usr): it is the package's now.
+    local owner
+    owner=$(package_owner "$p")
+    if [ -n "$owner" ]; then
+        warn "keeping $p: it belongs to the $owner package"
+        return 0
+    fi
     s=$(sudo_for "$(dirname "$p")")
     $s rm -rf "$p"
     # Tidy up folders this left empty (never above share/ or bin/).
@@ -240,6 +276,25 @@ if [ "$mode" = uninstall ]; then
     say "Done. Settings were kept; delete them by hand if you like:"
     if [ "$os" = mac ]; then echo "    $HOME/Library/Application Support/matrix_finder"; else echo "    ${XDG_CONFIG_HOME:-$HOME/.config}/matrix_finder"; fi
     exit 0
+fi
+
+# ---------------------------------------------------------------- installed as a package
+
+# A .deb or .rpm already installed Matrix Finder into /usr: a second copy from here
+# would come first on PATH and in the menu (same name), so package updates would never
+# show. Update it with the package manager instead, or remove the package first.
+if [ "$os" = linux ]; then
+    pkg=$(package_owner /usr/bin/matrix_finder)
+    if [ -n "$pkg" ]; then
+        if command -v dpkg-query >/dev/null 2>&1 && dpkg-query -W "$pkg" >/dev/null 2>&1; then
+            how="sudo apt install ./matrix-finder_<version>_<arch>.deb" undo="sudo apt remove $pkg"
+        else
+            how="sudo dnf install ./matrix-finder-<version>.<arch>.rpm" undo="sudo dnf remove $pkg"
+        fi
+        die "Matrix Finder is installed from the $pkg package ($(/usr/bin/matrix_finder --version 2>/dev/null || echo /usr/bin/matrix_finder)).
+    Update it with the newer package from the release page: $how
+    To use this script instead, remove the package first: $undo"
+    fi
 fi
 
 # ---------------------------------------------------------------- system packages
@@ -554,7 +609,12 @@ else
     # StartupNotify=true: the desktop hands the app a startup token, which the window
     # uses (src/system/activation.rs) to end the desktop's "starting" cursor and take the focus.
     desktop=$(mktemp)
-    cat >"$desktop" <<EOF
+    if [ -f "assets/linux/$APP_ID.desktop" ]; then
+        # The packages' entry, run from this install's folder.
+        sed "s|^Exec=matrix_finder|Exec=\"$bin_dir/$bin\"|" "assets/linux/$APP_ID.desktop" >"$desktop"
+    else
+        # Releases before the Linux packages had no entry of their own.
+        cat >"$desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=$APP_NAME
@@ -573,6 +633,7 @@ Actions=new-window;
 Name=New Window
 Exec="$bin_dir/$bin" --new-window
 EOF
+    fi
     put "$desktop" "$share/applications/$APP_ID.desktop" 644
     rm -f "$desktop"
 
