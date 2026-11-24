@@ -293,8 +293,10 @@ pub struct ConnectionProfile {
     pub host: String,
     pub port: u16,
     pub user: String,
-    /// Only stored when the user explicitly asks for it.
-    #[serde(default)]
+    /// Kept in memory only (`files::remote::remember_password`), never written: read
+    /// from older settings files, which stored it when asked, so that it can be moved
+    /// out of them.
+    #[serde(default, skip_serializing)]
     pub password: String,
     /// SFTP private key file (optional).
     #[serde(default)]
@@ -846,7 +848,7 @@ impl Store {
         let json = serde_json::to_string_pretty(&mine).map_err(es)?;
         if disk.as_deref() != Some(json.as_bytes()) {
             if let (true, Some(d)) = (disk_good, &disk) {
-                let _ = crate::util::write_atomic(&backup_file(&self.path), d, true);
+                let _ = crate::util::write_atomic(&backup_file(&self.path), &without_passwords(d), true);
             }
             crate::util::write_private(&self.path, &json).map_err(es)?;
         }
@@ -856,12 +858,28 @@ impl Store {
         Ok(merged)
     }
 
-    /// Keep the settings `s` (with passwords) as `settings.json.before-import-<date>`
-    /// before an import replaces them; returns where.
+    /// Keep the settings `s` as `settings.json.before-import-<date>` (readable by the
+    /// user alone) before an import replaces them; returns where.
     pub fn backup_before_import(&self, s: &Settings) -> Res<PathBuf> {
         let p = stamped_file(&self.path, "before-import");
         s.export_to(&p, true)?;
         Ok(p)
+    }
+}
+
+/// A saved settings file `d` without the passwords older versions stored in it, for the
+/// `.bak` copy; unchanged when it has none (or is not JSON).
+fn without_passwords(d: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    let Ok(mut v) = serde_json::from_slice::<serde_json::Value>(d) else { return d.into() };
+    let mut found = false;
+    if let Some(list) = v.get_mut("connections").and_then(|c| c.as_array_mut()) {
+        for c in list.iter_mut().filter_map(|c| c.as_object_mut()) {
+            found |= c.remove("password").is_some();
+        }
+    }
+    match serde_json::to_vec_pretty(&v) {
+        Ok(clean) if found => clean.into(),
+        _ => d.into(),
     }
 }
 
@@ -1081,17 +1099,11 @@ impl Settings {
         self.normalize();
     }
 
-    /// Write settings to `path`. Passwords are stripped unless `with_secrets`.
-    pub fn export_to(&self, path: &Path, with_secrets: bool) -> Res<()> {
-        let mut copy = self.clone();
-        if !with_secrets {
-            for c in &mut copy.connections {
-                c.password.clear();
-            }
-        }
-        let json = serde_json::to_string_pretty(&copy).map_err(es)?;
-        // With passwords, readable by the user alone.
-        if with_secrets {
+    /// Write settings to `path` (never with passwords: they are not serialized).
+    /// `private`: readable by the user alone.
+    pub fn export_to(&self, path: &Path, private: bool) -> Res<()> {
+        let json = serde_json::to_string_pretty(self).map_err(es)?;
+        if private {
             crate::util::write_private(path, &json).map_err(es)
         } else {
             crate::util::write_atomic(path, json.as_bytes(), false).map_err(es)
@@ -1222,6 +1234,37 @@ mod tests {
     }
 
     /// Two windows (processes) save the same file: neither loses what the other added.
+    /// Older versions stored a password when asked: it is still read (to be moved into
+    /// memory), but no save writes it again, neither in the file nor in its `.bak`.
+    #[test]
+    fn passwords_are_never_written() {
+        let d = test_dir("no-passwords");
+        let p = d.join("settings.json");
+        let old = r#"{"theme":"Dracula","connections":[{"name":"a","protocol":"Sftp","host":"h","port":22,"user":"u","password":"hunter2-secret"}]}"#;
+        std::fs::write(&p, old).unwrap();
+        let (mut s, mut store) = Store::open_at(&p);
+        assert_eq!(s.connections[0].password, "hunter2-secret");
+        s.connections[0].password.clear();
+        s.show_hidden = true;
+        store.save(&s).unwrap();
+        for f in [p.clone(), backup_file(&p)] {
+            let text = std::fs::read_to_string(&f).unwrap();
+            assert!(!text.contains("hunter2"), "{}: {text}", f.display());
+            let (back, reset) = parse_lenient(&text).unwrap();
+            assert!(reset.is_empty());
+            assert_eq!((back.theme.as_str(), names(&back)), ("Dracula", vec!["a"]));
+        }
+        // Even one still holding it in memory does not write it.
+        s.connections[0].password = "hunter2-secret".into();
+        s.export_to(&d.join("export.json"), false).unwrap();
+        store.save(&Settings { show_hidden: false, ..s.clone() }).unwrap();
+        for f in [p.clone(), backup_file(&p), d.join("export.json")] {
+            assert!(!std::fs::read_to_string(&f).unwrap().contains("hunter2"), "{}", f.display());
+        }
+        // A file without passwords is kept as it was.
+        assert!(matches!(without_passwords(b"{\"theme\": 1}"), std::borrow::Cow::Borrowed(_)));
+    }
+
     #[test]
     fn saves_of_two_processes_are_merged() {
         let d = test_dir("merge");
@@ -1236,7 +1279,7 @@ mod tests {
         // A adds a connection and a bookmark, removes one, edits another and changes the theme.
         a.connections.push(conn("from-a"));
         a.connections.retain(|c| c.name != "gone");
-        a.connections[0].password = "new".into();
+        a.connections[0].host = "new".into();
         a.bookmarks.push(Bookmark::new("A", "/a"));
         a.theme = "Dracula".into();
         assert!(sa.save(&a).unwrap().is_none(), "nothing to merge yet");
@@ -1246,7 +1289,7 @@ mod tests {
         b.default_apps.insert("txt".into(), "vim".into());
         let merged = sb.save(&b).unwrap().expect("merged with A's save");
         assert_eq!(names(&merged), ["old", "from-b", "from-a"]);
-        assert_eq!(merged.connections[0].password, "new", "A's edit kept");
+        assert_eq!(merged.connections[0].host, "new", "A's edit kept");
         assert_eq!(merged.theme, "Dracula");
         assert!(merged.show_hidden);
         assert_eq!(merged.bookmarks.len(), 2);

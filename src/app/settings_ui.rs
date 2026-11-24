@@ -1012,7 +1012,7 @@ impl App {
                 changed |= self.agent_settings(ui, th);
             }
             SettingsPage::Backup => {
-                settings_section(ui, th, &t("Backup & sync"), &t("Settings export never includes saved passwords."));
+                settings_section(ui, th, &t("Backup & sync"), &t("Passwords are never saved, so an export holds none."));
                 card(ui, th, |ui| {
                     ui.add_space(2.0);
                     ui.horizontal(|ui| {
@@ -1674,8 +1674,8 @@ impl App {
         }
     }
 
-    /// Replace the settings with imported ones, after keeping a copy of the current ones
-    /// (passwords included). Without that copy nothing is replaced.
+    /// Replace the settings with imported ones, after keeping a copy of the current ones.
+    /// Without that copy nothing is replaced.
     pub(super) fn import_confirmed(&mut self, settings: Settings) {
         // The open tabs too, as they are now.
         self.save_cfg();

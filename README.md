@@ -171,7 +171,7 @@ Fields: `name` `ext` `size` `type` `modified` `age` `hidden` `source`. <kbd>↓<
 
 Matrix Finder collects nothing and sends no telemetry. It goes online only when you connect to a server, open a link, or check for updates (off by default; it asks GitHub's public API for the latest release).
 
-Previews read files as data and run no code from them. Files extracted from a downloaded archive keep macOS's quarantine mark, so Gatekeeper still checks them. Saved server passwords are kept in a settings file only your account can read; SSH keys or the SSH agent are a better choice.
+Previews read files as data and run no code from them. Files extracted from a downloaded archive keep macOS's quarantine mark, so Gatekeeper still checks them. Server passwords are never saved: one is asked once each time the app starts and kept in memory only. SSH keys or the SSH agent spare you typing it.
 
 <a id="license"></a>
 

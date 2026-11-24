@@ -3211,6 +3211,61 @@ fn broken_settings_are_kept_and_told() {
     assert_eq!(std::fs::read_to_string(&kept[0]).unwrap(), broken);
 }
 
+/// A password that an older version saved: at start it moves into memory, so the saved
+/// connection still opens without asking this session, and neither the settings file
+/// nor its `.bak` keeps it. A password typed later is not saved either.
+#[test]
+#[ignore]
+fn saved_passwords_move_into_memory() {
+    let _ = demo_env();
+    let file = crate::config::config_file();
+    let dir = file.parent().unwrap().to_path_buf();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::env::set_var("MATRIX_FINDER_CHROME", "gnome");
+    let old = r#"{"theme":"Dracula","connections":[{"name":"srv","protocol":"Ftp","host":"old.example","port":21,"user":"me","password":"hunter2-secret"}]}"#;
+    std::fs::write(&file, old).unwrap();
+    let mut h = Harness::builder()
+        .with_size(egui::vec2(W, H))
+        .with_pixels_per_point(1.0)
+        .wgpu()
+        .build_eframe(|cc| App::new(cc, crate::ui::chrome::Chrome::detect(true), None));
+    settle(&mut h, 2);
+    let on_disk = || [file.clone(), crate::config::backup_file(&file)].map(|f| std::fs::read_to_string(f).unwrap_or_default());
+    for text in on_disk() {
+        assert!(text.contains("old.example") && !text.contains("hunter2"), "{text}");
+    }
+    let saved = h.state().cfg.connections[0].clone();
+    assert_eq!((saved.name.as_str(), saved.password.as_str()), ("srv", ""));
+    assert_eq!(remote::with_known_password(saved).password, "hunter2-secret");
+
+    // A new connection saved with a password: the dialog says it is not kept, and it isn't.
+    let typed = ConnectionProfile {
+        name: "new".into(),
+        protocol: Protocol::Ftp,
+        host: "127.0.0.1".into(),
+        port: 1,
+        user: "me".into(),
+        password: "typed-secret".into(),
+        ..Default::default()
+    };
+    h.state_mut().show_dialog(Dialog::Connect { profile: typed.clone(), save: true }, false);
+    settle(&mut h, 2);
+    let _ = h.get_by_label(&format!("🔒 {}", t("Kept in memory (RAM) only and never written to disk. Forgotten when Matrix Finder quits.")));
+    let _ = h.get_by_label(&t("Saved to disk: the server, user, key file and start folder. Never the password."));
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("connect-dialog.png")).unwrap();
+    }
+    h.state_mut().dialog = None;
+    h.state_mut().start_connect(typed, true);
+    settle(&mut h, 2);
+    assert!(h.state().cfg.connections.iter().any(|c| c.name == "new" && c.password.is_empty()));
+    for text in on_disk() {
+        assert!(!text.contains("typed-secret") && !text.contains("hunter2"), "{text}");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Checking for updates: GitHub's answer (made up here; tests never go online) shows a
 /// newer version with its notes, can be skipped, and the check at start keeps quiet about
 /// a skipped version. Nothing is installed.

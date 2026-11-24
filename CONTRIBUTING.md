@@ -100,7 +100,7 @@ added to `.git-blame-ignore-revs`, so `git blame` looks past it
 
 ## Settings and translations
 
-- **Settings** are stored in `<config dir>/matrix_finder/settings.json`: `~/.config` on Linux, `~/Library/Application Support` on macOS and `%APPDATA%` on Windows. *File → Export settings…* writes a copy **without passwords**. Saves are atomic (temporary file, flush, rename); the version replaced is kept as `settings.json.bak`, a file that cannot be read is renamed `settings.json.broken-<date>` (never overwritten), a value that cannot be read resets only that setting, and the saves of two running Matrix Finders are merged (`config::Store`).
+- **Settings** are stored in `<config dir>/matrix_finder/settings.json`: `~/.config` on Linux, `~/Library/Application Support` on macOS and `%APPDATA%` on Windows. Server passwords are never written there (or anywhere): they are kept in memory until the app quits (`files::remote::remember_password`), and ones that older versions saved are moved out at start, from the `.bak` copy too. *File → Export settings…* writes a copy. Saves are atomic (temporary file, flush, rename); the version replaced is kept as `settings.json.bak`, a file that cannot be read is renamed `settings.json.broken-<date>` (never overwritten), a value that cannot be read resets only that setting, and the saves of two running Matrix Finders are merged (`config::Store`).
 - **Languages** live in `<config dir>/matrix_finder/lang/<code>.json`. *Settings → Export translation template…* writes every key for you, and missing keys fall back to English.
   ```json
   { "code": "fr", "name": "Français", "strings": { "Copy": "Copier", "Delete": "Supprimer" } }

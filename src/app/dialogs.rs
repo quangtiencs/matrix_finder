@@ -681,7 +681,7 @@ impl App {
                         });
                     }
                 }
-                Dialog::Connect { profile, save, save_password } => {
+                Dialog::Connect { profile, save } => {
                     ui.heading(t("Connect to server"));
                     egui::Grid::new("conn").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
                         ui.label(t("Protocol"));
@@ -705,7 +705,10 @@ impl App {
                         ui.add(egui::TextEdit::singleline(&mut profile.user).desired_width(220.0).hint_text(if profile.protocol == Protocol::Ftp { "anonymous" } else { "" }));
                         ui.end_row();
                         ui.label(t("Password"));
-                        ui.add(egui::TextEdit::singleline(&mut profile.password).password(true).desired_width(220.0));
+                        ui.add(egui::TextEdit::singleline(&mut profile.password).password(true).desired_width(220.0).hint_text(t("In memory only")));
+                        ui.end_row();
+                        ui.label("");
+                        ui.label(RichText::new(format!("🔒 {}", t("Kept in memory (RAM) only and never written to disk. Forgotten when Matrix Finder quits."))).small().color(th.weak));
                         ui.end_row();
                         if profile.protocol == Protocol::Sftp {
                             ui.label(t("Private key"));
@@ -732,7 +735,7 @@ impl App {
                     });
                     ui.checkbox(save, t("Save this connection"));
                     if *save {
-                        ui.checkbox(save_password, t("Also save the password (stored as plain text)"));
+                        ui.label(RichText::new(t("Saved to disk: the server, user, key file and start folder. Never the password.")).small().color(th.weak));
                     }
                     if profile.protocol == Protocol::Sftp && profile.password.is_empty() && profile.key_file.is_empty() {
                         ui.label(RichText::new(t("No password or key: the SSH agent will be used.")).small().color(th.weak));
@@ -794,7 +797,7 @@ impl App {
                     ui.add(egui::Label::new(RichText::new(path.display().to_string()).color(th.weak)).truncate());
                     ui.add_space(4.0);
                     ui.label(t("Every setting is replaced by the imported ones, saved connections, bookmarks and backup profiles included. Exported files hold no passwords."));
-                    ui.label(RichText::new(t("A copy of the current settings, passwords included, is kept next to the settings file first.")).color(th.weak));
+                    ui.label(RichText::new(t("A copy of the current settings is kept next to the settings file first.")).color(th.weak));
                 }
                 Dialog::Message { title, text } => {
                     ui.heading(title.as_str());
@@ -1092,11 +1095,11 @@ impl App {
                     self.toast(e, true);
                 }
             }
-            Dialog::Connect { profile, save, save_password } => {
+            Dialog::Connect { profile, save } => {
                 if profile.host.trim().is_empty() {
-                    return Some(Dialog::Connect { profile, save, save_password });
+                    return Some(Dialog::Connect { profile, save });
                 }
-                self.start_connect(profile, save, save_password);
+                self.start_connect(profile, save);
             }
             Dialog::TrustHostKey { profile, fingerprint } => self.spawn_connect(profile, false, Some(fingerprint)),
             Dialog::Message { .. } => {}

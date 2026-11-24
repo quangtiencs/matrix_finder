@@ -9,6 +9,48 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, TryLockError};
 use std::time::Duration;
 
+// ---------------------------------------------------------------- passwords
+
+/// Server passwords typed this session, by `scheme://user@host:port`. Only in memory,
+/// only until the app closes: they are never written to the settings or anywhere else.
+static PASSWORDS: std::sync::LazyLock<Mutex<std::collections::HashMap<String, String>>> = std::sync::LazyLock::new(Default::default);
+
+fn password_key(p: &ConnectionProfile) -> String {
+    format!("{}://{}@{}:{}", p.protocol.scheme(), p.user, p.host, p.port)
+}
+
+/// Keep `p`'s password (if it has one) for the rest of the session.
+pub fn remember_password(p: &ConnectionProfile) {
+    if p.password.is_empty() {
+        return;
+    }
+    if let Ok(mut all) = PASSWORDS.lock() {
+        all.insert(password_key(p), p.password.clone());
+    }
+}
+
+/// `p` with the password typed for its server this session, unless it has one.
+pub fn with_known_password(mut p: ConnectionProfile) -> ConnectionProfile {
+    if p.password.is_empty() {
+        if let Some(known) = PASSWORDS.lock().ok().and_then(|all| all.get(&password_key(&p)).cloned()) {
+            p.password = known;
+        }
+    }
+    p
+}
+
+/// Move the passwords that older versions saved in the settings into memory; whether
+/// there were any (the settings are then saved without them).
+pub fn take_saved_passwords(list: &mut [ConnectionProfile]) -> bool {
+    let mut found = false;
+    for c in list.iter_mut().filter(|c| !c.password.is_empty()) {
+        remember_password(c);
+        c.password.clear();
+        found = true;
+    }
+    found
+}
+
 /// Called with the number of bytes transferred since the previous call.
 pub type ProgressFn<'a> = &'a dyn Fn(u64);
 
@@ -653,6 +695,23 @@ mod fake_ftp_tests {
 #[cfg(test)]
 mod live_tests {
     use super::*;
+
+    #[test]
+    fn passwords_are_remembered_for_the_session() {
+        let server =
+            |user: &str| ConnectionProfile { protocol: Protocol::Sftp, host: "remembered.example".into(), port: 2222, user: user.into(), ..Default::default() };
+        assert_eq!(with_known_password(server("me")).password, "");
+        let mut saved = vec![ConnectionProfile { password: "from-old-settings".into(), ..server("me") }, server("you")];
+        assert!(take_saved_passwords(&mut saved));
+        assert!(saved.iter().all(|c| c.password.is_empty()));
+        assert!(!take_saved_passwords(&mut saved));
+        assert_eq!(with_known_password(server("me")).password, "from-old-settings");
+        assert_eq!(with_known_password(server("you")).password, "", "another user's");
+        // A newer one replaces it; one typed in the dialog is kept as typed.
+        remember_password(&ConnectionProfile { password: "new".into(), ..server("me") });
+        assert_eq!(with_known_password(server("me")).password, "new");
+        assert_eq!(with_known_password(ConnectionProfile { password: "typed".into(), ..server("me") }).password, "typed");
+    }
 
     fn roundtrip(p: ConnectionProfile) {
         // These tests run against the tester's own server, so its key is accepted.
