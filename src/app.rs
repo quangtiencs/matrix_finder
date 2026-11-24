@@ -538,6 +538,12 @@ impl App {
         if let Some(note) = app.store.note.take() {
             app.tell_settings_note(note);
         }
+        // Not in tests: the test binary is never the install script's copy anyway.
+        if !cfg!(test) {
+            if let Some(copy) = crate::system::copies::script_over_package() {
+                app.tell_script_over_package(&copy);
+            }
+        }
         let restored = session.is_some();
         if let Some(s) = session {
             app.restore_session(s);
@@ -674,6 +680,25 @@ impl App {
             ),
         };
         self.show_dialog(Dialog::Message { title, text }, false);
+    }
+
+    /// Linux: this is the install script's copy, and a .deb or .rpm package installed
+    /// another one that never starts while this one is there (`system::copies`).
+    fn tell_script_over_package(&mut self, copy: &crate::system::copies::ScriptOverPackage) {
+        let package = match copy.package_version() {
+            Some(v) => format!("{} ({v})", copy.package.display()),
+            None => copy.package.display().to_string(),
+        };
+        let text = format!(
+            "{}\n{}\n\n{}\n{package}\n\n{}\n\n{}\n\n{}",
+            t("This window is the copy installed with the install script:"),
+            copy.running.display(),
+            t("A .deb or .rpm package installed another one:"),
+            t("The script's copy comes first on PATH and in the applications menu, so the package's copy, and its updates, do not start. To use the package, remove the script's copy:"),
+            copy.uninstall_command(),
+            t("Settings are shared and kept."),
+        );
+        self.show_dialog(Dialog::Message { title: t("Two copies of Matrix Finder are installed"), text }, false);
     }
 
     /// Every tab with its windows and layout. Windows that cannot be saved (remote
