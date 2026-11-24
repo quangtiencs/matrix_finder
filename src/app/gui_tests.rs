@@ -5184,14 +5184,14 @@ fn transfer_button_names_short() {
     assert_eq!(place_name("/tmp/b.zip::inner/x"), Some("x".into()));
 }
 
-/// Settings → Files & layout → Window: the size at start, set from the window as it is
+/// Settings → Appearance → Window: the size at start, set from the window as it is
 /// or back to the default, and saved.
 #[test]
 #[ignore]
 fn window_size_at_start_setting() {
     let d = demo_env();
     let mut h = app_harness(&settings("Adwaita Light", &d), "gnome");
-    h.state_mut().open_settings(SettingsPage::Files);
+    h.state_mut().open_settings(SettingsPage::Appearance);
     settle(&mut h, 3);
     assert!(h.query_by_label(&t("Window size at start")).is_some());
     h.get_by_label(&t("Use current size")).click();

@@ -761,6 +761,28 @@ impl App {
                         changed |= ui.add(egui::Slider::new(&mut self.cfg.ui_scale, 0.7..=2.0).step_by(0.05)).changed();
                     });
                 });
+                settings_section(ui, th, &t("Window"), "");
+                card(ui, th, |ui| {
+                    changed |= toggle_row(
+                        ui,
+                        th,
+                        &mut self.cfg.integrated_titlebar,
+                        &t("Integrated title bar with native window buttons"),
+                        &t("Takes effect after restarting Matrix Finder"),
+                    );
+                    row_line(ui, th);
+                    if cfg!(target_os = "linux") {
+                        changed |= toggle_row(
+                            ui,
+                            th,
+                            &mut self.cfg.round_corners,
+                            &t("Round window corners"),
+                            &t("GNOME and KDE on Wayland, with the integrated title bar. Takes effect after restarting Matrix Finder"),
+                        );
+                        row_line(ui, th);
+                    }
+                    changed |= self.window_size_row(ui, th);
+                });
                 settings_section(ui, th, &t("Icons"), &t("File and folder icons. On Linux, installed desktop icon themes are used directly."));
                 card(ui, th, |ui| changed |= self.icon_settings(ui));
             }
@@ -855,26 +877,6 @@ impl App {
                 });
                 settings_section(ui, th, &t("Window"), "");
                 card(ui, th, |ui| {
-                    changed |= toggle_row(
-                        ui,
-                        th,
-                        &mut self.cfg.integrated_titlebar,
-                        &t("Integrated title bar with native window buttons"),
-                        &t("Takes effect after restarting Matrix Finder"),
-                    );
-                    row_line(ui, th);
-                    if cfg!(target_os = "linux") {
-                        changed |= toggle_row(
-                            ui,
-                            th,
-                            &mut self.cfg.round_corners,
-                            &t("Round window corners"),
-                            &t("GNOME and KDE on Wayland, with the integrated title bar. Takes effect after restarting Matrix Finder"),
-                        );
-                        row_line(ui, th);
-                    }
-                    changed |= self.window_size_row(ui, th);
-                    row_line(ui, th);
                     ui.add_space(4.0);
                     ui.label(RichText::new(t("When Matrix Finder is started again")).color(th.text));
                     ui.label(
