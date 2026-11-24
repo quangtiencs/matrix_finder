@@ -25,7 +25,7 @@ model checkpoint holds without opening Python. A terminal sits next to your file
 
 <br>
 
-<img src="docs/showcase.png" alt="Matrix Finder: two panels with git folders and their branches, files beside a terminal, an HDF5 dataset, and a JSON tree with the path of a value to copy">
+<img src="docs/showcase.png" alt="Matrix Finder: two panels with git folders and their branches and a file's menu open on Layout to split the window, files beside a terminal, an HDF5 dataset, and a JSON tree with the path of a value to copy">
 
 <sub>Git folders with their branch · a terminal beside the files · an HDF5 dataset · a JSON value and its path</sub>
 
