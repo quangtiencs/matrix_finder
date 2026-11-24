@@ -1,30 +1,44 @@
 //! File previews: images (raster + SVG), Markdown, syntax-highlighted code,
 //! plain text and a hex dump for binaries, and the views of formats read elsewhere.
-use crate::theme::Theme;
+pub mod audio;
+pub mod certview;
+pub mod code;
+pub mod datameta;
+pub mod docview;
+pub mod fontview;
+pub mod geoview;
+pub mod jsonview;
+pub mod mail;
+pub mod markdown;
+pub mod media;
+pub mod model3d;
+pub mod pickle;
+pub mod psd;
+pub mod rawphoto;
+pub mod rdata;
+pub mod records;
+pub mod scidata;
+pub mod sheet;
+pub mod table;
+pub mod tensors;
+pub mod textdocs;
+pub mod widgets;
+use crate::preview::code::{code_view, highlight, Styled};
+use crate::preview::markdown::{markdown_ui, parse_markdown, MdBlock};
+use crate::preview::widgets::{header_row, locked_ui, upload_texture, LOCKED};
+use crate::style::theme::Theme;
 use crate::util::{ext_of, human_size, Res};
-use egui::text::{LayoutJob, TextFormat};
 use egui::{Color32, FontId, TextureHandle};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver};
-use std::sync::{Arc, LazyLock};
-use syntect::easy::HighlightLines;
-use syntect::highlighting::{FontStyle, ThemeSet};
-use syntect::parsing::{SyntaxReference, SyntaxSet};
-use syntect::util::LinesWithEndings;
-
-static SYNTAXES: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
-static THEMES: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+use std::sync::Arc;
 
 const MAX_TEXT: usize = 2 * 1024 * 1024;
 const MAX_LINES: usize = 20_000;
 pub const MAX_IMAGE: usize = 80 * 1024 * 1024;
 /// Most memory one decoded image may take. Larger ones are refused before decoding.
 const MAX_DECODED_IMAGE: u64 = 384 * 1024 * 1024;
-/// Laying out text takes about 200 bytes per character, kept while it is on screen. One
-/// block of Markdown is limited to this much text, and one document to `MAX_MARKDOWN`.
-pub const MAX_BLOCK_TEXT: usize = 64 * 1024;
-const MAX_MARKDOWN: usize = 1024 * 1024;
 /// How many previews may load at the same time. The cursor can cross a folder of huge
 /// files far faster than they can be read, and each may need hundreds of megabytes.
 const MAX_LOADING: usize = 3;
@@ -66,28 +80,28 @@ pub fn classify(name: &str) -> Kind {
     if is_comic(name) || matches!(ext.as_str(), "pages" | "key" | "numbers") {
         return Kind::Package;
     }
-    if crate::table::is_table(name) {
+    if crate::preview::table::is_table(name) {
         return Kind::Table;
     }
-    if crate::textdocs::is_document(name) {
+    if crate::preview::textdocs::is_document(name) {
         return Kind::Document;
     }
-    if crate::fontview::is_font(name) {
+    if crate::preview::fontview::is_font(name) {
         return Kind::Font;
     }
-    if crate::model3d::is_model(name) {
+    if crate::preview::model3d::is_model(name) {
         return Kind::Model;
     }
-    if crate::certview::is_cert(name) {
+    if crate::preview::certview::is_cert(name) {
         return Kind::Certificate;
     }
-    if crate::geoview::is_geo(name) {
+    if crate::preview::geoview::is_geo(name) {
         return Kind::Geo;
     }
-    if crate::jsonview::is_json(name) {
+    if crate::preview::jsonview::is_json(name) {
         return Kind::Json;
     }
-    if crate::audio::is_audio(name) {
+    if crate::preview::audio::is_audio(name) {
         return Kind::Audio;
     }
     match ext.as_str() {
@@ -103,13 +117,11 @@ pub fn classify(name: &str) -> Kind {
         | "hdr" | "psd" | "psb" => Kind::Image,
         "svg" => Kind::Svg,
         "md" | "markdown" | "mdown" | "mkd" => Kind::Markdown,
-        "rs" | "py" | "pyw" | "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "java" | "kt" | "kts" | "c" | "h" | "cpp"
-        | "cc" | "cxx" | "hpp" | "hh" | "cs" | "go" | "rb" | "php" | "swift" | "scala" | "sh" | "bash" | "zsh"
-        | "fish" | "ps1" | "bat" | "cmd" | "lua" | "pl" | "pm" | "r" | "sql" | "html" | "htm" | "xml" | "css"
-        | "scss" | "sass" | "less" | "json" | "jsonc" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "hs"
-        | "ml" | "mli" | "clj" | "erl" | "ex" | "exs" | "dart" | "vue" | "svelte" | "zig" | "nim" | "d" | "groovy"
-        | "gradle" | "tex" | "m" | "mm" | "proto" | "dockerfile" | "makefile" | "cmake" | "diff" | "patch" | "vim"
-        | "el" | "lisp" | "tf" | "nix" | "graphql" => Kind::Code,
+        "rs" | "py" | "pyw" | "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "java" | "kt" | "kts" | "c" | "h" | "cpp" | "cc" | "cxx" | "hpp" | "hh" | "cs"
+        | "go" | "rb" | "php" | "swift" | "scala" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" | "lua" | "pl" | "pm" | "r" | "sql" | "html"
+        | "htm" | "xml" | "css" | "scss" | "sass" | "less" | "json" | "jsonc" | "yaml" | "yml" | "toml" | "ini" | "cfg" | "conf" | "hs" | "ml" | "mli"
+        | "clj" | "erl" | "ex" | "exs" | "dart" | "vue" | "svelte" | "zig" | "nim" | "d" | "groovy" | "gradle" | "tex" | "m" | "mm" | "proto"
+        | "dockerfile" | "makefile" | "cmake" | "diff" | "patch" | "vim" | "el" | "lisp" | "tf" | "nix" | "graphql" => Kind::Code,
         "txt" | "log" | "text" | "nfo" | "rst" | "adoc" | "properties" | "env" | "gitignore" | "lock" => Kind::Text,
         _ => match lower.as_str() {
             "makefile" | "dockerfile" | "cmakelists.txt" | "justfile" | "rakefile" | "gemfile" | "vagrantfile" => Kind::Code,
@@ -124,7 +136,7 @@ pub fn read_limit(name: &str) -> usize {
     match classify(name) {
         Kind::Code | Kind::Text | Kind::Markdown | Kind::Other => MAX_TEXT,
         // One byte more tells a file past the limit.
-        Kind::Json => crate::jsonview::MAX_JSON + 1,
+        Kind::Json => crate::preview::jsonview::MAX_JSON + 1,
         _ => MAX_IMAGE,
     }
 }
@@ -140,13 +152,13 @@ pub fn size_limit(name: &str) -> u64 {
     match classify(name) {
         // Read in place: the layers before the merged picture are stepped over.
         Kind::Image if is_psd(name) => LARGE_FILE,
-        Kind::Geo if crate::geoview::reads_path(name) => LARGE_FILE,
+        Kind::Geo if crate::preview::geoview::reads_path(name) => LARGE_FILE,
         Kind::Image | Kind::Svg | Kind::Pdf | Kind::Notebook | Kind::Heif | Kind::Font | Kind::Certificate | Kind::Geo => MAX_IMAGE as u64,
-        Kind::Document if !crate::textdocs::reads_in_place(name) => MAX_IMAGE as u64,
-        Kind::Model => crate::model3d::MAX_FILE,
+        Kind::Document if !crate::preview::textdocs::reads_in_place(name) => MAX_IMAGE as u64,
+        Kind::Model => crate::preview::model3d::MAX_FILE,
         Kind::Table if matches!(ext_of(name).as_str(), "xls" | "xlsb" | "ods") => LARGE_WORKBOOK,
         // Model weights of many gigabytes: only their header is read.
-        Kind::Table if crate::table::reads_header_only(name) => u64::MAX,
+        Kind::Table if crate::preview::table::reads_header_only(name) => u64::MAX,
         _ => LARGE_FILE,
     }
 }
@@ -159,42 +171,46 @@ pub fn too_large(name: &str, size: u64, readable: Option<u64>) -> bool {
     size > size_limit(name) || (!start_is_enough && readable.is_some_and(|r| size > r))
 }
 
-pub type Styled = Vec<(Color32, String, bool)>; // colour, text, italic
-
-#[derive(Clone)]
-pub struct Span {
-    pub text: String,
-    pub bold: bool,
-    pub italic: bool,
-    pub code: bool,
-    pub strike: bool,
-    pub link: bool,
-}
-
-pub enum MdBlock {
-    Heading(u8, Vec<Span>),
-    Para(Vec<Span>),
-    Quote(Vec<Span>),
-    Item { depth: usize, marker: String, spans: Vec<Span> },
-    Code { lines: Vec<Styled>, bg: Color32 },
-    Table { rows: Vec<Vec<Vec<Span>>>, has_header: bool },
-    Rule,
-}
-
 enum Loaded {
     /// `details` are the photo's EXIF facts, if it has any.
-    Image { rgba: Vec<u8>, w: usize, h: usize, orig: (u32, u32), premultiplied: bool, fmt: String, more_frames: Vec<AnimFrame>, first_delay: f32, details: Vec<crate::certview::Row> },
-    Code { lines: Vec<Styled>, bg: Color32, truncated: bool, lang: String },
-    Markdown { blocks: Vec<MdBlock>, source: Vec<Styled>, bg: Color32 },
+    Image {
+        rgba: Vec<u8>,
+        w: usize,
+        h: usize,
+        orig: (u32, u32),
+        premultiplied: bool,
+        fmt: String,
+        more_frames: Vec<AnimFrame>,
+        first_delay: f32,
+        details: Vec<crate::preview::certview::Row>,
+    },
+    Code {
+        lines: Vec<Styled>,
+        bg: Color32,
+        truncated: bool,
+        lang: String,
+    },
+    Markdown {
+        blocks: Vec<MdBlock>,
+        source: Vec<Styled>,
+        bg: Color32,
+    },
     /// `total` is how much was read; `more` when the file goes on past it.
-    Hex { bytes: Vec<u8>, total: usize, more: bool },
-    Table { data: crate::table::TableData, source: Option<(Vec<Styled>, Color32)> },
-    Pdf(Box<crate::docview::PdfView>),
-    Notebook(Box<crate::docview::NotebookView>),
-    Model(Box<crate::model3d::ModelView>),
-    Geo(Box<crate::geoview::GeoView>),
-    Json(Box<crate::jsonview::JsonView>),
-    Document(crate::textdocs::Document),
+    Hex {
+        bytes: Vec<u8>,
+        total: usize,
+        more: bool,
+    },
+    Table {
+        data: crate::preview::sheet::TableData,
+        source: Option<(Vec<Styled>, Color32)>,
+    },
+    Pdf(Box<crate::preview::docview::PdfView>),
+    Notebook(Box<crate::preview::docview::NotebookView>),
+    Model(Box<crate::preview::model3d::ModelView>),
+    Geo(Box<crate::preview::geoview::GeoView>),
+    Json(Box<crate::preview::jsonview::JsonView>),
+    Document(crate::preview::textdocs::Document),
     Summary(Summary),
     /// Past its size limit: nothing was read.
     TooLarge(u64),
@@ -216,7 +232,7 @@ struct AnimFrame {
 struct Summary {
     format: String,
     picture: Option<SummaryPicture>,
-    rows: Vec<crate::certview::Row>,
+    rows: Vec<crate::preview::certview::Row>,
     /// A picture is still on its way (its facts are shown meanwhile).
     picture_pending: bool,
 }
@@ -245,7 +261,7 @@ pub struct Preview {
     sheet: usize,
     row_filter: String,
     /// Tells background work (and the tools it runs) that nobody is waiting any more.
-    cancel: crate::media::Cancel,
+    cancel: crate::preview::media::Cancel,
     /// The archive this file is in, whose password this app can ask for.
     archive: Option<PathBuf>,
     /// `Enter password` was pressed.
@@ -272,27 +288,6 @@ impl Drop for Preview {
 
 pub type Loader = Box<dyn FnOnce() -> Res<Vec<u8>> + Send>;
 
-/// The error of a document protected by a password or DRM, which only its own app can open.
-pub const LOCKED: &str = "\u{1}locked";
-
-/// The small message for a protected file. `Enter password` is offered if this app can
-/// open it, which it can for archives; returns whether it was pressed.
-pub fn locked_ui(ui: &mut egui::Ui, theme: &Theme, t: &dyn Fn(&str) -> String, can_enter_password: bool) -> bool {
-    let mut pressed = false;
-    let room = ui.available_height();
-    ui.vertical_centered(|ui| {
-        ui.add_space((room * 0.5 - 40.0).max(0.0));
-        ui.label(egui::RichText::new(format!("🔒 {}", t("Password protected"))).size(13.5).color(theme.text));
-        if can_enter_password {
-            ui.add_space(4.0);
-            pressed = ui.button(t("Enter password…")).clicked();
-        } else {
-            ui.label(egui::RichText::new(t("Press Enter to open it in its own app.")).size(12.0).color(theme.weak));
-        }
-    });
-    pressed
-}
-
 /// A turn to load a preview; the next one in line starts when it is dropped.
 struct LoadingTurn;
 
@@ -302,7 +297,7 @@ static TURN_FREE: std::sync::Condvar = std::sync::Condvar::new();
 impl LoadingTurn {
     /// Wait for a turn. `None` if the preview is gone by then, which is what happens
     /// to everything the cursor passed over: it never gets to read its file.
-    fn wait(cancel: &crate::media::Cancel) -> Option<Self> {
+    fn wait(cancel: &crate::preview::media::Cancel) -> Option<Self> {
         let mut running = LOADING.lock().ok()?;
         loop {
             if cancel.load(Ordering::Relaxed) {
@@ -327,14 +322,21 @@ impl Drop for LoadingTurn {
 }
 
 #[cfg(test)]
-fn in_background(cancel: Option<crate::media::Cancel>, job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static) -> Receiver<Loaded> {
+fn in_background(
+    cancel: Option<crate::preview::media::Cancel>,
+    job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static,
+) -> Receiver<Loaded> {
     in_background_waking(cancel, Wake::default(), job)
 }
 
 /// Load in the background: on a roomy stack, and turning a panic into a message, so a
 /// file that breaks a parser shows an error instead of loading forever. The UI is woken
 /// when the result is sent.
-fn in_background_waking(cancel: Option<crate::media::Cancel>, wake: Wake, job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static) -> Receiver<Loaded> {
+fn in_background_waking(
+    cancel: Option<crate::preview::media::Cancel>,
+    wake: Wake,
+    job: impl FnOnce(&std::sync::mpsc::Sender<Loaded>) -> Loaded + Send + 'static,
+) -> Receiver<Loaded> {
     let (tx, rx) = channel();
     let _ = std::thread::Builder::new().name("preview".into()).stack_size(LOADER_STACK).spawn(move || {
         let _turn = match &cancel {
@@ -347,7 +349,7 @@ fn in_background_waking(cancel: Option<crate::media::Cancel>, wake: Wake, job: i
         let loaded = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(&tx)));
         let loaded = loaded.unwrap_or_else(|_| Loaded::Error(crate::i18n::t("This file could not be previewed.")));
         let _ = tx.send(match loaded {
-            Loaded::Error(e) if e == LOCKED || crate::archive::is_password_error(&e) => Loaded::Locked,
+            Loaded::Error(e) if e == LOCKED || crate::files::archive::is_password_error(&e) => Loaded::Locked,
             other => other,
         });
         if let Some(ctx) = wake.get() {
@@ -355,27 +357,6 @@ fn in_background_waking(cancel: Option<crate::media::Cancel>, wake: Wake, job: i
         }
     });
     rx
-}
-
-/// Upload an image as a texture. The graphics card has a maximum size, and going over
-/// it is a fatal error, so anything larger is scaled down first.
-pub fn upload_texture(ctx: &egui::Context, name: impl Into<String>, image: egui::ColorImage) -> TextureHandle {
-    let max = ctx.input(|i| i.max_texture_side).max(1);
-    let [w, h] = image.size;
-    let image = if w.max(h) > max {
-        let scale = max as f64 / w.max(h) as f64;
-        let (nw, nh) = (((w as f64 * scale) as usize).max(1), ((h as f64 * scale) as usize).max(1));
-        let mut pixels = Vec::with_capacity(nw * nh);
-        for y in 0..nh {
-            for x in 0..nw {
-                pixels.push(image.pixels[(y * h / nh) * w + x * w / nw]);
-            }
-        }
-        egui::ColorImage { size: [nw, nh], pixels }
-    } else {
-        image
-    };
-    ctx.load_texture(name, image, egui::TextureOptions::LINEAR)
 }
 
 impl Preview {
@@ -404,7 +385,7 @@ impl Preview {
     }
 
     /// Set once nobody waits for this preview any more: a loader still reading can stop.
-    pub fn cancel_flag(&self) -> crate::media::Cancel {
+    pub fn cancel_flag(&self) -> crate::preview::media::Cancel {
         self.cancel.clone()
     }
 
@@ -427,7 +408,11 @@ impl Preview {
 
     /// The archive whose password was asked for, once.
     pub fn take_password_request(&mut self) -> Option<PathBuf> {
-        if std::mem::take(&mut self.password_wanted) { self.archive.clone() } else { None }
+        if std::mem::take(&mut self.password_wanted) {
+            self.archive.clone()
+        } else {
+            None
+        }
     }
 
     /// `limit` is how much of the file `loader` reads at most.
@@ -441,7 +426,12 @@ impl Preview {
                 let cut_short = bytes.len() >= limit;
                 match decode(&n, bytes, &theme, max_texture, &cancel, &|early| drop(tx.send(early))) {
                     // What it failed on is the missing rest of the file.
-                    Loaded::Error(_) if cut_short => Loaded::Error(format!("{} ({} {})", crate::i18n::t("This file is too large to preview here."), crate::i18n::t("limit:"), human_size(limit as u64))),
+                    Loaded::Error(_) if cut_short => Loaded::Error(format!(
+                        "{} ({} {})",
+                        crate::i18n::t("This file is too large to preview here."),
+                        crate::i18n::t("limit:"),
+                        human_size(limit as u64)
+                    )),
                     Loaded::Hex { bytes, total, .. } => Loaded::Hex { bytes, total, more: cut_short },
                     loaded => loaded,
                 }
@@ -455,9 +445,9 @@ impl Preview {
     /// first: it may be huge, tools need its path, or files next to it matter.
     pub fn reads_files_directly(name: &str) -> bool {
         matches!(classify(name), Kind::Heif | Kind::Video | Kind::Audio | Kind::Package | Kind::Raw | Kind::Model)
-            || crate::textdocs::reads_in_place(name)
+            || crate::preview::textdocs::reads_in_place(name)
             || is_psd(name)
-            || crate::geoview::reads_path(name)
+            || crate::preview::geoview::reads_path(name)
     }
 
     /// A preview read directly from a local file (see `reads_files_directly`).
@@ -475,9 +465,9 @@ impl Preview {
         let theme = syntax_theme.to_string();
         let n = name.clone();
         let mut p = Self::blank(key, name, true);
-        p.load(true, move |_| match crate::table::load_path(&path) {
+        p.load(true, move |_| match crate::preview::table::load_path(&path) {
             Ok(data) => {
-                let source = crate::table::source_language(&n).map(|lang| {
+                let source = crate::preview::table::source_language(&n).map(|lang| {
                     use std::io::Read;
                     let mut head = Vec::new();
                     if let Ok(f) = crate::util::open_regular(&path) {
@@ -502,7 +492,7 @@ impl Preview {
 
     /// A text summary produced in the background (folders, archives). `f` is given the
     /// flag that is set once the preview is gone, and should stop early then.
-    pub fn text_async(key: String, name: String, f: impl FnOnce(&crate::media::Cancel) -> String + Send + 'static) -> Self {
+    pub fn text_async(key: String, name: String, f: impl FnOnce(&crate::preview::media::Cancel) -> String + Send + 'static) -> Self {
         let mut p = Self::blank(key, name, true);
         let cancel = p.cancel.clone();
         // Summaries take little memory, and may wait long on a slow disk: no turn needed.
@@ -532,7 +522,7 @@ impl Preview {
 
     /// The JSON tree, if that is what was loaded (for tests).
     #[cfg(test)]
-    pub fn json(&mut self) -> Option<&mut crate::jsonview::JsonView> {
+    pub fn json(&mut self) -> Option<&mut crate::preview::jsonview::JsonView> {
         match &mut self.loaded {
             Some(Loaded::Json(j)) => Some(j),
             _ => None,
@@ -561,8 +551,12 @@ impl Preview {
             Some(Loaded::Model(m)) => format!("model {}", m.describe()),
             Some(Loaded::Geo(g)) => format!("geo {}", g.describe()),
             Some(Loaded::Json(j)) => format!("json {}", j.describe()),
-            Some(Loaded::Document(d)) => format!("doc {} {:?} {:?} sections={} first={:?}", d.format, d.title, d.author, d.sections.len(), d.sections.first().map(|s| s.blocks.len())),
-            Some(Loaded::Summary(s)) => format!("summary {} pic={} {:?}", s.format, s.picture.as_ref().map_or("no".to_string(), |p| format!("{}x{}", p.w, p.h)), s.rows),
+            Some(Loaded::Document(d)) => {
+                format!("doc {} {:?} {:?} sections={} first={:?}", d.format, d.title, d.author, d.sections.len(), d.sections.first().map(|s| s.blocks.len()))
+            }
+            Some(Loaded::Summary(s)) => {
+                format!("summary {} pic={} {:?}", s.format, s.picture.as_ref().map_or("no".to_string(), |p| format!("{}x{}", p.w, p.h)), s.rows)
+            }
             Some(Loaded::Info(s)) => format!("info {s}"),
             Some(Loaded::Error(e)) => format!("ERROR {e}"),
         }
@@ -647,8 +641,8 @@ impl Preview {
                 if let Some(sh) = data.sheets.get(self.sheet) {
                     parts.push(format!("{} {}", sh.columns.len(), t("columns")));
                     parts.push(match sh.total_rows {
-                        Some(n) => format!("{} {}", crate::table::fmt_count(n), t("rows")),
-                        None => format!("{}+ {}", crate::table::fmt_count(sh.rows.len() as u64), t("rows")),
+                        Some(n) => format!("{} {}", crate::util::fmt_count(n), t("rows")),
+                        None => format!("{}+ {}", crate::util::fmt_count(sh.rows.len() as u64), t("rows")),
                     });
                 }
                 parts.extend(data.info.iter().cloned());
@@ -682,7 +676,9 @@ impl Preview {
                 if !self.frames.is_empty() && ui.button(if self.paused { t("Play") } else { t("Pause") }).clicked() {
                     self.paused = !self.paused;
                 }
-                if matches!(&self.loaded, Some(Loaded::Image { details, .. }) if !details.is_empty()) && ui.selectable_label(self.show_source, t("Details")).clicked() {
+                if matches!(&self.loaded, Some(Loaded::Image { details, .. }) if !details.is_empty())
+                    && ui.selectable_label(self.show_source, t("Details")).clicked()
+                {
                     self.show_source = !self.show_source;
                 }
             }
@@ -787,12 +783,7 @@ impl Preview {
                         ui.centered_and_justified(|ui| {
                             let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
                             checkerboard(ui.painter(), rect, theme);
-                            ui.painter().image(
-                                tex.id(),
-                                rect,
-                                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                                Color32::WHITE,
-                            );
+                            ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), Color32::WHITE);
                         });
                     });
                 }
@@ -844,58 +835,6 @@ impl Preview {
     }
 }
 
-/// Below this much room beside its buttons, the name of a preview gets a line of its own.
-const NAME_ROOM: f32 = 220.0;
-
-/// The title row of a preview: the file name and its facts on the left, cut with "…"
-/// when they do not fit (the whole text shows on hover), and the buttons that `buttons`
-/// adds, right to left, on the right. The buttons always keep their room; when they
-/// leave too little for the name, it goes on a line of its own above them.
-pub fn header_row(ui: &mut egui::Ui, theme: &Theme, name: &str, facts: &[(String, Color32)], buttons: impl FnOnce(&mut egui::Ui)) {
-    // How wide the buttons were last time: they are drawn before the name.
-    let id = ui.id().with("preview-header-buttons");
-    let buttons_w: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
-    let own_line = ui.available_width() - buttons_w < NAME_ROOM;
-    let name_label = || egui::Label::new(egui::RichText::new(name).strong().color(theme.accent)).truncate();
-    if own_line {
-        ui.add(name_label());
-    }
-    ui.horizontal(|ui| {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let before = ui.available_width();
-            buttons(ui);
-            let used = before - ui.available_width();
-            if (used - buttons_w).abs() > 0.5 {
-                ui.data_mut(|d| d.insert_temp(id, used));
-                ui.ctx().request_repaint();
-            }
-            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                let font = egui::TextStyle::Body.resolve(ui.style());
-                let gap = ui.spacing().item_spacing.x;
-                let room = ui.available_width();
-                let text: Vec<&str> = facts.iter().map(|(s, _)| s.as_str()).collect();
-                let facts_w = if facts.is_empty() { 0.0 } else { ui.fonts(|f| f.layout_no_wrap(text.join(" "), font.clone(), theme.weak).size().x) + gap };
-                if !own_line {
-                    // The name gets what the facts leave, and at least half the row.
-                    let name_room = (room - facts_w).max(room * 0.5).max(24.0);
-                    ui.allocate_ui_with_layout(egui::vec2(name_room, ui.available_height()), egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name_label()));
-                }
-                if !facts.is_empty() {
-                    let mut job = LayoutJob::default();
-                    for (i, (s, c)) in facts.iter().enumerate() {
-                        let format = TextFormat { font_id: font.clone(), color: *c, ..Default::default() };
-                        if i > 0 {
-                            job.append(" ", 0.0, format.clone());
-                        }
-                        job.append(s, 0.0, format);
-                    }
-                    ui.add(egui::Label::new(job).truncate());
-                }
-            });
-        });
-    });
-}
-
 fn summary_ui(ui: &mut egui::Ui, s: &Summary, texture: Option<&TextureHandle>, theme: &Theme) {
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
         if let (Some(p), Some(tex)) = (&s.picture, texture) {
@@ -922,8 +861,8 @@ fn summary_ui(ui: &mut egui::Ui, s: &Summary, texture: Option<&TextureHandle>, t
 }
 
 /// Facts as label and value rows, with headings and notes between them.
-fn rows_ui(ui: &mut egui::Ui, rows: &[crate::certview::Row], theme: &Theme) {
-    use crate::certview::Row;
+fn rows_ui(ui: &mut egui::Ui, rows: &[crate::preview::certview::Row], theme: &Theme) {
+    use crate::preview::certview::Row;
     let label_w = 150.0;
     let value_w = (ui.available_width() - label_w - 12.0).max(120.0);
     for row in rows {
@@ -958,7 +897,7 @@ fn rows_ui(ui: &mut egui::Ui, rows: &[crate::certview::Row], theme: &Theme) {
 
 fn table_ui(
     ui: &mut egui::Ui,
-    data: &crate::table::TableData,
+    data: &crate::preview::sheet::TableData,
     sheet_idx: &mut usize,
     filter: &mut String,
     theme: &Theme,
@@ -980,11 +919,7 @@ fn table_ui(
             });
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.add(
-                egui::TextEdit::singleline(filter)
-                    .hint_text(egui::RichText::new(t("Filter rows…")).color(theme.weak))
-                    .desired_width(180.0),
-            );
+            ui.add(egui::TextEdit::singleline(filter).hint_text(egui::RichText::new(t("Filter rows…")).color(theme.weak)).desired_width(180.0));
         });
     });
     let Some(sheet) = data.sheets.get(*sheet_idx) else { return };
@@ -996,12 +931,12 @@ fn table_ui(
     let visible: Vec<usize> = if needle.is_empty() {
         (0..sheet.rows.len()).collect()
     } else {
-        (0..sheet.rows.len())
-            .filter(|&i| sheet.rows[i].iter().any(|c| c.as_deref().is_some_and(|v| v.to_lowercase().contains(&needle))))
-            .collect()
+        (0..sheet.rows.len()).filter(|&i| sheet.rows[i].iter().any(|c| c.as_deref().is_some_and(|v| v.to_lowercase().contains(&needle)))).collect()
     };
-    let shown_info = if sheet.total_rows.is_some_and(|n| n as usize > sheet.rows.len()) || sheet.total_rows.is_none() && sheet.rows.len() >= crate::table::MAX_ROWS {
-        format!("{} {} {}", t("Showing the first"), crate::table::fmt_count(sheet.rows.len() as u64), t("rows"))
+    let shown_info = if sheet.total_rows.is_some_and(|n| n as usize > sheet.rows.len())
+        || sheet.total_rows.is_none() && sheet.rows.len() >= crate::preview::sheet::MAX_ROWS
+    {
+        format!("{} {} {}", t("Showing the first"), crate::util::fmt_count(sheet.rows.len() as u64), t("rows"))
     } else {
         String::new()
     };
@@ -1011,7 +946,7 @@ fn table_ui(
             if !s.is_empty() {
                 s.push_str(" · ");
             }
-            s.push_str(&format!("{} {}", crate::table::fmt_count(visible.len() as u64), t("matching rows")));
+            s.push_str(&format!("{} {}", crate::util::fmt_count(visible.len() as u64), t("matching rows")));
         }
         ui.label(egui::RichText::new(s).size(11.5).color(theme.weak));
     }
@@ -1049,7 +984,12 @@ fn table_ui(
                     header.col(|ui| {
                         ui.vertical(|ui| {
                             ui.spacing_mut().item_spacing.y = 0.0;
-                            ui.add(egui::Label::new(egui::RichText::new(name).font(FontId::new(12.5, egui::FontFamily::Name("bold".into()))).color(theme.strong())).truncate());
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(name).font(FontId::new(12.5, egui::FontFamily::Name("bold".into()))).color(theme.strong()),
+                                )
+                                .truncate(),
+                            );
                             let ty = sheet.types.get(c).map(String::as_str).unwrap_or("");
                             ui.add(egui::Label::new(egui::RichText::new(ty).size(10.5).color(theme.accent.gamma_multiply(0.85))).truncate());
                         });
@@ -1112,131 +1052,6 @@ fn checkerboard(p: &egui::Painter, rect: egui::Rect, theme: &Theme) {
         }
         row += 1;
     }
-}
-
-pub fn code_view(ui: &mut egui::Ui, lines: &[Styled], bg: Color32, wrap: bool, theme: &Theme) {
-    let font = FontId::monospace(13.0);
-    let gutter = lines.len().to_string().len();
-    let mut job = LayoutJob::default();
-    for (i, line) in lines.iter().enumerate() {
-        job.append(
-            &format!("{:>w$}  ", i + 1, w = gutter),
-            0.0,
-            TextFormat { font_id: font.clone(), color: theme.weak, ..Default::default() },
-        );
-        for (c, s, italic) in line {
-            job.append(s, 0.0, TextFormat { font_id: font.clone(), color: *c, italics: *italic, ..Default::default() });
-        }
-        if !line.last().is_some_and(|l| l.1.ends_with('\n')) {
-            job.append("\n", 0.0, TextFormat { font_id: font.clone(), ..Default::default() });
-        }
-    }
-    job.wrap.max_width = if wrap { ui.available_width() - 16.0 } else { f32::INFINITY };
-    egui::Frame::NONE.fill(bg).inner_margin(6.0).show(ui, |ui| {
-        let sa = if wrap { egui::ScrollArea::vertical() } else { egui::ScrollArea::both() };
-        sa.auto_shrink([false, false]).show(ui, |ui| {
-            let label = egui::Label::new(job);
-            ui.add(if wrap { label.wrap() } else { label.extend() });
-        });
-    });
-}
-
-/// Highlight `code` (language name or extension) into styled lines + background.
-pub fn highlight_lines(code: &str, hint: &str, theme_name: &str) -> (Vec<Styled>, Color32, String, bool) {
-    highlight(code, hint, theme_name)
-}
-
-/// A code block without line numbers (Markdown / notebook cells).
-pub fn code_view_styled(ui: &mut egui::Ui, lines: &[Styled], bg: Color32, theme: &Theme, width: f32) {
-    let _ = theme;
-    let mut job = LayoutJob::default();
-    let font = FontId::monospace(12.5);
-    for (i, line) in lines.iter().enumerate() {
-        for (c, s, it) in line {
-            job.append(s, 0.0, TextFormat { font_id: font.clone(), color: *c, italics: *it, ..Default::default() });
-        }
-        if i + 1 < lines.len() && !line.last().is_some_and(|l| l.1.ends_with('\n')) {
-            job.append("\n", 0.0, TextFormat { font_id: font.clone(), ..Default::default() });
-        }
-    }
-    egui::Frame::NONE.fill(bg).corner_radius(6).inner_margin(8.0).show(ui, |ui| {
-        ui.set_min_width(width - 16.0);
-        ui.set_max_width(width - 16.0);
-        egui::ScrollArea::horizontal().id_salt(ui.next_auto_id()).show(ui, |ui| {
-            ui.add(egui::Label::new(job).extend());
-        });
-    });
-}
-
-fn find_syntax(hint: &str) -> &'static SyntaxReference {
-    let ss = &*SYNTAXES;
-    let h = hint.to_lowercase();
-    let alias = match h.as_str() {
-        "ts" | "tsx" | "typescript" | "mjs" | "cjs" | "jsx" | "vue" | "svelte" => "js",
-        "kt" | "kts" | "kotlin" | "groovy" | "gradle" | "dart" => "java",
-        "toml" | "ini" | "cfg" | "conf" | "properties" | "env" => "ini",
-        "zsh" | "fish" | "bash" | "shell" => "sh",
-        "jsonc" => "json",
-        "yml" => "yaml",
-        "htm" => "html",
-        "scss" | "sass" | "less" => "css",
-        "hpp" | "hh" | "cc" | "cxx" | "c++" => "cpp",
-        "ps1" | "bat" | "cmd" => "bat",
-        "dockerfile" | "justfile" => "sh",
-        "rust" => "rs",
-        "python" => "py",
-        "javascript" => "js",
-        "golang" => "go",
-        "ruby" => "rb",
-        "csharp" | "c#" => "cs",
-        "swift" | "zig" | "nim" => "rs",
-        "patch" => "diff",
-        "tsv" => "csv",
-        other => other,
-    };
-    ss.find_syntax_by_extension(alias)
-        .or_else(|| ss.find_syntax_by_token(alias))
-        .or_else(|| if alias == "ini" { ss.find_syntax_by_extension("yaml") } else { None })
-        .unwrap_or_else(|| ss.find_syntax_plain_text())
-}
-
-fn to_color(c: syntect::highlighting::Color) -> Color32 {
-    Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
-}
-
-fn highlight(code: &str, hint: &str, theme_name: &str) -> (Vec<Styled>, Color32, String, bool) {
-    let syntax = find_syntax(hint);
-    let th = THEMES
-        .themes
-        .get(theme_name)
-        .or_else(|| THEMES.themes.values().next())
-        .expect("syntect themes");
-    let bg = th.settings.background.map(to_color).unwrap_or(Color32::from_gray(30));
-    let fg = th.settings.foreground.map(to_color).unwrap_or(Color32::LIGHT_GRAY);
-    let mut h = HighlightLines::new(syntax, th);
-    let mut out = Vec::new();
-    let mut truncated = false;
-    for (i, line) in LinesWithEndings::from(code).enumerate() {
-        if i >= MAX_LINES {
-            truncated = true;
-            break;
-        }
-        // Very long lines (minified files) are not highlighted.
-        if line.len() > 4000 {
-            out.push(vec![(fg, line.chars().take(4000).collect::<String>() + "…\n", false)]);
-            continue;
-        }
-        match h.highlight_line(line, &SYNTAXES) {
-            Ok(ranges) => out.push(
-                ranges
-                    .into_iter()
-                    .map(|(st, s)| (to_color(st.foreground), s.replace('\t', "    "), st.font_style.contains(FontStyle::ITALIC)))
-                    .collect(),
-            ),
-            Err(_) => out.push(vec![(fg, line.to_string(), false)]),
-        }
-    }
-    (out, bg, syntax.name.clone(), truncated)
 }
 
 #[cfg(test)]
@@ -1366,7 +1181,7 @@ mod animation_tests {
         }
         assert!(too_large("a.xls", 256 * mb + 1, None));
         assert!(!too_large("a.xls", 256 * mb, None));
-        assert!(too_large("a.stl", crate::model3d::MAX_FILE + 1, None));
+        assert!(too_large("a.stl", crate::preview::model3d::MAX_FILE + 1, None));
         // Read in place: a Photoshop file's layers are stepped over, a GeoPackage is queried.
         for name in ["a.psd", "a.gpkg", "a.mbox", "a.docx", "a.mp3", "a.cbz"] {
             assert!(!too_large(name, gb, None), "{name}");
@@ -1424,20 +1239,6 @@ mod animation_tests {
         let cancel = Arc::new(AtomicBool::new(false));
         assert!(decode_animation("gif", &bytes, &cancel).is_none());
         assert!(decode_oriented(&bytes).is_err());
-    }
-
-    #[test]
-    fn long_text_is_clipped_for_layout() {
-        let blocks = parse_markdown(&"word ".repeat(100_000), "InspiredGitHub");
-        let MdBlock::Para(spans) = &blocks[0] else { panic!() };
-        assert!(spans.iter().map(|s| s.text.len()).sum::<usize>() <= MAX_BLOCK_TEXT + 8);
-        // Over the whole document's limit: cut, and it says so.
-        let many = "para\n\n".repeat(400_000);
-        let blocks = parse_markdown(&many, "InspiredGitHub");
-        assert!(matches!(blocks.last(), Some(MdBlock::Para(s)) if s[0].text.contains("truncated")));
-        let mut spans = vec![Span { text: "é".repeat(10), bold: false, italic: false, code: false, strike: false, link: false }];
-        clip_spans(&mut spans, 5);
-        assert_eq!(spans[0].text, "éé…", "cut between characters");
     }
 
     #[test]
@@ -1536,7 +1337,7 @@ const MAX_ANIMATION_CANVAS: u64 = 256 * 1024 * 1024;
 const MAX_ANIMATION_SIDE: u32 = 1280;
 
 /// An animated GIF or WebP, or `None` if it is a still image or its frames cannot be read.
-fn decode_animation(ext: &str, bytes: &[u8], cancel: &crate::media::Cancel) -> Option<Loaded> {
+fn decode_animation(ext: &str, bytes: &[u8], cancel: &crate::preview::media::Cancel) -> Option<Loaded> {
     use image::{AnimationDecoder, ImageDecoder};
     let cursor = || std::io::Cursor::new(bytes);
     let small_enough = |(w, h): (u32, u32)| u64::from(w) * u64::from(h) * 4 <= MAX_ANIMATION_CANVAS;
@@ -1589,7 +1390,17 @@ fn decode_animation(ext: &str, bytes: &[u8], cancel: &crate::media::Cancel) -> O
         return None;
     }
     let first = out.remove(0);
-    Some(Loaded::Image { rgba: first.rgba, w: first.w, h: first.h, orig, premultiplied: false, fmt: ext.to_uppercase(), more_frames: out, first_delay: first.delay, details: vec![] })
+    Some(Loaded::Image {
+        rgba: first.rgba,
+        w: first.w,
+        h: first.h,
+        orig,
+        premultiplied: false,
+        fmt: ext.to_uppercase(),
+        more_frames: out,
+        first_delay: first.delay,
+        details: vec![],
+    })
 }
 
 /// A picture for a summary, sized for the view.
@@ -1602,15 +1413,16 @@ fn summary_picture(img: image::DynamicImage, max_texture: usize) -> SummaryPictu
     SummaryPicture { rgba: rgba.into_raw(), w, h, tinted: false }
 }
 
-fn field_row(label: String, value: Option<String>, rows: &mut Vec<crate::certview::Row>) {
+fn field_row(label: String, value: Option<String>, rows: &mut Vec<crate::preview::certview::Row>) {
     if let Some(v) = value {
-        rows.push(crate::certview::Row::Field(label, v));
+        rows.push(crate::preview::certview::Row::Field(label, v));
     }
 }
 
-fn video_summary(path: &Path, max_texture: usize, cancel: &crate::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
+fn video_summary(path: &Path, max_texture: usize, cancel: &crate::preview::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
     use crate::i18n::t;
-    use crate::media::{format_duration, video_info, video_thumbnail};
+    use crate::preview::media::{video_info, video_thumbnail};
+    use crate::util::format_duration;
     let info = match crate::util::open_regular(path) {
         Ok(f) => video_info(&mut std::io::BufReader::new(f)),
         Err(e) => return Loaded::Error(e.to_string()),
@@ -1622,20 +1434,24 @@ fn video_summary(path: &Path, max_texture: usize, cancel: &crate::media::Cancel,
     field_row(t("Video"), info.video_codec.clone(), &mut rows);
     field_row(t("Audio"), info.audio_codec.clone(), &mut rows);
     if rows.is_empty() {
-        rows.push(crate::certview::Row::Note(t("The details of this video could not be read.")));
+        rows.push(crate::preview::certview::Row::Note(t("The details of this video could not be read.")));
     }
     // The facts are ready now; a thumbnail can take a while.
     let format = ext_of(&path.to_string_lossy()).to_uppercase();
     early(Loaded::Summary(Summary { format: format.clone(), picture: None, rows: rows.clone(), picture_pending: true }));
     let picture = video_thumbnail(path, info.duration, cancel).and_then(|png| decode_oriented(&png).ok()).map(|img| summary_picture(img, max_texture));
     if picture.is_none() {
-        rows.push(crate::certview::Row::Note(if cfg!(target_os = "macos") { t("No thumbnail: macOS cannot read this video. Install FFmpeg to see one.") } else { t("No thumbnail: install FFmpeg to see one.") }));
+        rows.push(crate::preview::certview::Row::Note(if cfg!(target_os = "macos") {
+            t("No thumbnail: macOS cannot read this video. Install FFmpeg to see one.")
+        } else {
+            t("No thumbnail: install FFmpeg to see one.")
+        }));
     }
     Loaded::Summary(Summary { format, picture, rows, picture_pending: false })
 }
 
 /// The facts of a photo's EXIF data, as rows.
-fn exif_fields(info: &crate::rawphoto::RawInfo) -> Vec<crate::certview::Row> {
+fn exif_fields(info: &crate::preview::rawphoto::RawInfo) -> Vec<crate::preview::certview::Row> {
     use crate::i18n::t;
     let mut rows = vec![];
     let camera = [info.make.clone(), info.model.clone()].into_iter().flatten().collect::<Vec<_>>();
@@ -1652,15 +1468,15 @@ fn exif_fields(info: &crate::rawphoto::RawInfo) -> Vec<crate::certview::Row> {
     field_row(t("Aperture"), info.aperture.clone(), &mut rows);
     field_row("ISO".to_string(), info.iso.map(|i| i.to_string()), &mut rows);
     field_row(t("Focal length"), info.focal.clone(), &mut rows);
-    field_row(t("Location"), info.gps.map(crate::rawphoto::format_gps), &mut rows);
+    field_row(t("Location"), info.gps.map(crate::preview::rawphoto::format_gps), &mut rows);
     rows
 }
 
 /// The EXIF facts of a JPEG, TIFF, PNG or WebP image, if it has any.
-fn image_details(bytes: &[u8], ext: &str) -> Vec<crate::certview::Row> {
+fn image_details(bytes: &[u8], ext: &str) -> Vec<crate::preview::certview::Row> {
     use image::ImageDecoder;
     let info = if matches!(ext, "tif" | "tiff") {
-        crate::rawphoto::parse(&mut std::io::Cursor::new(bytes))
+        crate::preview::rawphoto::parse(&mut std::io::Cursor::new(bytes))
     } else if matches!(ext, "jpg" | "jpeg" | "png" | "webp") {
         let exif = image::ImageReader::new(std::io::Cursor::new(bytes))
             .with_guessed_format()
@@ -1670,7 +1486,7 @@ fn image_details(bytes: &[u8], ext: &str) -> Vec<crate::certview::Row> {
         // The EXIF block is a small TIFF file of its own.
         exif.filter(|e| e.len() <= 4 * 1024 * 1024).and_then(|e| {
             let tiff = e.strip_prefix(b"Exif\0\0".as_slice()).unwrap_or(&e);
-            crate::rawphoto::parse(&mut std::io::Cursor::new(tiff))
+            crate::preview::rawphoto::parse(&mut std::io::Cursor::new(tiff))
         })
     } else {
         None
@@ -1684,7 +1500,7 @@ fn is_psd(name: &str) -> bool {
 
 /// A Photoshop document's merged picture.
 fn psd_loaded<R: std::io::Read + std::io::Seek>(r: R, name: &str, max_texture: usize) -> Loaded {
-    match crate::psd::decode(r, MAX_DECODED_IMAGE) {
+    match crate::preview::psd::decode(r, MAX_DECODED_IMAGE) {
         Ok(img) => image_loaded(img, ext_of(name).to_uppercase(), max_texture),
         Err(e) => Loaded::Error(e),
     }
@@ -1692,14 +1508,14 @@ fn psd_loaded<R: std::io::Read + std::io::Seek>(r: R, name: &str, max_texture: u
 
 fn raw_summary<R: std::io::Read + std::io::Seek>(r: &mut R, fmt: String, max_texture: usize) -> Loaded {
     use crate::i18n::t;
-    let Some(info) = crate::rawphoto::parse(r) else {
+    let Some(info) = crate::preview::rawphoto::parse(r) else {
         return Loaded::Error(t("Not a camera RAW file this preview can read."));
     };
     let mut rows = exif_fields(&info);
     field_row(t("Sensor"), info.sensor.map(|(w, h)| format!("{w} × {h}")), &mut rows);
-    let picture = crate::rawphoto::preview_image(r, &info).map(|img| summary_picture(img, max_texture));
+    let picture = crate::preview::rawphoto::preview_image(r, &info).map(|img| summary_picture(img, max_texture));
     if picture.is_none() {
-        rows.push(crate::certview::Row::Note(t("This file has no preview image the app can show.")));
+        rows.push(crate::preview::certview::Row::Note(t("This file has no preview image the app can show.")));
     }
     Loaded::Summary(Summary { format: format!("RAW · {fmt}"), picture, rows, picture_pending: false })
 }
@@ -1710,7 +1526,11 @@ fn is_comic(name: &str) -> bool {
 
 /// An iWork document or a comic book, from a file on disk.
 fn package_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
-    if is_comic(name) { comic_summary(name, path, max_texture) } else { iwork_summary(name, path, max_texture) }
+    if is_comic(name) {
+        comic_summary(name, path, max_texture)
+    } else {
+        iwork_summary(name, path, max_texture)
+    }
 }
 
 /// Pages, Keynote and Numbers files keep a picture of their first page or slide.
@@ -1742,7 +1562,7 @@ fn iwork_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
             continue;
         }
         if let Ok(img) = decode_oriented(&bytes) {
-            let rows = vec![crate::certview::Row::Note(t("This is the picture saved with the document; its text is not read."))];
+            let rows = vec![crate::preview::certview::Row::Note(t("This is the picture saved with the document; its text is not read."))];
             return Loaded::Summary(Summary { format: format.into(), picture: Some(summary_picture(img, max_texture)), rows, picture_pending: false });
         }
     }
@@ -1751,9 +1571,9 @@ fn iwork_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
 
 /// A comic book: how many pages, and the first one as its cover.
 fn comic_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
-    use crate::certview::Row;
     use crate::i18n::t;
-    let entries = match crate::archive::list(path) {
+    use crate::preview::certview::Row;
+    let entries = match crate::files::archive::list(path) {
         Ok(e) => e,
         Err(e) => return Loaded::Error(e),
     };
@@ -1761,24 +1581,29 @@ fn comic_summary(name: &str, path: &Path, max_texture: usize) -> Loaded {
         let file = p.rsplit('/').next().unwrap_or(p);
         !file.starts_with('.') && !p.starts_with("__MACOSX/") && matches!(ext_of(file).as_str(), "jpg" | "jpeg" | "png" | "webp" | "gif" | "bmp")
     };
-    let mut pages: Vec<&crate::archive::ArchEntry> = entries.iter().filter(|e| !e.is_dir && is_page(&e.path)).collect();
-    pages.sort_by(|a, b| crate::pane::natural_cmp(&a.path, &b.path));
+    let mut pages: Vec<&crate::files::archive::ArchEntry> = entries.iter().filter(|e| !e.is_dir && is_page(&e.path)).collect();
+    pages.sort_by(|a, b| crate::util::natural_cmp(&a.path, &b.path));
     let picture = pages
         .first()
         .filter(|e| e.size <= MAX_IMAGE as u64)
-        .and_then(|e| crate::archive::read_entry(path, &e.path, MAX_IMAGE).ok())
+        .and_then(|e| crate::files::archive::read_entry(path, &e.path, MAX_IMAGE).ok())
         .and_then(|b| decode_oriented(&b).ok())
         .map(|img| summary_picture(img, max_texture));
-    let mut rows = vec![Row::Field(t("Pages"), crate::table::fmt_count(pages.len() as u64)), Row::Field(t("Size"), human_size(pages.iter().map(|e| e.size).sum()))];
+    let mut rows =
+        vec![Row::Field(t("Pages"), crate::util::fmt_count(pages.len() as u64)), Row::Field(t("Size"), human_size(pages.iter().map(|e| e.size).sum()))];
     if picture.is_none() && !pages.is_empty() {
-        rows.push(Row::Note(if crate::archive::lock_state(path) == crate::archive::Lock::Open { t("The cover could not be read.") } else { t("Password protected") }));
+        rows.push(Row::Note(if crate::files::archive::lock_state(path) == crate::files::archive::Lock::Open {
+            t("The cover could not be read.")
+        } else {
+            t("Password protected")
+        }));
     }
     rows.push(Row::Note(t("Press Enter to browse inside the archive.")));
     Loaded::Summary(Summary { format: format!("{} · {}", t("Comic book"), ext_of(name).to_uppercase()), picture, rows, picture_pending: false })
 }
 
 fn audio_summary<R: std::io::Read + std::io::Seek>(r: R, name: &str, max_texture: usize) -> Loaded {
-    match crate::audio::read(r, &ext_of(name)) {
+    match crate::preview::audio::read(r, &ext_of(name)) {
         Ok(a) => {
             let picture = a.cover.and_then(|c| decode_oriented(&c).ok()).map(|img| summary_picture(img, max_texture));
             Loaded::Summary(Summary { format: a.format, picture, rows: a.rows, picture_pending: false })
@@ -1788,11 +1613,11 @@ fn audio_summary<R: std::io::Read + std::io::Seek>(r: R, name: &str, max_texture
 }
 
 fn font_summary(name: &str, bytes: &[u8]) -> Loaded {
-    match crate::fontview::load(name, bytes) {
+    match crate::preview::fontview::load(name, bytes) {
         Ok(f) => Loaded::Summary(Summary {
             format: f.format,
             picture: f.sheet.map(|(rgba, w, h)| SummaryPicture { rgba, w, h, tinted: true }),
-            rows: f.rows.into_iter().map(|(l, v)| crate::certview::Row::Field(l, v)).collect(),
+            rows: f.rows.into_iter().map(|(l, v)| crate::preview::certview::Row::Field(l, v)).collect(),
             picture_pending: false,
         }),
         Err(e) => Loaded::Error(e),
@@ -1800,29 +1625,29 @@ fn font_summary(name: &str, bytes: &[u8]) -> Loaded {
 }
 
 fn certificate_summary(bytes: &[u8]) -> Loaded {
-    match crate::certview::load(bytes) {
+    match crate::preview::certview::load(bytes) {
         Ok((format, rows)) => Loaded::Summary(Summary { format, picture: None, rows, picture_pending: false }),
         Err(e) => Loaded::Error(e),
     }
 }
 
 /// A HEIC, HEIF or AVIF image, from the system's tools.
-fn heif_loaded(path: &Path, fmt: String, max_texture: usize, cancel: &crate::media::Cancel) -> Loaded {
-    match crate::media::decode_heif(path, cancel).and_then(|png| decode_oriented(&png)) {
+fn heif_loaded(path: &Path, fmt: String, max_texture: usize, cancel: &crate::preview::media::Cancel) -> Loaded {
+    match crate::preview::media::decode_heif(path, cancel).and_then(|png| decode_oriented(&png)) {
         Ok(img) => image_loaded(img, fmt, max_texture),
         Err(e) => Loaded::Error(e),
     }
 }
 
 /// Previews read from a file in place (see `Preview::reads_files_directly`).
-fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, cancel: &crate::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
+fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, cancel: &crate::preview::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
     let fmt = ext_of(name).to_uppercase();
     match classify(name) {
         Kind::Image => match crate::util::open_regular(path) {
             Ok(f) => psd_loaded(std::io::BufReader::new(f), name, max_texture),
             Err(e) => Loaded::Error(e.to_string()),
         },
-        Kind::Document => match crate::textdocs::load_path(name, path, syntax_theme) {
+        Kind::Document => match crate::preview::textdocs::load_path(name, path, syntax_theme) {
             Ok(d) => Loaded::Document(d),
             Err(e) => Loaded::Error(e),
         },
@@ -1833,8 +1658,8 @@ fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, 
             Err(e) => Loaded::Error(e.to_string()),
         },
         Kind::Package => package_summary(name, path, max_texture),
-        Kind::Geo => match crate::geoview::geopackage(path) {
-            Ok(data) => Loaded::Geo(Box::new(crate::geoview::GeoView::new(data, None))),
+        Kind::Geo => match crate::preview::geoview::geopackage(path) {
+            Ok(data) => Loaded::Geo(Box::new(crate::preview::geoview::GeoView::new(data, None))),
             Err(e) => Loaded::Error(e),
         },
         Kind::Raw => match crate::util::open_regular(path) {
@@ -1843,12 +1668,12 @@ fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, 
         },
         _ => {
             // Parsing needs all of it in memory.
-            if std::fs::metadata(path).is_ok_and(|m| m.len() > crate::model3d::MAX_FILE) {
+            if std::fs::metadata(path).is_ok_and(|m| m.len() > crate::preview::model3d::MAX_FILE) {
                 return Loaded::Error(crate::i18n::t("This model is too large to preview."));
             }
             match crate::util::read_regular(path) {
-                Ok(bytes) => match crate::model3d::load(name, &bytes, path.parent()) {
-                    Ok(mesh) => Loaded::Model(Box::new(crate::model3d::ModelView::new(mesh))),
+                Ok(bytes) => match crate::preview::model3d::load(name, &bytes, path.parent()) {
+                    Ok(mesh) => Loaded::Model(Box::new(crate::preview::model3d::ModelView::new(mesh))),
                     Err(e) => Loaded::Error(e),
                 },
                 Err(e) => Loaded::Error(e.to_string()),
@@ -1859,7 +1684,7 @@ fn decode_file(name: &str, path: &Path, syntax_theme: &str, max_texture: usize, 
 
 /// Run `f` on a temporary copy of a file that has no path of its own (in an archive or on a server).
 fn with_temp_file(name: &str, bytes: &[u8], f: impl FnOnce(&Path) -> Loaded) -> Loaded {
-    let dir = match crate::media::TempDir::new() {
+    let dir = match crate::util::TempDir::new() {
         Ok(d) => d,
         Err(e) => return Loaded::Error(e),
     };
@@ -1871,7 +1696,7 @@ fn with_temp_file(name: &str, bytes: &[u8], f: impl FnOnce(&Path) -> Loaded) -> 
     f(&path)
 }
 
-fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, cancel: &crate::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
+fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, cancel: &crate::preview::media::Cancel, early: &dyn Fn(Loaded)) -> Loaded {
     let kind = classify(name);
     let ext = ext_of(name);
     if cancel.load(Ordering::Relaxed) {
@@ -1899,36 +1724,36 @@ fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, ca
         Kind::Raw => raw_summary(&mut std::io::Cursor::new(bytes), ext.to_uppercase(), max_texture),
         Kind::Audio => audio_summary(std::io::Cursor::new(bytes), name, max_texture),
         Kind::Package => with_temp_file(name, &bytes, |p| package_summary(name, p, max_texture)),
-        Kind::Document => match crate::textdocs::load(name, bytes, syntax_theme) {
+        Kind::Document => match crate::preview::textdocs::load(name, bytes, syntax_theme) {
             Ok(d) => Loaded::Document(d),
             Err(e) => Loaded::Error(e),
         },
         Kind::Font => font_summary(name, &bytes),
         Kind::Certificate => certificate_summary(&bytes),
-        Kind::Model => match crate::model3d::load(name, &bytes, None) {
-            Ok(mesh) => Loaded::Model(Box::new(crate::model3d::ModelView::new(mesh))),
+        Kind::Model => match crate::preview::model3d::load(name, &bytes, None) {
+            Ok(mesh) => Loaded::Model(Box::new(crate::preview::model3d::ModelView::new(mesh))),
             Err(e) => Loaded::Error(e),
         },
-        Kind::Geo => match crate::geoview::load(name, &bytes) {
+        Kind::Geo => match crate::preview::geoview::load(name, &bytes) {
             Ok(data) => {
                 // Text formats can show their source too.
                 let source = looks_textual(&bytes).then(|| {
                     let head = &bytes[..bytes.len().min(512 * 1024)];
-                    let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(head), crate::geoview::source_language(name), syntax_theme);
+                    let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(head), crate::preview::geoview::source_language(name), syntax_theme);
                     (lines, bg)
                 });
-                Loaded::Geo(Box::new(crate::geoview::GeoView::new(data, source)))
+                Loaded::Geo(Box::new(crate::preview::geoview::GeoView::new(data, source)))
             }
             Err(e) => Loaded::Error(e),
         },
         Kind::Json => {
             // Too large for a tree, or not quite JSON (comments, several values): as text.
-            let parsed = (bytes.len() <= crate::jsonview::MAX_JSON).then(|| crate::jsonview::parse(&bytes).ok()).flatten();
+            let parsed = (bytes.len() <= crate::preview::jsonview::MAX_JSON).then(|| crate::preview::jsonview::parse(&bytes).ok()).flatten();
             match parsed {
                 Some(root) => {
                     let head = &bytes[..bytes.len().min(512 * 1024)];
                     let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(head), "json", syntax_theme);
-                    Loaded::Json(Box::new(crate::jsonview::JsonView::new(root, Some((lines, bg)))))
+                    Loaded::Json(Box::new(crate::preview::jsonview::JsonView::new(root, Some((lines, bg)))))
                 }
                 None => text_preview(&bytes[..bytes.len().min(MAX_TEXT)], "json", name, syntax_theme),
             }
@@ -1942,17 +1767,22 @@ fn decode(name: &str, bytes: Vec<u8>, syntax_theme: &str, max_texture: usize, ca
         Kind::Pdf => {
             if bytes.len() >= MAX_IMAGE {
                 // The list of its objects is at the end of the file.
-                return Loaded::Error(format!("{} ({} {})", crate::i18n::t("This file is too large to preview here."), crate::i18n::t("limit:"), human_size(MAX_IMAGE as u64)));
+                return Loaded::Error(format!(
+                    "{} ({} {})",
+                    crate::i18n::t("This file is too large to preview here."),
+                    crate::i18n::t("limit:"),
+                    human_size(MAX_IMAGE as u64)
+                ));
             }
-            Loaded::Pdf(Box::new(crate::docview::start_pdf(bytes, max_texture)))
+            Loaded::Pdf(Box::new(crate::preview::docview::start_pdf(bytes, max_texture)))
         }
-        Kind::Notebook => match crate::docview::parse_notebook(&bytes, syntax_theme) {
+        Kind::Notebook => match crate::preview::docview::parse_notebook(&bytes, syntax_theme) {
             Ok(v) => Loaded::Notebook(Box::new(v)),
             Err(e) => Loaded::Error(e),
         },
-        Kind::Table => match crate::table::load_bytes(name, bytes.clone()) {
+        Kind::Table => match crate::preview::table::load_bytes(name, bytes.clone()) {
             Ok(data) => {
-                let source = crate::table::source_language(name).map(|lang| {
+                let source = crate::preview::table::source_language(name).map(|lang| {
                     let head = &bytes[..bytes.len().min(512 * 1024)];
                     let (lines, bg, _, _) = highlight(&String::from_utf8_lossy(head), lang, syntax_theme);
                     (lines, bg)
@@ -2055,352 +1885,7 @@ fn render_svg(bytes: &[u8], max_texture: usize) -> Loaded {
     }
 }
 
-/// Plain text as a code block, for documents that have preformatted text.
-pub fn plain_code_block(code: &str, syntax_theme: &str) -> MdBlock {
-    let code = &code[..floor_char(code, MAX_MARKDOWN / 4)];
-    let (lines, bg, _, _) = highlight(code, "txt", syntax_theme);
-    MdBlock::Code { lines, bg }
-}
-
-/// The largest length at most `max` that ends between two characters of `s`.
-fn floor_char(s: &str, max: usize) -> usize {
-    if s.len() <= max {
-        return s.len();
-    }
-    let mut end = max;
-    while !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    end
-}
-
-/// Keep at most `max` bytes of text across these spans.
-fn clip_spans(spans: &mut Vec<Span>, max: usize) {
-    let mut left = max;
-    let mut cut = false;
-    spans.retain_mut(|s| {
-        if cut {
-            return false;
-        }
-        if s.text.len() > left {
-            s.text.truncate(floor_char(&s.text, left));
-            s.text.push('…');
-            cut = true;
-        } else {
-            left -= s.text.len();
-        }
-        true
-    });
-}
-
-/// Limit how much text each block holds (see `MAX_BLOCK_TEXT`).
-pub fn clip_block_text(blocks: &mut [MdBlock]) {
-    for b in blocks {
-        match b {
-            MdBlock::Heading(_, spans) | MdBlock::Para(spans) | MdBlock::Quote(spans) | MdBlock::Item { spans, .. } => clip_spans(spans, MAX_BLOCK_TEXT),
-            MdBlock::Table { rows, .. } => rows.iter_mut().flatten().for_each(|cell| clip_spans(cell, MAX_BLOCK_TEXT / 16)),
-            MdBlock::Code { .. } | MdBlock::Rule => {}
-        }
-    }
-}
-
 // ---------------------------------------------------------------- markdown
-
-pub fn parse_markdown(src: &str, syntax_theme: &str) -> Vec<MdBlock> {
-    let end = floor_char(src, MAX_MARKDOWN);
-    let mut blocks = parse_markdown_blocks(&src[..end], syntax_theme);
-    clip_block_text(&mut blocks);
-    if end < src.len() {
-        blocks.push(MdBlock::Para(vec![Span { text: crate::i18n::t("(truncated)"), bold: false, italic: true, code: false, strike: false, link: false }]));
-    }
-    blocks
-}
-
-fn parse_markdown_blocks(src: &str, syntax_theme: &str) -> Vec<MdBlock> {
-    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
-    let opts = Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
-    let mut blocks = Vec::new();
-    let mut buf: Vec<Span> = Vec::new();
-    let (mut bold, mut italic, mut strike, mut link) = (0, 0, 0, 0);
-    let mut lists: Vec<Option<u64>> = Vec::new();
-    let mut marker: Option<String> = None;
-    let mut quote = 0;
-    let mut code: Option<(String, String)> = None;
-    let mut heading: Option<u8> = None;
-    let mut table: Option<(Vec<Vec<Vec<Span>>>, Vec<Vec<Span>>, bool)> = None;
-    let mut in_head = false;
-    let mut image_alt: Option<String> = None;
-
-    macro_rules! push_span {
-        ($text:expr, $code:expr) => {{
-            let s = Span {
-                text: $text,
-                bold: bold > 0 || heading.is_some(),
-                italic: italic > 0,
-                code: $code,
-                strike: strike > 0,
-                link: link > 0,
-            };
-            buf.push(s);
-        }};
-    }
-
-    let flush_item = |buf: &mut Vec<Span>, marker: &mut Option<String>, lists: &Vec<Option<u64>>, blocks: &mut Vec<MdBlock>| {
-        if !buf.is_empty() || marker.is_some() {
-            blocks.push(MdBlock::Item {
-                depth: lists.len().saturating_sub(1),
-                marker: marker.take().unwrap_or_default(),
-                spans: std::mem::take(buf),
-            });
-        }
-    };
-
-    for ev in Parser::new_ext(src, opts) {
-        match ev {
-            Event::Start(tag) => match tag {
-                Tag::Heading { level, .. } => heading = Some(level as u8),
-                Tag::BlockQuote { .. } => quote += 1,
-                Tag::CodeBlock(kind) => {
-                    let lang = match kind {
-                        CodeBlockKind::Fenced(l) => l.split(|c: char| c == ',' || c.is_whitespace()).next().unwrap_or("").to_string(),
-                        CodeBlockKind::Indented => String::new(),
-                    };
-                    code = Some((lang, String::new()));
-                }
-                Tag::List(start) => {
-                    if !lists.is_empty() {
-                        flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                    }
-                    lists.push(start);
-                }
-                Tag::Item => {
-                    flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                    let m = match lists.last_mut() {
-                        Some(Some(n)) => {
-                            let s = format!("{n}.");
-                            *n += 1;
-                            s
-                        }
-                        _ => ["•", "–", "▪"][(lists.len().saturating_sub(1)) % 3].to_string(),
-                    };
-                    marker = Some(m);
-                }
-                Tag::Table(_) => table = Some((Vec::new(), Vec::new(), false)),
-                Tag::TableHead => in_head = true,
-                Tag::TableRow | Tag::TableCell => {}
-                Tag::Emphasis => italic += 1,
-                Tag::Strong => bold += 1,
-                Tag::Strikethrough => strike += 1,
-                Tag::Link { .. } => link += 1,
-                Tag::Image { .. } => image_alt = Some(String::new()),
-                _ => {}
-            },
-            Event::End(tag) => match tag {
-                TagEnd::Paragraph => {
-                    if !lists.is_empty() {
-                        flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                        marker = None;
-                    } else if quote > 0 {
-                        blocks.push(MdBlock::Quote(std::mem::take(&mut buf)));
-                    } else if !buf.is_empty() {
-                        blocks.push(MdBlock::Para(std::mem::take(&mut buf)));
-                    }
-                }
-                TagEnd::Heading { .. } => {
-                    blocks.push(MdBlock::Heading(heading.take().unwrap_or(1), std::mem::take(&mut buf)));
-                }
-                TagEnd::BlockQuote { .. } => quote -= 1,
-                TagEnd::CodeBlock => {
-                    if let Some((lang, mut text)) = code.take() {
-                        while text.ends_with('\n') {
-                            text.pop();
-                        }
-                        let (lines, bg, _, _) = highlight(&text, if lang.is_empty() { "txt" } else { &lang }, syntax_theme);
-                        blocks.push(MdBlock::Code { lines, bg });
-                    }
-                }
-                TagEnd::List { .. } => {
-                    flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                    lists.pop();
-                }
-                TagEnd::Item => {
-                    if !buf.is_empty() {
-                        flush_item(&mut buf, &mut marker, &lists, &mut blocks);
-                    }
-                    marker = None;
-                }
-                TagEnd::TableCell => {
-                    if let Some((_, row, _)) = &mut table {
-                        row.push(std::mem::take(&mut buf));
-                    }
-                }
-                TagEnd::TableHead => {
-                    in_head = false;
-                    if let Some((rows, row, has)) = &mut table {
-                        rows.push(std::mem::take(row));
-                        *has = true;
-                    }
-                }
-                TagEnd::TableRow => {
-                    if let Some((rows, row, _)) = &mut table {
-                        rows.push(std::mem::take(row));
-                    }
-                }
-                TagEnd::Table => {
-                    if let Some((rows, _, has_header)) = table.take() {
-                        blocks.push(MdBlock::Table { rows, has_header });
-                    }
-                }
-                TagEnd::Emphasis => italic -= 1,
-                TagEnd::Strong => bold -= 1,
-                TagEnd::Strikethrough => strike -= 1,
-                TagEnd::Link => link -= 1,
-                TagEnd::Image => {
-                    if let Some(alt) = image_alt.take() {
-                        push_span!(format!("[🖼 {}]", if alt.is_empty() { "image" } else { &alt }), false);
-                    }
-                }
-                _ => {}
-            },
-            Event::Text(t) => {
-                if let Some((_, c)) = &mut code {
-                    c.push_str(&t);
-                } else if let Some(alt) = &mut image_alt {
-                    alt.push_str(&t);
-                } else {
-                    push_span!(t.to_string(), false);
-                }
-            }
-            Event::Code(t) => push_span!(t.to_string(), true),
-            Event::SoftBreak => push_span!(" ".to_string(), false),
-            Event::HardBreak => push_span!("\n".to_string(), false),
-            Event::Rule => blocks.push(MdBlock::Rule),
-            Event::TaskListMarker(done) => {
-                marker = Some(if done { "☑" } else { "☐" }.to_string());
-            }
-            _ => {}
-        }
-    }
-    let _ = in_head;
-    if !buf.is_empty() {
-        blocks.push(MdBlock::Para(buf));
-    }
-    blocks
-}
-
-fn spans_job(spans: &[Span], size: f32, theme: &Theme, base: Color32, width: f32) -> LayoutJob {
-    let mut job = LayoutJob::default();
-    for s in spans {
-        // Reading view: Source Sans (or Source Serif, see Settings → Fonts) for prose,
-        // Source Code Pro for code.
-        let (family, slanted) = crate::fonts::reading_font(s.bold, s.italic);
-        let mut fmt = TextFormat {
-            font_id: if s.code { FontId::monospace(size * 0.88) } else { FontId::new(size, family) },
-            color: if s.link {
-                theme.accent
-            } else {
-                base
-            },
-            italics: s.italic && (s.code || slanted),
-            ..Default::default()
-        };
-        if s.code {
-            fmt.background = theme.surface;
-            fmt.color = theme.marked;
-        }
-        if s.link {
-            fmt.underline = egui::Stroke::new(1.0_f32, theme.accent);
-        }
-        if s.strike {
-            fmt.strikethrough = egui::Stroke::new(1.0_f32, base);
-        }
-        job.append(&s.text, 0.0, fmt);
-    }
-    job.wrap.max_width = width;
-    job
-}
-
-pub fn markdown_ui(ui: &mut egui::Ui, blocks: &[MdBlock], theme: &Theme) {
-    let width = ui.available_width() - 8.0;
-    for b in blocks {
-        match b {
-            MdBlock::Heading(level, spans) => {
-                let size = match level {
-                    1 => 26.0,
-                    2 => 21.0,
-                    3 => 18.0,
-                    4 => 16.0,
-                    _ => 15.0,
-                };
-                ui.add_space(6.0);
-                ui.label(spans_job(spans, size, theme, theme.accent, width));
-                if *level <= 2 {
-                    let r = ui.available_rect_before_wrap();
-                    ui.painter().hline(r.x_range(), r.top(), egui::Stroke::new(1.0_f32, theme.border));
-                    ui.add_space(4.0);
-                }
-            }
-            MdBlock::Para(spans) => {
-                ui.label(spans_job(spans, 14.0, theme, theme.text, width));
-                ui.add_space(6.0);
-            }
-            MdBlock::Quote(spans) => {
-                egui::Frame::NONE
-                    .stroke(egui::Stroke::new(0.0_f32, theme.border))
-                    .inner_margin(egui::Margin { left: 10, right: 4, top: 2, bottom: 2 })
-                    .show(ui, |ui| {
-                        let r = ui.label(spans_job(spans, 14.0, theme, theme.weak, width - 20.0)).rect;
-                        ui.painter().vline(r.left() - 7.0, r.y_range(), egui::Stroke::new(3.0_f32, theme.accent));
-                    });
-                ui.add_space(6.0);
-            }
-            MdBlock::Item { depth, marker, spans } => {
-                ui.horizontal_top(|ui| {
-                    ui.add_space(12.0 + *depth as f32 * 18.0);
-                    ui.label(egui::RichText::new(marker).color(theme.accent));
-                    let w = ui.available_width();
-                    ui.label(spans_job(spans, 14.0, theme, theme.text, w));
-                });
-            }
-            MdBlock::Code { lines, bg } => {
-                let mut job = LayoutJob::default();
-                let font = FontId::monospace(12.5);
-                for line in lines {
-                    for (c, s, it) in line {
-                        job.append(s, 0.0, TextFormat { font_id: font.clone(), color: *c, italics: *it, ..Default::default() });
-                    }
-                }
-                egui::Frame::NONE.fill(*bg).inner_margin(8.0).show(ui, |ui| {
-                    ui.set_min_width(width - 16.0);
-                    egui::ScrollArea::horizontal().id_salt(ui.next_auto_id()).show(ui, |ui| {
-                        ui.add(egui::Label::new(job).extend());
-                    });
-                });
-                ui.add_space(6.0);
-            }
-            MdBlock::Table { rows, has_header } => {
-                egui::Grid::new(ui.next_auto_id()).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
-                    for (i, row) in rows.iter().enumerate() {
-                        for cell in row {
-                            let mut c = cell.clone();
-                            if i == 0 && *has_header {
-                                for s in &mut c {
-                                    s.bold = true;
-                                }
-                            }
-                            ui.label(spans_job(&c, 13.5, theme, theme.text, 400.0));
-                        }
-                        ui.end_row();
-                    }
-                });
-                ui.add_space(6.0);
-            }
-            MdBlock::Rule => {
-                ui.separator();
-            }
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -2413,31 +1898,6 @@ mod tests {
         assert_eq!(classify("main.rs"), Kind::Code);
         assert_eq!(classify("Makefile"), Kind::Code);
         assert_eq!(classify("x.bin"), Kind::Other);
-    }
-
-    #[test]
-    fn markdown_blocks() {
-        let md = "# Title\n\nSome **bold** and `code`.\n\n- a\n- b\n  1. nested\n\n```rust\nfn main() {}\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n> quote\n\n---\n- [x] done\n";
-        let blocks = parse_markdown(md, "base16-ocean.dark");
-        assert!(matches!(blocks[0], MdBlock::Heading(1, _)));
-        assert!(blocks.iter().any(|b| matches!(b, MdBlock::Code { .. })));
-        assert!(blocks.iter().any(|b| matches!(b, MdBlock::Table { .. })));
-        assert!(blocks.iter().any(|b| matches!(b, MdBlock::Quote(_))));
-        assert!(blocks.iter().any(|b| matches!(b, MdBlock::Rule)));
-        let items: Vec<_> = blocks
-            .iter()
-            .filter_map(|b| if let MdBlock::Item { depth, marker, .. } = b { Some((*depth, marker.clone())) } else { None })
-            .collect();
-        assert_eq!(items[0], (0, "•".into()));
-        assert_eq!(items[2], (1, "1.".into()));
-        assert!(items.iter().any(|i| i.1.contains('☑')));
-    }
-
-    #[test]
-    fn highlight_rust() {
-        let (lines, _, lang, _) = highlight("fn main() {}\n", "rs", "base16-ocean.dark");
-        assert_eq!(lang, "Rust");
-        assert!(lines[0].len() > 1);
     }
 
     #[test]

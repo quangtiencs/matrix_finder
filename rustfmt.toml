@@ -1,0 +1,5 @@
+# rustfmt settings (stable options only). Run `cargo fmt` before committing;
+# `cargo fmt --check` (or `make fmt-check`) fails on unformatted code.
+# Long lines are the house style: one statement per line when it fits.
+max_width = 160
+use_small_heuristics = "Max"

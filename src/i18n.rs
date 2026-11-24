@@ -19,11 +19,7 @@ pub struct LangFile {
 
 /// Translate a UI string.
 pub fn t(key: &str) -> String {
-    CURRENT
-        .read()
-        .ok()
-        .and_then(|m| m.get(key).cloned())
-        .unwrap_or_else(|| key.to_string())
+    CURRENT.read().ok().and_then(|m| m.get(key).cloned()).unwrap_or_else(|| key.to_string())
 }
 
 /// (code, display name) of every available language.
@@ -56,11 +52,7 @@ pub fn set_language(code: &str) {
             let path = crate::config::lang_dir().join(format!("{other}.json"));
             let from_file = load_file(&path).ok().or_else(|| {
                 // Fall back to scanning files whose `code` matches.
-                std::fs::read_dir(crate::config::lang_dir())
-                    .ok()?
-                    .flatten()
-                    .filter_map(|e| load_file(&e.path()).ok())
-                    .find(|l| l.code == other)
+                std::fs::read_dir(crate::config::lang_dir()).ok()?.flatten().filter_map(|e| load_file(&e.path()).ok()).find(|l| l.code == other)
             });
             from_file.map(|l| l.strings).unwrap_or_default()
         }
@@ -96,45 +88,58 @@ mod tests {
     fn keys_cover_sources() {
         let sources = [
             include_str!("app.rs"),
-            include_str!("pane.rs"),
+            include_str!("ui/pane.rs"),
             include_str!("preview.rs"),
-            include_str!("backup.rs"),
-            include_str!("diskusage.rs"),
-            include_str!("palette.rs"),
-            include_str!("table.rs"),
-            include_str!("rename.rs"),
-            include_str!("docview.rs"),
-            include_str!("tabs.rs"),
-            include_str!("termview.rs"),
-            include_str!("chrome.rs"),
-            include_str!("checksum.rs"),
-            include_str!("settings_ui.rs"),
-            include_str!("media.rs"),
-            include_str!("textdocs.rs"),
-            include_str!("fontview.rs"),
-            include_str!("certview.rs"),
-            include_str!("model3d.rs"),
-            include_str!("geoview.rs"),
-            include_str!("jsonview.rs"),
-            include_str!("update.rs"),
-            include_str!("scidata.rs"),
-            include_str!("tensors.rs"),
-            include_str!("rdata.rs"),
-            include_str!("drives.rs"),
-            include_str!("foldertree.rs"),
-            include_str!("pathfield.rs"),
-            include_str!("archive.rs"),
-            include_str!("shortcuts.rs"),
-            include_str!("audio.rs"),
-            include_str!("psd.rs"),
-            include_str!("pickle.rs"),
-            include_str!("datameta.rs"),
-            include_str!("mail.rs"),
-            include_str!("records.rs"),
-            include_str!("gitinfo.rs"),
-            include_str!("ops.rs"),
-            include_str!("remote.rs"),
-            include_str!("safefs.rs"),
+            include_str!("tools/backup.rs"),
+            include_str!("tools/diskusage.rs"),
+            include_str!("ui/palette.rs"),
+            include_str!("preview/table.rs"),
+            include_str!("tools/rename.rs"),
+            include_str!("preview/docview.rs"),
+            include_str!("preview/markdown.rs"),
+            include_str!("preview/widgets.rs"),
+            include_str!("terminal.rs"),
+            include_str!("ui/tabs.rs"),
+            include_str!("terminal/view.rs"),
+            include_str!("ui/chrome.rs"),
+            include_str!("tools/checksum.rs"),
+            include_str!("app/bars.rs"),
+            include_str!("app/bookmarks.rs"),
+            include_str!("app/commands.rs"),
+            include_str!("app/connect.rs"),
+            include_str!("app/dialogs.rs"),
+            include_str!("app/jobs.rs"),
+            include_str!("app/keys.rs"),
+            include_str!("app/opening.rs"),
+            include_str!("app/settings_ui.rs"),
+            include_str!("app/terminals.rs"),
+            include_str!("app/windows.rs"),
+            include_str!("preview/media.rs"),
+            include_str!("preview/textdocs.rs"),
+            include_str!("preview/fontview.rs"),
+            include_str!("preview/certview.rs"),
+            include_str!("preview/model3d.rs"),
+            include_str!("preview/geoview.rs"),
+            include_str!("preview/jsonview.rs"),
+            include_str!("system/update.rs"),
+            include_str!("preview/scidata.rs"),
+            include_str!("preview/tensors.rs"),
+            include_str!("preview/rdata.rs"),
+            include_str!("files/drives.rs"),
+            include_str!("ui/foldertree.rs"),
+            include_str!("ui/pathfield.rs"),
+            include_str!("files/archive.rs"),
+            include_str!("ui/shortcuts.rs"),
+            include_str!("preview/audio.rs"),
+            include_str!("preview/psd.rs"),
+            include_str!("preview/pickle.rs"),
+            include_str!("preview/datameta.rs"),
+            include_str!("preview/mail.rs"),
+            include_str!("preview/records.rs"),
+            include_str!("files/gitinfo.rs"),
+            include_str!("files/ops.rs"),
+            include_str!("files/remote.rs"),
+            include_str!("files/safefs.rs"),
         ];
         let keys: std::collections::HashSet<&str> = KEYS.iter().copied().collect();
         let mut missing = vec![];

@@ -552,7 +552,7 @@ else
     # window's app id is $APP_ID), on X11 by StartupWMClass. winit keeps one name for
     # both, so the X11 window class is $APP_ID too (not the program's name).
     # StartupNotify=true: the desktop hands the app a startup token, which the window
-    # uses (src/activation.rs) to end the desktop's "starting" cursor and take the focus.
+    # uses (src/system/activation.rs) to end the desktop's "starting" cursor and take the focus.
     desktop=$(mktemp)
     cat >"$desktop" <<EOF
 [Desktop Entry]

@@ -1,4 +1,5 @@
 //! Launch terminals and external applications.
+pub mod view;
 use crate::util::{es, shell_split, Res};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -73,14 +74,25 @@ pub const DEFAULT_TERM_THEME: &str = "Breeze Dark";
 
 impl Default for TerminalProfile {
     fn default() -> Self {
-        Self { name: "Default".into(), terminal: TerminalKind::BuiltIn, custom: String::new(), shell: String::new(), startup: String::new(), theme: DEFAULT_TERM_THEME.into() }
+        Self {
+            name: "Default".into(),
+            terminal: TerminalKind::BuiltIn,
+            custom: String::new(),
+            shell: String::new(),
+            startup: String::new(),
+            theme: DEFAULT_TERM_THEME.into(),
+        }
     }
 }
 
 /// The user's login shell (or the platform default).
 pub fn default_shell() -> String {
     if cfg!(windows) {
-        if which("pwsh") { "pwsh".into() } else { "powershell".into() }
+        if which("pwsh") {
+            "pwsh".into()
+        } else {
+            "powershell".into()
+        }
     } else {
         std::env::var("SHELL").ok().filter(|s| !s.is_empty()).unwrap_or_else(|| "/bin/sh".into())
     }
@@ -196,9 +208,7 @@ pub fn open_terminal_with(kind: TerminalKind, custom: &str, dir: &Path, run: Opt
             let (prog, args) = argv.split_first().ok_or("Custom terminal command is empty")?;
             spawn(command(prog, args, dir))
         }
-        TerminalKind::Ghostty if cfg!(target_os = "macos") => {
-            spawn(command("open", &with(sv(&["-na", "Ghostty", "--args", &wd]), &["-e"]), dir))
-        }
+        TerminalKind::Ghostty if cfg!(target_os = "macos") => spawn(command("open", &with(sv(&["-na", "Ghostty", "--args", &wd]), &["-e"]), dir)),
         TerminalKind::Ghostty => spawn(command("ghostty", &with(sv(&[&wd]), &["-e"]), dir)),
         TerminalKind::ITerm2 => match &run {
             None => spawn(command("open", &sv(&["-a", "iTerm", &d]), dir)),
@@ -233,7 +243,9 @@ fn native_terminal(dir: &Path, run: Option<Vec<String>>) -> Res<()> {
         None => spawn(command("open", &sv(&["-a", "Terminal", &d]), dir)),
         // Terminal types the script's line into its shell, where a control character
         // would be a key press.
-        Some(r) if !crate::termview::is_typeable(&format!("{d} {}", sh_join(&r))) => Err(crate::i18n::t("This folder's name has control characters: it is not typed into the terminal")),
+        Some(r) if !crate::terminal::view::is_typeable(&format!("{d} {}", sh_join(&r))) => {
+            Err(crate::i18n::t("This folder's name has control characters: it is not typed into the terminal"))
+        }
         Some(r) => {
             let line = format!("cd {} && exec {}", sh_quote(&d), sh_join(&r));
             let script = format!("tell application \"Terminal\"\nactivate\ndo script {}\nend tell", as_quote(&line));
