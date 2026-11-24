@@ -177,7 +177,7 @@ Previews read files as data and run no code from them. Files extracted from a do
 
 ## License
 
-MIT. The bundled fonts are under the SIL Open Font License 1.1; the AI tool logos come from [LobeHub Icons](https://github.com/lobehub/lobe-icons) (MIT) and are trademarks of their owners.
+MIT, see [LICENSE](LICENSE). The program includes open source libraries, fonts and icons under their own licenses (MIT, Apache-2.0, BSD, SIL Open Font License and others), listed with their texts in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md). RAR archives are read with UnRAR, whose freeware license forbids using it to make a RAR-compatible archiver. The AI tool logos come from [LobeHub Icons](https://github.com/lobehub/lobe-icons) (MIT) and are trademarks of their owners.
 
 <div align="center">
 <br>

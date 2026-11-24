@@ -60,6 +60,7 @@ APP="$OUT/$APP_NAME.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 mv "$OUT/$BIN" "$APP/Contents/MacOS/$BIN"
 cp assets/macos/MatrixFinder.icns "$APP/Contents/Resources/MatrixFinder.icns"
+cp LICENSE THIRD-PARTY-LICENSES.md "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

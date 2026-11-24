@@ -90,8 +90,10 @@ depends = "$auto, libegl1, libgl1, libx11-6, libx11-xcb1, libxcursor1, libxi6, l
 recommends = "xdg-utils, xdg-desktop-portal"
 suggests = "git, ffmpeg"
 maintainer-scripts = "scripts/linux/deb/"
+license-file = ["LICENSE", "0"]
 assets = [
     ["target/release/matrix_finder", "usr/bin/", "755"],
+    ["THIRD-PARTY-LICENSES.md", "usr/share/doc/matrix-finder/", "644"],
     ["assets/linux/org.matrixfinder.MatrixFinder.desktop", "usr/share/applications/", "644"],
     ["assets/logo/matrix_finder-small-16.png", "usr/share/icons/hicolor/16x16/apps/org.matrixfinder.MatrixFinder.png", "644"],
     ["assets/logo/matrix_finder-small-32.png", "usr/share/icons/hicolor/32x32/apps/org.matrixfinder.MatrixFinder.png", "644"],
@@ -108,6 +110,8 @@ url = "https://github.com/quangtiencs/matrix_finder"
 post_install_script = "scripts/linux/deb/postinst"
 assets = [
     { source = "target/release/matrix_finder", dest = "/usr/bin/matrix_finder", mode = "755" },
+    { source = "LICENSE", dest = "/usr/share/licenses/matrix-finder/LICENSE", mode = "644", doc = true },
+    { source = "THIRD-PARTY-LICENSES.md", dest = "/usr/share/licenses/matrix-finder/THIRD-PARTY-LICENSES.md", mode = "644", doc = true },
     { source = "assets/linux/org.matrixfinder.MatrixFinder.desktop", dest = "/usr/share/applications/org.matrixfinder.MatrixFinder.desktop", mode = "644" },
     { source = "assets/logo/matrix_finder-small-16.png", dest = "/usr/share/icons/hicolor/16x16/apps/org.matrixfinder.MatrixFinder.png", mode = "644" },
     { source = "assets/logo/matrix_finder-small-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/org.matrixfinder.MatrixFinder.png", mode = "644" },
