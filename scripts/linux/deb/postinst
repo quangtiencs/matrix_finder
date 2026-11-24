@@ -1,0 +1,30 @@
+#!/bin/sh
+# Runs after the .deb or .rpm is installed. A copy installed earlier with
+# scripts/install.sh (in ~/.local or /usr/local) comes before this package on PATH
+# and in the applications menu, so it would still be the one that starts: name it,
+# and how to remove it. This only reads; files in home folders are the user's.
+manifest=share/matrix_finder/install-manifest.txt
+found=""
+if [ -f "/usr/local/$manifest" ]; then
+    found="/usr/local (remove it with: ... | sudo bash -s -- --system --uninstall)"
+fi
+user=${SUDO_USER:-}
+if [ -n "$user" ] && [ "$user" != root ]; then
+    home=$(getent passwd "$user" 2>/dev/null | cut -d: -f6)
+    if [ -n "$home" ] && [ -f "$home/.local/$manifest" ]; then
+        found="${found:+$found
+  }$home/.local (remove it with: ... | bash -s -- --uninstall, as $user)"
+    fi
+fi
+if [ -n "$found" ]; then
+    cat <<MSG
+
+Matrix Finder: a copy installed with scripts/install.sh was found in
+  $found
+It starts instead of this package until it is removed. "..." stands for:
+  curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh
+Settings are shared and kept.
+
+MSG
+fi
+exit 0

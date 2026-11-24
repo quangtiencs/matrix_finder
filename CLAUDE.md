@@ -31,6 +31,7 @@ make fmt | make fmt-check           # cargo fmt / cargo fmt --check
 make icons                          # regenerate PNG icons, .icns, DMG background from SVGs
 make screenshots                    # re-render README screenshots (SHOTS=panels,palette for some)
 make app | make dmg | make dmg-universal   # macOS bundle/DMG in target/macos (scripts/macos/build-dmg.sh)
+make linux-packages [ARCH=amd64]    # .deb + .rpm in target/linux, built in Docker (scripts/linux/build-packages.sh)
 ```
 
 - The code is formatted with rustfmt (`rustfmt.toml`: `max_width = 160`, `use_small_heuristics = "Max"`). Run `cargo fmt` after editing Rust code and before committing; `cargo fmt --check` (`make fmt-check`) must pass. Use `#[rustfmt::skip]` only for data tables that read best one row per line (like `DEFS` in `ui/shortcuts.rs`). A commit that only reformats code is listed in `.git-blame-ignore-revs`.
@@ -69,4 +70,5 @@ UI strings are English text passed to `i18n::t("…")`; the text itself is the k
 
 - Commit messages follow `CONTRIBUTING.md`: `type(scope): summary` (`feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`), imperative, lower case, ≤ 72 chars; breaking changes use `!` and a `BREAKING CHANGE:` footer. Keep i18n entries in the same commit as the feature.
 - Releases: tag `v<version>` from `Cargo.toml`, attach the Apple silicon DMG from `make dmg` (ad-hoc signed, not notarized).
+- Linux packages install into `/usr`; `scripts/install.sh` installs into `~/.local` or `/usr/local` and must never install next to a package or delete a package's file (it checks with `dpkg-query -S` / `rpm -qf`). The desktop entry lives in `assets/linux/` and is shared by both.
 - `README.md` is kept short: the core features for data scientists and developers, not a full feature list. Building, tests, settings/translations and the project layout are in `CONTRIBUTING.md` (add new modules there). `README.html`/`README_files/` are rendered output and git-ignored.

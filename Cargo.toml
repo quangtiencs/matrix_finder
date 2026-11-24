@@ -75,6 +75,70 @@ opt-level = 3
 lto = "thin"
 strip = true
 
+# Linux packages (scripts/linux/build-packages.sh, `make deb` / `make rpm`): the same
+# files scripts/install.sh puts in ~/.local, under /usr. The window loads the graphics,
+# X11 and Wayland libraries at run time, so they are listed by hand; `$auto` (deb) and
+# the rpm's automatic requirements add the linked ones (OpenSSL 3, libstdc++, glibc).
+[package.metadata.deb]
+name = "matrix-finder"
+maintainer = "Tien Le-Quang <quangtiencs@gmail.com>"
+copyright = "Tien Le-Quang"
+extended-description = "A dual-panel file manager with tabs, a built-in terminal, archives and FTP/SFTP browsed like folders, and Quick View for documents, data and media files."
+section = "utils"
+priority = "optional"
+depends = "$auto, libegl1, libgl1, libx11-6, libx11-xcb1, libxcursor1, libxi6, libxrender1, libxcb1, libwayland-client0, libwayland-egl1, libxkbcommon0, libxkbcommon-x11-0"
+recommends = "xdg-utils, xdg-desktop-portal"
+suggests = "git, ffmpeg"
+maintainer-scripts = "scripts/linux/deb/"
+assets = [
+    ["target/release/matrix_finder", "usr/bin/", "755"],
+    ["assets/linux/org.matrixfinder.MatrixFinder.desktop", "usr/share/applications/", "644"],
+    ["assets/logo/matrix_finder-small-16.png", "usr/share/icons/hicolor/16x16/apps/org.matrixfinder.MatrixFinder.png", "644"],
+    ["assets/logo/matrix_finder-small-32.png", "usr/share/icons/hicolor/32x32/apps/org.matrixfinder.MatrixFinder.png", "644"],
+    ["assets/logo/matrix_finder-64.png", "usr/share/icons/hicolor/64x64/apps/org.matrixfinder.MatrixFinder.png", "644"],
+    ["assets/logo/matrix_finder-256.png", "usr/share/icons/hicolor/256x256/apps/org.matrixfinder.MatrixFinder.png", "644"],
+    ["assets/logo/matrix_finder-512.png", "usr/share/icons/hicolor/512x512/apps/org.matrixfinder.MatrixFinder.png", "644"],
+    ["assets/logo/matrix_finder.svg", "usr/share/icons/hicolor/scalable/apps/org.matrixfinder.MatrixFinder.svg", "644"],
+]
+
+[package.metadata.generate-rpm]
+name = "matrix-finder"
+summary = "Dual-panel file manager with tabs, a terminal and previews"
+url = "https://github.com/quangtiencs/matrix_finder"
+post_install_script = "scripts/linux/deb/postinst"
+assets = [
+    { source = "target/release/matrix_finder", dest = "/usr/bin/matrix_finder", mode = "755" },
+    { source = "assets/linux/org.matrixfinder.MatrixFinder.desktop", dest = "/usr/share/applications/org.matrixfinder.MatrixFinder.desktop", mode = "644" },
+    { source = "assets/logo/matrix_finder-small-16.png", dest = "/usr/share/icons/hicolor/16x16/apps/org.matrixfinder.MatrixFinder.png", mode = "644" },
+    { source = "assets/logo/matrix_finder-small-32.png", dest = "/usr/share/icons/hicolor/32x32/apps/org.matrixfinder.MatrixFinder.png", mode = "644" },
+    { source = "assets/logo/matrix_finder-64.png", dest = "/usr/share/icons/hicolor/64x64/apps/org.matrixfinder.MatrixFinder.png", mode = "644" },
+    { source = "assets/logo/matrix_finder-256.png", dest = "/usr/share/icons/hicolor/256x256/apps/org.matrixfinder.MatrixFinder.png", mode = "644" },
+    { source = "assets/logo/matrix_finder-512.png", dest = "/usr/share/icons/hicolor/512x512/apps/org.matrixfinder.MatrixFinder.png", mode = "644" },
+    { source = "assets/logo/matrix_finder.svg", dest = "/usr/share/icons/hicolor/scalable/apps/org.matrixfinder.MatrixFinder.svg", mode = "644" },
+]
+
+[package.metadata.generate-rpm.requires]
+"libEGL.so.1()(64bit)" = "*"
+"libGL.so.1()(64bit)" = "*"
+"libX11.so.6()(64bit)" = "*"
+"libX11-xcb.so.1()(64bit)" = "*"
+"libXcursor.so.1()(64bit)" = "*"
+"libXi.so.6()(64bit)" = "*"
+"libXrender.so.1()(64bit)" = "*"
+"libxcb.so.1()(64bit)" = "*"
+"libwayland-client.so.0()(64bit)" = "*"
+"libwayland-egl.so.1()(64bit)" = "*"
+"libxkbcommon.so.0()(64bit)" = "*"
+"libxkbcommon-x11.so.0()(64bit)" = "*"
+
+[package.metadata.generate-rpm.recommends]
+xdg-utils = "*"
+xdg-desktop-portal = "*"
+
+[package.metadata.generate-rpm.suggests]
+git = "*"
+ffmpeg = "*"
+
 [dev-dependencies]
 egui_kittest = { version = "0.31", features = ["wgpu", "eframe"] }
 rust_xlsxwriter = "0.102"

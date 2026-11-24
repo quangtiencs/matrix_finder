@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Matrix Finder
+GenericName=File Manager
+Comment=Dual-panel file manager with tabs, a terminal and previews
+Exec=matrix_finder %f
+Icon=org.matrixfinder.MatrixFinder
+Terminal=false
+StartupNotify=true
+StartupWMClass=org.matrixfinder.MatrixFinder
+Categories=System;FileTools;FileManager;
+Keywords=files;folders;file manager;dual panel;commander;terminal;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=New Window
+Exec=matrix_finder --new-window
