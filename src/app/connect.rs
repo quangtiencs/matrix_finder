@@ -22,28 +22,28 @@ impl App {
             Some((h, p)) => (h.to_string(), p.parse().unwrap_or(proto.default_port())),
             None => (hostport.to_string(), proto.default_port()),
         };
-        // Reuse a saved profile (key file / password) when one matches.
-        let mut profile = self
+        // Reuse a saved profile (key file) and this session's password when one matches.
+        let profile = self
             .cfg
             .connections
             .iter()
             .find(|c| c.protocol == proto && c.host == host && c.port == port && c.user == user)
             .cloned()
             .unwrap_or(ConnectionProfile { name: format!("{user}@{host}"), protocol: proto, host, port, user, ..Default::default() });
+        let mut profile = remote::with_known_password(profile);
         profile.initial_path = path;
-        self.show_dialog(Dialog::Connect { profile, save: false, save_password: false }, true);
+        self.show_dialog(Dialog::Connect { profile, save: false }, true);
     }
 
     pub(super) fn open_connect_dialog(&mut self, profile: Option<ConnectionProfile>) {
-        self.show_dialog(Dialog::Connect { profile: profile.unwrap_or_default(), save: true, save_password: false }, true);
+        self.show_dialog(Dialog::Connect { profile: profile.unwrap_or_default(), save: true }, true);
     }
 
-    pub(super) fn start_connect(&mut self, profile: ConnectionProfile, save: bool, save_password: bool) {
+    /// Connect with `profile`, saved first when `save` (never with its password).
+    pub(super) fn start_connect(&mut self, profile: ConnectionProfile, save: bool) {
         if save {
             let mut stored = profile.clone();
-            if !save_password {
-                stored.password.clear();
-            }
+            stored.password.clear();
             if stored.name.trim().is_empty() {
                 stored.name = format!("{}@{}", stored.user, stored.host);
             }
@@ -82,6 +82,7 @@ impl App {
         self.connecting = None;
         match r {
             Ok((fs, home)) => {
+                remote::remember_password(&profile);
                 let id = self.next_remote;
                 self.next_remote += 1;
                 let label = format!("{}://{}@{}:{}", profile.protocol.scheme(), profile.user, profile.host, profile.port);
@@ -95,7 +96,7 @@ impl App {
             }
             Err(remote::ConnectError::Other(e)) => {
                 self.toast(format!("{}: {e}", t("Connection failed")), true);
-                self.show_dialog(Dialog::Connect { profile, save: false, save_password: false }, false);
+                self.show_dialog(Dialog::Connect { profile, save: false }, false);
             }
         }
     }
@@ -111,11 +112,14 @@ impl App {
         }
     }
 
+    /// A saved connection: straight away with a key file or this session's password,
+    /// otherwise the dialog asks for the password (or leaves it to the SSH agent).
     pub(super) fn connect_saved(&mut self, c: ConnectionProfile) {
+        let c = remote::with_known_password(c);
         if c.password.is_empty() && c.key_file.is_empty() {
             self.open_connect_dialog(Some(c));
         } else {
-            self.start_connect(c, false, false);
+            self.start_connect(c, false);
         }
     }
 

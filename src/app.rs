@@ -100,7 +100,6 @@ enum Dialog {
     Connect {
         profile: ConnectionProfile,
         save: bool,
-        save_password: bool,
     },
     /// An SFTP server whose host key is not known yet: trust it, or do not connect.
     TrustHostKey {
@@ -409,12 +408,18 @@ enum SettingsPage {
 impl App {
     /// `open`: a folder given on the command line, shown first.
     pub fn new(cc: &eframe::CreationContext, chrome: crate::ui::chrome::Chrome, open: Option<String>) -> Self {
-        let (cfg, store) = crate::config::Store::open();
+        let (mut cfg, mut store) = crate::config::Store::open();
+        // Passwords that older versions saved when asked: kept in memory from now on, and
+        // the settings saved without them.
+        if crate::files::remote::take_saved_passwords(&mut cfg.connections) {
+            if let Ok(Some(merged)) = store.save(&cfg) {
+                cfg = merged;
+            }
+        }
         i18n::set_language(&cfg.language);
         // Previews' temporary folders left by a Matrix Finder that crashed.
         crate::util::clean_stale_temp_dirs(&[crate::util::TEMP_PREFIX]);
         let theme = theme::by_name(&cfg.theme);
-        let mut cfg = cfg;
         if cfg.theme != theme::SYSTEM {
             cfg.theme = theme.name.to_string();
         }

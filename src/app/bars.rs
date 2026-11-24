@@ -183,17 +183,12 @@ impl App {
                     let mut remove = None;
                     for (i, c) in self.cfg.connections.clone().into_iter().enumerate() {
                         ui.horizontal(|ui| {
-                            if ui.button(format!("{} {}", c.protocol.label(), c.name)).on_hover_text(c.url()).clicked() {
-                                if c.password.is_empty() && c.key_file.is_empty() {
-                                    // Ask for the password (or use the SSH agent from the dialog).
-                                    self.open_connect_dialog(Some(c.clone()));
-                                } else {
-                                    self.start_connect(c.clone(), false, false);
-                                }
+                            if ui.button(format!("{} {}", c.protocol.label(), c.name)).on_hover_text(connection_hover(&c)).clicked() {
+                                self.connect_saved(c.clone());
                                 ui.close_menu();
                             }
                             if ui.small_button("✏").on_hover_text(t("Edit")).clicked() {
-                                self.show_dialog(Dialog::Connect { save_password: !c.password.is_empty(), profile: c, save: true }, false);
+                                self.show_dialog(Dialog::Connect { profile: remote::with_known_password(c), save: true }, false);
                                 ui.close_menu();
                             }
                             if ui.small_button("🗑").on_hover_text(t("Delete")).clicked() {
@@ -552,13 +547,13 @@ impl App {
                 });
             }
             for c in self.cfg.connections.clone() {
-                let resp = side_row(ui, th, false, &c.name, None, |p, r| icons::globe(p, r, th.weak)).on_hover_text(c.url());
+                let resp = side_row(ui, th, false, &c.name, None, |p, r| icons::globe(p, r, th.weak)).on_hover_text(connection_hover(&c));
                 if resp.clicked() {
                     self.connect_saved(c.clone());
                 }
                 resp.context_menu(|ui| {
                     if ui.button(t("Edit")).clicked() {
-                        self.show_dialog(Dialog::Connect { save_password: !c.password.is_empty(), profile: c.clone(), save: true }, false);
+                        self.show_dialog(Dialog::Connect { profile: remote::with_known_password(c.clone()), save: true }, false);
                         ui.close_menu();
                     }
                     if ui.button(t("Delete")).clicked() {
@@ -756,4 +751,13 @@ fn key_hint(ui: &mut egui::Ui, th: &Theme, key: &str, label: &str) -> egui::Resp
 /// Response for the chevron part of a split button (so the popup can anchor to both parts).
 fn chev_rect_response(ui: &egui::Ui, r: egui::Rect) -> egui::Response {
     ui.interact(r, egui::Id::new("terminal-chevron-anchor"), egui::Sense::hover())
+}
+
+/// A saved connection's address, and whether its password is held in memory this session.
+fn connection_hover(c: &ConnectionProfile) -> String {
+    if c.password.is_empty() && !remote::with_known_password(c.clone()).password.is_empty() {
+        format!("{}\n🔒 {}", c.url(), t("Password in memory until Matrix Finder quits"))
+    } else {
+        c.url()
+    }
 }
