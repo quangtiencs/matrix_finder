@@ -91,7 +91,8 @@ pub struct Tab {
     /// closes it is not for the list (which would unmark the items).
     pub menu_open: bool,
     select_name: Option<String>,
-    pub dir_sizes: Option<Receiver<(String, u64)>>,
+    /// "Calculate folder sizes" at work on this listing.
+    pub dir_sizes: Option<crate::tools::diskusage::FolderSizes>,
     /// Recursive search results shown instead of the folder.
     pub search: Option<Search>,
     /// The filter reads files: which entries it let through so far.
@@ -332,6 +333,7 @@ impl Tab {
         self.scan = None;
         self.search = None;
         self.loading = None;
+        self.dir_sizes = None;
     }
 
     pub fn go_back(&mut self, ctx: &ListCtx) {
@@ -594,12 +596,17 @@ impl Tab {
                 }
             }
         }
-        if let Some(rx) = &self.dir_sizes {
+        // Sizes belong to the folder they were counted in, never to one that has the same names.
+        if self.dir_sizes.as_ref().is_some_and(|j| self.loc.local_path() != Some(j.dir.as_path())) {
+            self.dir_sizes = None;
+        }
+        if let Some(job) = &self.dir_sizes {
             loop {
-                match rx.try_recv() {
+                match job.try_recv() {
                     Ok((name, size)) => {
-                        if let Some(e) = self.entries.iter_mut().find(|e| e.name == name) {
+                        if let Some(e) = self.entries.iter_mut().find(|e| e.is_dir && !e.is_parent && e.name == name) {
                             e.size = size;
+                            e.size_known = true;
                         }
                         changed = true;
                     }
@@ -2453,12 +2460,8 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 }
                 let size_txt = if e.is_parent {
                     String::new()
-                } else if e.is_dir {
-                    if e.size > 0 {
-                        human_size(e.size)
-                    } else {
-                        "—".into()
-                    }
+                } else if e.is_dir && !e.size_known {
+                    "—".into()
                 } else {
                     human_size(e.size)
                 };
@@ -3246,6 +3249,48 @@ mod list_state_tests {
         tab.set_filter("not", &ctx);
         assert!(tab.filter.is_ok());
         assert_eq!(tab.marked_shown().len(), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn wait_sizes(tab: &mut Tab, ctx: &ListCtx) {
+        let t0 = std::time::Instant::now();
+        while tab.dir_sizes.is_some() && t0.elapsed().as_secs() < 10 {
+            tab.poll(ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    /// Folder sizes land in the folder they were counted in only, and leaving it stops the count.
+    #[test]
+    fn folder_sizes_stay_with_their_folder() {
+        let dir = std::env::temp_dir().join(format!("mf-pane-sizes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for d in ["one/same/deep", "one/empty", "two/same"] {
+            std::fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        std::fs::write(dir.join("one/same/deep/f.bin"), vec![1u8; 3000]).unwrap();
+        let remotes = HashMap::new();
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let mut tab = Tab::new(Location::Local(dir.join("one")));
+        tab.reload(&ctx);
+        let names = |t: &Tab| t.entries.iter().filter(|e| e.is_dir && !e.is_parent).map(|e| e.name.clone()).collect::<Vec<_>>();
+        tab.dir_sizes = Some(crate::tools::diskusage::FolderSizes::start(dir.join("one"), names(&tab)));
+        // Another folder with the same names before any result was read: none is used there.
+        tab.navigate(Location::Local(dir.join("two")), &ctx);
+        assert!(tab.dir_sizes.is_none(), "leaving the folder stops the count");
+        let same = tab.entries.iter().find(|e| e.name == "same").unwrap();
+        assert!(!same.size_known && same.size == 0);
+        // A count whose folder is not the shown one is dropped too.
+        tab.dir_sizes = Some(crate::tools::diskusage::FolderSizes::start(dir.join("one"), vec!["same".into()]));
+        wait_sizes(&mut tab, &ctx);
+        assert!(!tab.entries.iter().find(|e| e.name == "same").unwrap().size_known);
+        // In its own folder: the total of everything below, and 0 B (known) for an empty one.
+        tab.navigate(Location::Local(dir.join("one")), &ctx);
+        tab.dir_sizes = Some(crate::tools::diskusage::FolderSizes::start(dir.join("one"), names(&tab)));
+        wait_sizes(&mut tab, &ctx);
+        let get = |n: &str| tab.entries.iter().find(|e| e.name == n).cloned().unwrap();
+        assert_eq!((get("same").size, get("same").size_known), (3000, true));
+        assert_eq!((get("empty").size, get("empty").size_known), (0, true));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -7,7 +7,11 @@ use std::time::SystemTime;
 pub struct Entry {
     pub name: String,
     pub is_dir: bool,
+    /// A file's length; for a folder the total of what is inside, once `size_known`.
     pub size: u64,
+    /// Files: always. Folders: when their total was worked out (in an archive, or by
+    /// "Calculate folder sizes"), so an empty folder shows 0 B rather than "—".
+    pub size_known: bool,
     pub modified: Option<SystemTime>,
     pub is_link: bool,
     pub hidden: bool,
@@ -20,7 +24,9 @@ impl Entry {
     pub fn new(name: String, is_dir: bool, size: u64, modified: Option<SystemTime>) -> Self {
         let ext = if is_dir { String::new() } else { ext_of(&name) };
         let hidden = name.starts_with('.');
-        Self { name, is_dir, size, modified, is_link: false, hidden, is_parent: false, ext }
+        // A folder's own size from a listing (4 KB on most servers) is not its contents.
+        let size = if is_dir { 0 } else { size };
+        Self { name, is_dir, size, size_known: !is_dir, modified, is_link: false, hidden, is_parent: false, ext }
     }
 
     pub fn parent() -> Self {

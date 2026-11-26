@@ -4,9 +4,10 @@
 use crate::style::theme::Theme;
 use crate::util::human_size;
 use egui::{pos2, vec2, Color32, Rect, Sense, Stroke};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::mpsc::{channel, Receiver};
+use std::sync::mpsc::{channel, Receiver, TryRecvError};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -26,6 +27,10 @@ struct ScanProgress {
     bytes: AtomicU64,
     current: Mutex<String>,
     cancel: AtomicBool,
+    /// Count files by their length rather than the space they take on disk.
+    apparent: bool,
+    /// Files with more than one hard link that were counted already (device, inode).
+    linked: Mutex<HashSet<(u64, u64)>>,
 }
 
 /// Scan `path`. Everything below is counted, but only `depth` levels of
@@ -53,7 +58,10 @@ fn scan_dir(path: &Path, name: String, dev: Option<u64>, depth: usize, p: &ScanP
                 node.children.push(child);
             }
         } else {
-            let size = allocated_size(&meta);
+            if !first_link(&meta, p) {
+                continue;
+            }
+            let size = if p.apparent { meta.len() } else { allocated_size(&meta) };
             p.files.fetch_add(1, Ordering::Relaxed);
             p.bytes.fetch_add(size, Ordering::Relaxed);
             node.size += size;
@@ -83,6 +91,18 @@ fn allocated_size(m: &std::fs::Metadata) -> u64 {
     m.len()
 }
 
+/// Whether this is the first time the scan meets this file: one with several hard
+/// links is counted once, as `du` does.
+#[cfg(unix)]
+fn first_link(m: &std::fs::Metadata, p: &ScanProgress) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    m.nlink() <= 1 || p.linked.lock().map_or(true, |mut seen| seen.insert((m.dev(), m.ino())))
+}
+#[cfg(not(unix))]
+fn first_link(_m: &std::fs::Metadata, _p: &ScanProgress) -> bool {
+    true
+}
+
 #[cfg(unix)]
 fn device_of(p: &Path) -> Option<u64> {
     use std::os::unix::fs::MetadataExt;
@@ -105,6 +125,51 @@ fn same_device(_m: &std::fs::Metadata, _dev: Option<u64>) -> bool {
 
 fn is_virtual_fs(p: &Path) -> bool {
     cfg!(target_os = "linux") && matches!(p.to_str(), Some("/proc" | "/sys" | "/dev" | "/run"))
+}
+
+/// The total sizes of some folders of a file list, for its Size column, worked out
+/// one folder at a time on a thread. They are counted like the analyser counts (not
+/// into other disks or `/proc`, a hard-linked file once), but by length, as the
+/// column shows files. Dropping it stops the walk.
+pub struct FolderSizes {
+    /// The folder whose entries these are.
+    pub dir: PathBuf,
+    rx: Receiver<(String, u64)>,
+    progress: Arc<ScanProgress>,
+}
+
+impl FolderSizes {
+    pub fn start(dir: PathBuf, names: Vec<String>) -> Self {
+        let progress = Arc::new(ScanProgress { apparent: true, ..Default::default() });
+        let (tx, rx) = channel();
+        let (p, d) = (progress.clone(), dir.clone());
+        std::thread::spawn(move || {
+            for n in names {
+                let path = d.join(&n);
+                // An unreadable folder has no size to show, rather than 0 B.
+                if is_virtual_fs(&path) || std::fs::read_dir(&path).is_err() {
+                    continue;
+                }
+                p.linked.lock().map(|mut s| s.clear()).ok();
+                let size = scan_dir(&path, String::new(), device_of(&path), 0, &p).size;
+                if p.cancel.load(Ordering::Relaxed) || tx.send((n, size)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { dir, rx, progress }
+    }
+
+    /// The next folder done: `Empty` while it is being counted, `Disconnected` once all are.
+    pub fn try_recv(&self) -> Result<(String, u64), TryRecvError> {
+        self.rx.try_recv()
+    }
+}
+
+impl Drop for FolderSizes {
+    fn drop(&mut self) {
+        self.progress.cancel.store(true, Ordering::Relaxed);
+    }
 }
 
 struct ScanJob {
@@ -705,6 +770,39 @@ mod tests {
         let csv = d.csv().unwrap();
         assert!(csv.starts_with("path,name,type,level,size_bytes"));
         assert!(csv.lines().any(|l| l.contains(",top.txt,file,1,")), "{csv}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Folder totals for the file list: by length, a hard-linked file once per folder,
+    /// nothing for a folder that cannot be read.
+    #[test]
+    fn folder_sizes_count_lengths_and_links_once() {
+        let dir = std::env::temp_dir().join(format!("mf-du-sizes-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        for d in ["a/b", "linked", "empty", "other"] {
+            std::fs::create_dir_all(dir.join(d)).unwrap();
+        }
+        std::fs::write(dir.join("a/one.txt"), vec![1u8; 10]).unwrap();
+        std::fs::write(dir.join("a/b/two.bin"), vec![1u8; 5000]).unwrap();
+        std::fs::write(dir.join("linked/f"), vec![1u8; 100]).unwrap();
+        std::fs::hard_link(dir.join("linked/f"), dir.join("linked/g")).unwrap();
+        std::fs::hard_link(dir.join("linked/f"), dir.join("other/h")).unwrap();
+        let names = ["a", "linked", "empty", "other", "missing"].map(String::from).to_vec();
+        let job = FolderSizes::start(dir.clone(), names);
+        let mut got = std::collections::BTreeMap::new();
+        let t0 = Instant::now();
+        while t0.elapsed().as_secs() < 10 {
+            match job.try_recv() {
+                Ok((n, s)) => {
+                    got.insert(n, s);
+                }
+                Err(TryRecvError::Empty) => std::thread::sleep(std::time::Duration::from_millis(5)),
+                Err(TryRecvError::Disconnected) => break,
+            }
+        }
+        let want: std::collections::BTreeMap<String, u64> =
+            [("a", 5010), ("empty", 0), ("linked", 100), ("other", 100)].into_iter().map(|(n, s)| (n.to_string(), s)).collect();
+        assert_eq!(got, want, "a missing folder has no size");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

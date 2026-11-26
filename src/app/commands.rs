@@ -188,22 +188,8 @@ impl App {
         let tab = self.panes[a].tab_mut();
         let Some(dir) = tab.loc.local_path().map(|p| p.to_path_buf()) else { return };
         let names: Vec<String> = tab.entries.iter().filter(|e| e.is_dir && !e.is_parent).map(|e| e.name.clone()).collect();
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            for n in names {
-                let size: u64 = walkdir::WalkDir::new(dir.join(&n))
-                    .into_iter()
-                    .flatten()
-                    .filter(|e| e.file_type().is_file())
-                    .filter_map(|e| e.metadata().ok())
-                    .map(|m| m.len())
-                    .sum();
-                if tx.send((n, size)).is_err() {
-                    break;
-                }
-            }
-        });
-        tab.dir_sizes = Some(rx);
+        // A new count replaces (and stops) the one before.
+        tab.dir_sizes = Some(crate::tools::diskusage::FolderSizes::start(dir, names));
     }
 
     fn start_unpack(&mut self, here: bool) {
@@ -281,7 +267,7 @@ impl App {
         let mut text = format!("{}: {}\n", t("Name"), e.name);
         text += &format!("{}: {}\n", t("Location"), tab.loc.display(|id| self.remote_label(id)));
         text += &format!("{}: {}\n", t("Type"), if e.is_dir { t("Folder") } else { format!("{} (.{})", t("File"), e.ext) });
-        if !e.is_dir || e.size > 0 {
+        if e.size_known {
             text += &format!("{}: {} ({} bytes)\n", t("Size"), human_size(e.size), e.size);
         }
         text += &format!("{}: {}\n", t("Modified"), crate::util::format_time(e.modified));

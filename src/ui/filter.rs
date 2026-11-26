@@ -690,7 +690,7 @@ fn eval(x: &Expr, e: &Entry, path: Option<&Path>, stop: &AtomicBool) -> bool {
             }
             let n = match field {
                 Field::Size => {
-                    if e.is_dir && !e.is_parent && e.size == 0 {
+                    if e.is_dir && !e.is_parent && !e.size_known {
                         return false;
                     }
                     e.size as f64
