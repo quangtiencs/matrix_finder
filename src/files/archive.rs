@@ -616,7 +616,13 @@ pub fn children(all: &[ArchEntry], inner: &str) -> Vec<Entry> {
             }
         }
     }
-    map.into_values().collect()
+    // Everything below a folder of an archive is listed, so its total is complete.
+    map.into_values()
+        .map(|mut e| {
+            e.size_known = true;
+            e
+        })
+        .collect()
 }
 
 fn is_selected(path: &str, selection: &[String]) -> bool {
