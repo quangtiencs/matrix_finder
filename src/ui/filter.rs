@@ -33,6 +33,133 @@ pub enum Filter {
     Substring(String),
     Exts(Vec<String>),
     Expr(Expr),
+    /// What the Find panel (the funnel button) asks for.
+    Find(Find),
+}
+
+/// How the Find panel compares its text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FindMode {
+    /// The name contains the text.
+    #[default]
+    Contains,
+    /// The whole name fits a pattern: `*` or `%` any run of characters, `?` one.
+    Like,
+    /// A line inside the file contains the text, as grep finds it (files only).
+    Content,
+}
+
+/// A search set up in the Find panel. With `loose`, upper and lower case are the same,
+/// and so are `-`, `_` and spaces: `my-file` finds `My_File` and `my file`.
+#[derive(Debug, Clone)]
+pub struct Find {
+    pub text: String,
+    pub mode: FindMode,
+    pub files: bool,
+    pub folders: bool,
+    pub loose: bool,
+    /// Look in every folder below too (a search), not just this one (a filter).
+    pub subfolders: bool,
+    /// `text` in the form compared, made once: the first match fills it, so a Find is
+    /// not to be changed after it was used (build a new one).
+    pub(crate) needle: std::sync::OnceLock<String>,
+}
+
+impl PartialEq for Find {
+    fn eq(&self, o: &Self) -> bool {
+        (&self.text, self.mode, self.files, self.folders, self.loose, self.subfolders) == (&o.text, o.mode, o.files, o.folders, o.loose, o.subfolders)
+    }
+}
+
+impl Default for Find {
+    fn default() -> Self {
+        Self { text: String::new(), mode: FindMode::Contains, files: true, folders: true, loose: true, subfolders: false, needle: std::sync::OnceLock::new() }
+    }
+}
+
+impl Find {
+    /// Text in the form compared: folded (case, `-` `_` and spaces) when `loose`.
+    fn norm(&self, s: &str) -> String {
+        let sep = |c: char| if c == '_' || c == ' ' { '-' } else { c };
+        if !self.loose {
+            nfc(s).into_owned()
+        } else if s.is_ascii() {
+            // One pass for the usual name: this runs for every entry of a big folder.
+            s.chars().map(|c| sep(c.to_ascii_lowercase())).collect()
+        } else {
+            fold(s).chars().map(sep).collect()
+        }
+    }
+
+    /// Whether files are looked at (text inside files: only files).
+    pub fn wants_files(&self) -> bool {
+        self.files || self.mode == FindMode::Content
+    }
+
+    pub fn wants_folders(&self) -> bool {
+        self.folders && self.mode != FindMode::Content
+    }
+
+    pub fn matches_at(&self, e: &Entry, path: Option<&Path>, stop: &AtomicBool) -> bool {
+        if e.is_parent {
+            return true;
+        }
+        if (e.is_dir && !self.wants_folders()) || (!e.is_dir && !self.wants_files()) {
+            return false;
+        }
+        let text = self.needle.get_or_init(|| self.norm(self.text.trim()));
+        // A search result's name is its path below the search folder: its own name counts.
+        // (`\\` is part of a name except on Windows.)
+        let name = e.name.rsplit(|c| c == '/' || (cfg!(windows) && c == '\\')).next().unwrap_or(&e.name);
+        match self.mode {
+            FindMode::Contains => self.norm(name).contains(text.as_str()),
+            FindMode::Like => wildcard(&self.norm(name), text),
+            FindMode::Content => {
+                let Some(path) = path.filter(|_| !e.is_dir) else { return false };
+                grep(path, stop, |line| self.norm(line).contains(text.as_str())) == Some(true)
+            }
+        }
+    }
+
+    /// A short description, shown on the chip of the address bar.
+    pub fn summary(&self) -> String {
+        use crate::i18n::t;
+        let what = match self.mode {
+            FindMode::Contains => t("Name contains"),
+            FindMode::Like => t("Name like"),
+            FindMode::Content => t("Text in files"),
+        };
+        format!("{what} \"{}\"", self.text.trim())
+    }
+}
+
+/// Whether all of `text` fits `pattern`: `*` and `%` stand for any run of characters
+/// (none too), `?` for exactly one.
+pub fn wildcard(text: &str, pattern: &str) -> bool {
+    let t: Vec<char> = text.chars().collect();
+    let p: Vec<char> = pattern.chars().collect();
+    let any = |c: char| c == '*' || c == '%';
+    let (mut ti, mut pi) = (0usize, 0usize);
+    let mut star: Option<(usize, usize)> = None;
+    while ti < t.len() {
+        if pi < p.len() && any(p[pi]) {
+            star = Some((pi, ti));
+            pi += 1;
+        } else if pi < p.len() && (p[pi] == '?' || p[pi] == t[ti]) {
+            pi += 1;
+            ti += 1;
+        } else if let Some((sp, st)) = star {
+            pi = sp + 1;
+            ti = st + 1;
+            star = Some((sp, st + 1));
+        } else {
+            return false;
+        }
+    }
+    while pi < p.len() && any(p[pi]) {
+        pi += 1;
+    }
+    pi == p.len()
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -136,6 +263,7 @@ impl Filter {
             Filter::Substring(s) => fold(&e.name).contains(s),
             Filter::Exts(exts) => !e.is_dir && exts.iter().any(|x| *x == e.ext),
             Filter::Expr(x) => eval(x, e, path, stop),
+            Filter::Find(f) => f.matches_at(e, path, stop),
         }
     }
 
@@ -148,7 +276,11 @@ impl Filter {
                 Expr::Cmp { field, .. } | Expr::Regex { field, .. } => *field == Field::Source,
             }
         }
-        matches!(self, Filter::Expr(x) if walk(x))
+        match self {
+            Filter::Expr(x) => walk(x),
+            Filter::Find(f) => f.mode == FindMode::Content,
+            _ => false,
+        }
     }
 
     pub fn is_all(&self) -> bool {
@@ -869,5 +1001,82 @@ mod tests {
         stop.store(true, AtomicOrdering::Relaxed);
         assert!(!at(&Filter::parse("source LIKE '%todo%'").unwrap(), &notes), "stopped");
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    trait Matches {
+        fn matches(&self, e: &Entry) -> bool;
+    }
+    impl Matches for Find {
+        fn matches(&self, e: &Entry) -> bool {
+            self.matches_at(e, None, &AtomicBool::new(false))
+        }
+    }
+
+    fn find(text: &str, mode: FindMode, loose: bool) -> Find {
+        Find { text: text.into(), mode, loose, ..Default::default() }
+    }
+
+    /// Loose: case, `-`, `_` and spaces do not matter; strict: they do.
+    #[test]
+    fn find_names_loosely_or_exactly() {
+        let names = ["My_File.txt", "my-file.md", "MY FILE.pdf", "myfile.txt", "Other.txt"];
+        let hits = |f: &Find| names.iter().filter(|n| f.matches_at(&file(n, 1), None, &AtomicBool::new(false))).copied().collect::<Vec<_>>();
+        assert_eq!(hits(&find("my-file", FindMode::Contains, true)), ["My_File.txt", "my-file.md", "MY FILE.pdf"]);
+        assert_eq!(hits(&find("MY_file", FindMode::Contains, true)), ["My_File.txt", "my-file.md", "MY FILE.pdf"]);
+        assert_eq!(hits(&find("my-file", FindMode::Contains, false)), ["my-file.md"]);
+        assert_eq!(hits(&find("My_", FindMode::Contains, false)), ["My_File.txt"]);
+        // A pattern fits the whole name: * or % for any text, ? for one character.
+        assert_eq!(hits(&find("my?file.*", FindMode::Like, true)), ["My_File.txt", "my-file.md", "MY FILE.pdf"]);
+        assert_eq!(hits(&find("%.txt", FindMode::Like, true)), ["My_File.txt", "myfile.txt", "Other.txt"]);
+        assert_eq!(hits(&find("my", FindMode::Like, true)), Vec::<&str>::new(), "not the whole name");
+        assert_eq!(hits(&find("My_File.*", FindMode::Like, false)), ["My_File.txt"]);
+        // A search result is named by its path: its own name is what counts.
+        let deep = file("my-file/inside/notes.txt", 1);
+        assert!(!find("my-file", FindMode::Contains, true).matches(&deep));
+        assert!(find("notes", FindMode::Contains, true).matches(&deep));
+    }
+
+    #[test]
+    fn find_files_folders_or_both() {
+        let (f, d) = (file("report.txt", 1), dir("reports"));
+        let mut q = find("report", FindMode::Contains, true);
+        assert!(q.matches(&f) && q.matches(&d));
+        q.folders = false;
+        assert!(q.matches(&f) && !q.matches(&d));
+        q.folders = true;
+        q.files = false;
+        assert!(!q.matches(&f) && q.matches(&d));
+        // Text inside files: files only, whatever is ticked.
+        q.mode = FindMode::Content;
+        assert!(q.wants_files() && !q.wants_folders());
+    }
+
+    #[test]
+    fn find_text_inside_files() {
+        let dir = std::env::temp_dir().join(format!("mf-find-content-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.rs"), "fn main() {}\n// TODO: fix_the-bug\n").unwrap();
+        std::fs::write(dir.join("b.rs"), "nothing here\n").unwrap();
+        std::fs::write(dir.join("c.bin"), b"TODO\0binary").unwrap();
+        let stop = AtomicBool::new(false);
+        let at = |q: &Find, n: &str| q.matches_at(&file(n, 1), Some(&dir.join(n)), &stop);
+        let q = find("todo: FIX-THE_bug", FindMode::Content, true);
+        assert!(at(&q, "a.rs") && !at(&q, "b.rs"));
+        assert!(!at(&q, "c.bin"), "binary files are skipped");
+        assert!(!at(&find("todo", FindMode::Content, false), "a.rs"), "exact case");
+        assert!(Filter::Find(q).reads_content());
+        assert!(!Filter::Find(find("x", FindMode::Like, true)).reads_content());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// On Unix `\` is part of a name, not a separator.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_is_part_of_a_name() {
+        let f = file("draft\\report.txt", 1);
+        assert!(find("draft", FindMode::Contains, true).matches(&f));
+        assert!(find("draft*", FindMode::Like, true).matches(&f));
+        assert!(find("report", FindMode::Contains, true).matches(&file("sub/my report.txt", 1)), "/ still separates");
     }
 }

@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 /// Build a `ListCtx` from disjoint fields so that panes can be borrowed mutably.
 macro_rules! lc {
     ($s:expr) => {
-        ListCtx { remotes: &$s.remotes, show_hidden: $s.cfg.show_hidden, dirs_first: $s.cfg.dirs_first }
+        ListCtx { remotes: &$s.remotes, show_hidden: $s.cfg.show_hidden, dirs_first: $s.cfg.dirs_first, default_view: $s.cfg.default_view }
     };
 }
 
@@ -254,6 +254,10 @@ pub struct App {
     drives: Vec<crate::files::drives::Drive>,
     /// Keeps `drives` up to date off the UI thread.
     drive_watch: crate::files::drives::Watcher,
+    /// Notices shown folders that changed on disk (Settings → Refresh folders automatically).
+    dir_watch: crate::files::dirwatch::DirWatch,
+    /// Thumbnails for the icon view, made on worker threads.
+    thumbs: crate::preview::thumbs::Thumbs,
     ejecting: Vec<Ejecting>,
     jobs: Vec<RunningJob>,
     dialog: Option<Dialog>,
@@ -339,7 +343,7 @@ pub struct App {
     agents_rx: Option<Receiver<Vec<crate::system::agents::Found>>>,
     /// Live filter while typing in the search box: (pane, tab uid, filter before, the
     /// cursor's entry before).
-    pal_filter: Option<(usize, u64, String, Option<String>)>,
+    pal_filter: Option<(usize, u64, FilterState, Option<String>)>,
     /// Typing in a file window: a small search box that filters it as you type.
     type_search: Option<TypeSearch>,
     settings_page: SettingsPage,
@@ -465,6 +469,8 @@ impl App {
             next_remote: 1,
             drives: crate::files::drives::list(),
             drive_watch: crate::files::drives::Watcher::spawn(&cc.egui_ctx),
+            dir_watch: crate::files::dirwatch::DirWatch::spawn(Some(cc.egui_ctx.clone())),
+            thumbs: crate::preview::thumbs::Thumbs::spawn(cc.egui_ctx.clone()),
             ejecting: Vec::new(),
             jobs: vec![],
             dialog: None,
@@ -710,7 +716,7 @@ impl App {
     /// folders) are saved as the home folder so a split layout stays whole.
     fn save_session(&self) -> crate::config::SavedPane {
         let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        let window = |p: &Pane| -> (Option<PathBuf>, bool) {
+        let window = |p: &Pane| -> (Option<PathBuf>, bool, Option<crate::config::ViewMode>) {
             let t = p.tab();
             let path = match &t.term {
                 Some(term) => Some(term.cwd.clone()),
@@ -718,7 +724,7 @@ impl App {
                 None if t.settings || t.transfers || t.is_tool() => None,
                 None => t.loc.local_path().map(|p| p.to_path_buf()),
             };
-            (path, t.is_terminal())
+            (path, t.is_terminal(), t.view_mode)
         };
         let mut tabs = Vec::new();
         let mut active = 0;
@@ -727,21 +733,22 @@ impl App {
             if panes.is_empty() {
                 continue;
             }
-            let wins: Vec<(Option<PathBuf>, bool)> = panes.iter().map(window).collect();
-            let (path, terminal) = match &wins[focus.min(wins.len() - 1)] {
-                (Some(p), term) => (p.clone(), *term),
+            let wins: Vec<(Option<PathBuf>, bool, Option<crate::config::ViewMode>)> = panes.iter().map(window).collect();
+            let (path, terminal, view) = match &wins[focus.min(wins.len() - 1)] {
+                (Some(p), term, view) => (p.clone(), *term, *view),
                 // A single remote window is not saved (as before).
-                (None, _) if wins.len() == 1 => continue,
-                (None, _) => (home.clone(), false),
+                (None, _, _) if wins.len() == 1 => continue,
+                (None, _, _) => (home.clone(), false, None),
             };
             if i == self.strip.active {
                 active = tabs.len();
             }
             let windows = if wins.len() > 1 {
                 wins.iter()
-                    .map(|(p, term)| crate::config::SavedWindow {
+                    .map(|(p, term, view)| crate::config::SavedWindow {
                         path: p.clone().unwrap_or_else(|| home.clone()).to_string_lossy().to_string(),
                         terminal: *term && p.is_some(),
+                        view: *view,
                     })
                     .collect()
             } else {
@@ -756,6 +763,7 @@ impl App {
                 layout: (wins.len() > 1).then(|| layout.clone()),
                 windows,
                 focus,
+                view: view.filter(|_| wins.len() == 1),
             });
         }
         crate::config::SavedPane { tabs, groups: self.strip.groups.clone(), active }
@@ -770,7 +778,8 @@ impl App {
     }
 
     fn refresh_all(&mut self) {
-        // Shown windows reload now; hidden tabs only forget cached archive listings.
+        // Shown windows reload now; hidden tabs forget cached archive listings and
+        // reload when shown (`sync_tab`).
         let c = lc!(self);
         for p in &mut self.panes {
             p.tab_mut().invalidate_archive_cache();
@@ -780,6 +789,9 @@ impl App {
         }
         for p in self.strip.tabs.iter_mut().flat_map(|w| w.panes.iter_mut()) {
             p.tab_mut().invalidate_archive_cache();
+            if p.tab().is_files() {
+                p.tab_mut().stale = true;
+            }
         }
         self.quick = None;
     }
@@ -928,8 +940,11 @@ impl App {
         }
         let mut active_uid = None;
         for (i, st) in s.tabs.iter().enumerate() {
-            let windows: Vec<crate::config::SavedWindow> =
-                if st.windows.is_empty() { vec![crate::config::SavedWindow { path: st.path.clone(), terminal: st.terminal }] } else { st.windows.clone() };
+            let windows: Vec<crate::config::SavedWindow> = if st.windows.is_empty() {
+                vec![crate::config::SavedWindow { path: st.path.clone(), terminal: st.terminal, view: st.view }]
+            } else {
+                st.windows.clone()
+            };
             let layout = st.layout.clone().filter(|l| {
                 let mut leaves = l.leaves();
                 leaves.sort();
@@ -950,7 +965,12 @@ impl App {
                 match term {
                     Some(t) => panes.push(Pane::from_tab(Tab::terminal(t))),
                     None if win.terminal && !split => break,
-                    None => panes.push(self.files_pane(Location::Local(dir))),
+                    None => {
+                        let mut p = self.files_pane(Location::Local(dir));
+                        p.tab_mut().view_mode = win.view;
+                        p.tab_mut().rebuild_view(&lc!(self));
+                        panes.push(p);
+                    }
                 }
             }
             if panes.is_empty() {
@@ -1198,6 +1218,7 @@ impl App {
                 git_label: self.cfg.git_label,
                 git_style: self.cfg.git_style,
                 git_status: self.cfg.git_status,
+                thumbs: self.cfg.thumbnails.then_some(&self.thumbs),
             };
             for e in pane_ui(&mut child, &mut self.panes[side], side, &ctx) {
                 match e {
@@ -1284,6 +1305,12 @@ impl App {
                 self.active = side;
                 self.set_quick_filter(i);
             }
+            PaneEvent::Find(f) => {
+                self.active = side;
+                if let Err(e) = self.panes[side].tab_mut().set_find(f, &lc!(self)) {
+                    self.toast(e, true);
+                }
+            }
             PaneEvent::EditQuickFilters => self.open_settings(SettingsPage::QuickFilters),
             PaneEvent::Du(a) => match a {
                 DuAction::OpenFolder(p) => {
@@ -1365,6 +1392,7 @@ impl eframe::App for App {
         self.poll_update(ctx);
         self.poll_temp_copies(ctx);
         self.save_cfg_pending(ctx);
+        self.poll_dir_watch(ctx);
         let mut busy = self.connecting.is_some();
         for side in 0..self.panes.len() {
             let tab = self.panes[side].tab_mut();
@@ -1623,13 +1651,16 @@ impl eframe::App for App {
     }
 }
 
+/// A window's filter as it was (its text and what it does), to be put back.
+type FilterState = (String, Result<crate::ui::filter::Filter, String>);
+
 /// The search box opened by typing in a file window.
 struct TypeSearch {
     side: usize,
     uid: u64,
     loc: Location,
     /// The window's filter before, put back by Esc.
-    before: String,
+    before: FilterState,
     text: String,
 }
 

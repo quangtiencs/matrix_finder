@@ -89,6 +89,7 @@ mod tests {
         let sources = [
             include_str!("app.rs"),
             include_str!("ui/pane.rs"),
+            include_str!("ui/filter.rs"),
             include_str!("preview.rs"),
             include_str!("tools/backup.rs"),
             include_str!("tools/diskusage.rs"),

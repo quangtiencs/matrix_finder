@@ -183,6 +183,26 @@ impl App {
         }
     }
 
+    /// Show or hide hidden files in every window, and keep the choice.
+    pub(super) fn toggle_hidden(&mut self) {
+        self.cfg.show_hidden = !self.cfg.show_hidden;
+        self.rebuild_views();
+        self.save_cfg();
+    }
+
+    /// Show the focused file window as a list or as icons (kept in the session).
+    pub(super) fn set_view_mode(&mut self, mode: crate::config::ViewMode) {
+        let c = lc!(self);
+        let tab = self.panes[self.active].tab_mut();
+        if tab.is_files() {
+            tab.view_mode = Some(mode);
+            // ".." comes and goes with the list.
+            tab.rebuild_view(&c);
+            tab.ensure_visible = true;
+            self.save_cfg();
+        }
+    }
+
     pub(super) fn calc_sizes(&mut self) {
         let a = self.active;
         let tab = self.panes[a].tab_mut();
@@ -453,15 +473,16 @@ impl App {
             if !tab.is_files() {
                 return;
             }
-            self.pal_filter = Some((a, tab.uid, tab.filter_text.clone(), tab.cursor_entry().map(|e| e.name.clone())));
+            self.pal_filter = Some((a, tab.uid, tab.filter_state(), tab.cursor_entry().map(|e| e.name.clone())));
         }
         let Some((side, uid, prev, _)) = self.pal_filter.clone() else { return };
         let q = self.palette.query().trim().to_string();
-        let target = if looks_like_path(&q) { prev } else { q };
         let lc = lc!(self);
         if let Some(tab) = self.panes.get_mut(side).map(|p| p.tab_mut()).filter(|t| t.uid == uid) {
-            if tab.filter_text != target {
-                tab.set_filter(&target, &lc);
+            if looks_like_path(&q) {
+                tab.restore_filter(prev, &lc);
+            } else if tab.filter_text != q {
+                tab.set_filter(&q, &lc);
             }
         }
     }
@@ -472,9 +493,7 @@ impl App {
         let Some((side, uid, prev, cursor)) = self.pal_filter.take() else { return };
         let lc = lc!(self);
         if let Some(tab) = self.panes.get_mut(side).map(|p| p.tab_mut()).filter(|t| t.uid == uid) {
-            if tab.filter_text != prev {
-                tab.set_filter(&prev, &lc);
-            }
+            tab.restore_filter(prev, &lc);
             if let Some(pos) = cursor.and_then(|n| tab.view.iter().position(|&i| tab.entries[i].name == n)) {
                 tab.cursor = pos;
                 tab.ensure_visible = true;
@@ -530,11 +549,7 @@ impl App {
                     self.panes[o].tab_mut().navigate(loc, &lc!(self));
                 }
                 Act::QuickView => self.toggle_quick_view(),
-                Act::ToggleHidden => {
-                    self.cfg.show_hidden = !self.cfg.show_hidden;
-                    self.rebuild_views();
-                    self.save_cfg();
-                }
+                Act::ToggleHidden => self.toggle_hidden(),
                 Act::ToggleSidebar => {
                     self.cfg.show_sidebar = !self.cfg.show_sidebar;
                     self.save_cfg();

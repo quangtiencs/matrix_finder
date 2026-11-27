@@ -140,6 +140,7 @@ src/
 │   ├── safefs.rs      safe writes: temporary file, sync, no-replace rename into place by the conflict policy
 │   ├── tempcopy.rs    files from servers and archives opened through a local copy: edits uploaded or kept
 │   ├── drives.rs      mounted drives, a watcher that keeps them current, eject
+│   ├── dirwatch.rs    reloads shown folders that changed on disk (their modification time, checked on a thread)
 │   └── gitinfo.rs     git folders in the list: branch from .git/HEAD, status from a hardened git
 ├── tools/             tools that work on a selection
 │   ├── checksum.rs    CRC32 / MD5 / SHA-1 / SHA-256 / SHA-512 / BLAKE3, compare, save and verify lists
@@ -154,7 +155,8 @@ src/
 │   ├── completion.rs  folder suggestions for the address bar and folder fields
 │   ├── foldertree.rs  the folder tree popup, with OK / Cancel and arrow keys
 │   ├── pathfield.rs   a folder field with suggestions and the folder tree button
-│   ├── filter.rs      quick filter + SQL-like expression parser
+│   ├── filter.rs      quick filter, the Find panel's matching (loose names, patterns, text) + SQL-like expression parser
+│   ├── search.rs      background searches below a folder and reads of files, with progress and stop
 │   ├── chrome.rs      native-looking integrated title bar
 │   └── shortcuts.rs   keyboard shortcuts: actions, defaults per system, terminal safety
 ├── style/             how the app looks
@@ -184,6 +186,7 @@ src/
 │   ├── mail.rs        e-mail messages and mailboxes
 │   ├── media.rs       HEIC/AVIF decoding, video details (MP4, Matroska, AVI) and thumbnails
 │   ├── rawphoto.rs    camera RAW metadata and embedded previews
+│   ├── thumbs.rs      icon-view thumbnails of pictures and videos: worker threads, kept in memory only
 │   ├── psd.rs         Photoshop documents: the merged picture
 │   ├── audio.rs       audio tags, stream facts and cover pictures (lofty)
 │   ├── fontview.rs    font sample sheets

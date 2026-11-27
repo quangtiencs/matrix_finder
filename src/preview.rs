@@ -22,6 +22,7 @@ pub mod sheet;
 pub mod table;
 pub mod tensors;
 pub mod textdocs;
+pub mod thumbs;
 pub mod widgets;
 use crate::preview::code::{code_view, highlight, Styled};
 use crate::preview::markdown::{markdown_ui, parse_markdown, MdBlock};

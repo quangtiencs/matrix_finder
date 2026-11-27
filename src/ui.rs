@@ -8,5 +8,6 @@ pub mod layout;
 pub mod palette;
 pub mod pane;
 pub mod pathfield;
+pub mod search;
 pub mod shortcuts;
 pub mod tabs;

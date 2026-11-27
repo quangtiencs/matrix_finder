@@ -453,36 +453,31 @@ pub fn read_regular_string(path: &std::path::Path) -> std::io::Result<String> {
 
 /// Compare strings treating digit runs as numbers (file2 < file10).
 pub fn natural_cmp(a: &str, b: &str) -> Ordering {
-    let (mut ai, mut bi) = (a.chars().peekable(), b.chars().peekable());
+    // Called for every pair a sort compares (hundreds of thousands in a big folder):
+    // no allocation, and ASCII letters compared without Unicode tables.
+    let (mut i, mut j) = (0usize, 0usize);
     loop {
-        match (ai.peek().copied(), bi.peek().copied()) {
+        match (a[i..].chars().next(), b[j..].chars().next()) {
             (None, None) => return a.cmp(b),
             (None, _) => return Ordering::Less,
             (_, None) => return Ordering::Greater,
             (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
-                let mut na = String::new();
-                while let Some(c) = ai.peek().copied().filter(|c| c.is_ascii_digit()) {
-                    na.push(c);
-                    ai.next();
-                }
-                let mut nb = String::new();
-                while let Some(c) = bi.peek().copied().filter(|c| c.is_ascii_digit()) {
-                    nb.push(c);
-                    bi.next();
-                }
-                let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
+                // Runs of digits compare as numbers: by length without leading zeros, then digit by digit.
+                let ie = i + a[i..].bytes().take_while(u8::is_ascii_digit).count();
+                let je = j + b[j..].bytes().take_while(u8::is_ascii_digit).count();
+                let (ta, tb) = (a[i..ie].trim_start_matches('0'), b[j..je].trim_start_matches('0'));
                 let o = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb));
                 if o != Ordering::Equal {
                     return o;
                 }
+                (i, j) = (ie, je);
             }
             (Some(x), Some(y)) => {
-                let o = x.to_lowercase().cmp(y.to_lowercase());
+                let o = if x.is_ascii() && y.is_ascii() { x.to_ascii_lowercase().cmp(&y.to_ascii_lowercase()) } else { x.to_lowercase().cmp(y.to_lowercase()) };
                 if o != Ordering::Equal {
                     return o;
                 }
-                ai.next();
-                bi.next();
+                (i, j) = (i + x.len_utf8(), j + y.len_utf8());
             }
         }
     }
@@ -694,6 +689,108 @@ mod tests {
         assert_eq!(short_path_candidates("~/a/b/c/d"), ["~/a/b/c/d", "~/…/c/d", "~/…/d"]);
         assert_eq!(short_path_candidates("/usr/local/bin"), ["/usr/local/bin", "/…/local/bin", "/…/bin"]);
         assert_eq!(short_path_candidates("~/"), ["~/"]);
+    }
+
+    /// The comparison as it was first written (allocating), to check the fast one by.
+    fn natural_cmp_before(a: &str, b: &str) -> Ordering {
+        let (mut ai, mut bi) = (a.chars().peekable(), b.chars().peekable());
+        loop {
+            match (ai.peek().copied(), bi.peek().copied()) {
+                (None, None) => return a.cmp(b),
+                (None, _) => return Ordering::Less,
+                (_, None) => return Ordering::Greater,
+                (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                    let mut na = String::new();
+                    while let Some(c) = ai.peek().copied().filter(|c| c.is_ascii_digit()) {
+                        na.push(c);
+                        ai.next();
+                    }
+                    let mut nb = String::new();
+                    while let Some(c) = bi.peek().copied().filter(|c| c.is_ascii_digit()) {
+                        nb.push(c);
+                        bi.next();
+                    }
+                    let (ta, tb) = (na.trim_start_matches('0'), nb.trim_start_matches('0'));
+                    let o = ta.len().cmp(&tb.len()).then_with(|| ta.cmp(tb));
+                    if o != Ordering::Equal {
+                        return o;
+                    }
+                }
+                (Some(x), Some(y)) => {
+                    let o = x.to_lowercase().cmp(y.to_lowercase());
+                    if o != Ordering::Equal {
+                        return o;
+                    }
+                    ai.next();
+                    bi.next();
+                }
+            }
+        }
+    }
+
+    /// The fast comparison orders exactly as the first one did.
+    #[test]
+    fn natural_cmp_is_unchanged() {
+        let words = [
+            "",
+            "a",
+            "A",
+            "b",
+            "a1",
+            "a01",
+            "a001",
+            "a1b",
+            "a10",
+            "a2",
+            "a02b",
+            "file10",
+            "file2",
+            "File1",
+            "file-2",
+            "file_2",
+            "0",
+            "00",
+            "007",
+            "7",
+            "x9y10",
+            "x9y9",
+            "x09y10",
+            "é",
+            "E",
+            "e",
+            "Éa",
+            "ä1",
+            "a\u{0301}",
+            "ß",
+            "SS",
+            "İ",
+            "i",
+            "Ω2",
+            "ω10",
+            "日本1",
+            "日本01",
+            "12a",
+            "12",
+            "1.2.10",
+            "1.2.9",
+            "v1.10.0",
+            "v1.9.0",
+            "a b",
+            "a-b",
+            "a_b",
+            "Z",
+            "z",
+            "~",
+            "_",
+            "-1",
+            "99999999999999999999",
+            "100000000000000000000",
+        ];
+        for a in words {
+            for b in words {
+                assert_eq!(natural_cmp(a, b), natural_cmp_before(a, b), "{a:?} vs {b:?}");
+            }
+        }
     }
 
     #[test]

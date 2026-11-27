@@ -218,6 +218,14 @@ pub enum BookmarkBar {
     Horizontal,
 }
 
+/// How a file window shows its folder: rows with columns, or a grid of large icons.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum ViewMode {
+    #[default]
+    List,
+    Icons,
+}
+
 /// How a git folder's branch looks after its name.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub enum GitStyle {
@@ -430,6 +438,14 @@ pub struct Settings {
     pub window_width: f32,
     pub window_height: f32,
     pub dirs_first: bool,
+    /// How new file windows show their folder (each window can switch from the toolbar).
+    pub default_view: ViewMode,
+    /// Pictures and videos show a thumbnail in the icon view (`preview::thumbs`).
+    pub thumbnails: bool,
+    /// Reload the shown folders when files are added, removed or renamed in them
+    /// (`files::dirwatch`), checking every `auto_refresh_secs` seconds.
+    pub auto_refresh: bool,
+    pub auto_refresh_secs: u32,
     pub show_sidebar: bool,
     pub show_key_hints: bool,
     pub max_parallel: usize,
@@ -507,6 +523,8 @@ pub struct SavedTab {
     pub windows: Vec<SavedWindow>,
     pub layout: Option<crate::ui::layout::Layout>,
     pub focus: usize,
+    /// The view the single window was switched to (`None`: Settings' default).
+    pub view: Option<ViewMode>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -514,6 +532,7 @@ pub struct SavedTab {
 pub struct SavedWindow {
     pub path: String,
     pub terminal: bool,
+    pub view: Option<ViewMode>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -532,6 +551,9 @@ const QUICK_FILTER_DEFAULTS: u32 = 2;
 
 /// Formats added to a built-in quick filter, with the version that added them.
 const QUICK_FILTER_ADDED: &[(u32, &str, &str)] = &[(1, "Data", "safetensors onnx rdata rda rds"), (2, "Data", "geojson wkt wkb")];
+
+/// Allowed intervals, in seconds, of Refresh folders automatically.
+pub const AUTO_REFRESH_SECS: std::ops::RangeInclusive<u32> = 1..=60;
 
 /// Allowed terminal scroll speeds (lines per trackpad row or wheel notch).
 pub const SCROLL_SPEEDS: std::ops::RangeInclusive<f32> = 0.1..=10.0;
@@ -582,6 +604,10 @@ impl Default for Settings {
             window_width: WINDOW_DEFAULT[0],
             window_height: WINDOW_DEFAULT[1],
             dirs_first: true,
+            default_view: ViewMode::List,
+            thumbnails: true,
+            auto_refresh: true,
+            auto_refresh_secs: 2,
             show_sidebar: true,
             show_key_hints: true,
             max_parallel: 2,
@@ -1023,6 +1049,9 @@ impl Settings {
         self.default_terminal = self.default_terminal.min(self.terminal_profiles.len() - 1);
         if !(6.0..=40.0).contains(&self.term_font_size) {
             self.term_font_size = crate::style::fonts::DEFAULT_TERM_SIZE;
+        }
+        if !AUTO_REFRESH_SECS.contains(&self.auto_refresh_secs) {
+            self.auto_refresh_secs = 2;
         }
         for (v, default) in [(&mut self.term_scroll_trackpad, 1.0), (&mut self.term_scroll_wheel, 3.0)] {
             if !SCROLL_SPEEDS.contains(v) {
