@@ -5,7 +5,7 @@ use crate::files::vfs::{list_local, Entry, Location};
 use crate::i18n::t;
 use crate::style::icons;
 use crate::style::theme::Theme;
-use crate::ui::filter::Filter;
+use crate::ui::filter::{Filter, Find, FindMode};
 use crate::ui::layout::SplitDir;
 use crate::util::{format_time, human_size, natural_cmp, Res};
 use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense};
@@ -30,14 +30,45 @@ enum Loaded {
 
 /// A recursive search below the tab's folder; results replace the listing.
 pub struct Search {
+    /// What it looks for, as shown on the address bar's chip.
     pub query: String,
+    filter: Filter,
     pub running: bool,
     pub truncated: bool,
+    /// Stop was pressed: the results so far stay.
+    pub stopped: bool,
+    pub progress: Arc<crate::ui::search::Progress>,
+    pub started: std::time::Instant,
+    /// How long it took, once it ended.
+    pub took: Option<std::time::Duration>,
     rx: Receiver<Vec<Entry>>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
+    /// A re-run that was stopped: what it still sends is dropped, and the complete
+    /// results of the run before stay.
+    discard: bool,
     /// A re-run (after a reload): its results, swapped in when it ends, so the list
     /// does not empty and the cursor and marks stay.
     pending: Option<Vec<Entry>>,
+}
+
+impl Search {
+    fn start(query: String, root: PathBuf, filter: Filter, show_hidden: bool, pending: Option<Vec<Entry>>) -> Self {
+        let r = crate::ui::search::spawn_search(root, filter.clone(), show_hidden);
+        Search {
+            query,
+            filter,
+            running: true,
+            truncated: false,
+            stopped: false,
+            progress: r.progress,
+            started: r.started,
+            took: None,
+            rx: r.rx,
+            cancel: r.cancel,
+            discard: false,
+            pending,
+        }
+    }
 }
 
 impl Drop for Search {
@@ -46,13 +77,19 @@ impl Drop for Search {
     }
 }
 
-/// Upper bound on recursive search results.
-const SEARCH_LIMIT: usize = 20_000;
+use crate::ui::search::SEARCH_LIMIT;
+
+/// Listing a folder that takes this long stops it from reloading by itself.
+const SLOW_LISTING: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// A filter that reads files (`source LIKE …`), run over the listing in the background.
 /// The names that pass arrive in batches; until then they are not shown.
 pub struct ContentScan {
     pub running: bool,
+    /// Stop was pressed: only the files read so far are shown.
+    pub stopped: bool,
+    pub progress: Arc<crate::ui::search::Progress>,
+    pub started: std::time::Instant,
     hits: HashSet<String>,
     rx: Receiver<Vec<String>>,
     cancel: Arc<std::sync::atomic::AtomicBool>,
@@ -91,6 +128,35 @@ pub struct Tab {
     /// closes it is not for the list (which would unmark the items).
     pub menu_open: bool,
     select_name: Option<String>,
+    /// The Find panel's choices (kept while the window lives), and a request to open it
+    /// (Ctrl+F) with the keyboard in its text field.
+    pub find_draft: Find,
+    pub open_find: bool,
+    /// A stopped reading of files put aside while another filter is borrowed (the
+    /// search box, the palette), with the filter text it belongs to.
+    parked_scan: Option<(String, ContentScan)>,
+    /// The view this window was switched to from the toolbar; `None` follows Settings.
+    pub view_mode: Option<crate::config::ViewMode>,
+    /// Icons per line while the icon view is drawn (`None`: the list): the arrow keys
+    /// move by it.
+    pub grid_cols: Option<usize>,
+    /// The folder's modification time when it was last listed (local folders), which
+    /// `files::dirwatch` compares to notice files added, removed or renamed.
+    pub dir_stamp: Option<std::time::SystemTime>,
+    /// The stamp was taken so soon after the folder changed that a disk with coarse
+    /// times (FAT: 2 s, HFS+: 1 s) could still change without changing it.
+    stamp_settled: bool,
+    /// The folder changed on disk and reloads once nothing is in the way (a menu open).
+    pub refresh_due: bool,
+    /// How long the last listing of this local folder took, and when it last reloaded
+    /// by itself: a slow folder reloads less often (`may_refresh_quietly`).
+    list_cost: std::time::Duration,
+    quiet_at: Option<std::time::Instant>,
+    /// The entry the open right-click menu is about, by name (rows can move under it).
+    menu_target: Option<String>,
+    /// Files may have changed while this tab was hidden (a copy or compression finished):
+    /// it reloads when it is shown again.
+    pub stale: bool,
     /// "Calculate folder sizes" at work on this listing.
     pub dir_sizes: Option<crate::tools::diskusage::FolderSizes>,
     /// Recursive search results shown instead of the folder.
@@ -190,6 +256,8 @@ pub struct ListCtx<'a> {
     pub remotes: &'a HashMap<u64, (String, SharedRemote)>,
     pub show_hidden: bool,
     pub dirs_first: bool,
+    /// Settings' view for windows that were not switched.
+    pub default_view: crate::config::ViewMode,
 }
 
 impl Tab {
@@ -217,6 +285,18 @@ impl Tab {
             ensure_visible: true,
             menu_open: false,
             select_name: None,
+            stale: false,
+            dir_stamp: None,
+            stamp_settled: true,
+            refresh_due: false,
+            list_cost: std::time::Duration::ZERO,
+            quiet_at: None,
+            menu_target: None,
+            view_mode: None,
+            grid_cols: None,
+            find_draft: Find::default(),
+            open_find: false,
+            parked_scan: None,
             dir_sizes: None,
             search: None,
             scan: None,
@@ -331,6 +411,7 @@ impl Tab {
         self.filter_text.clear();
         self.filter = Ok(Filter::All);
         self.scan = None;
+        self.parked_scan = None;
         self.search = None;
         self.loading = None;
         self.dir_sizes = None;
@@ -378,7 +459,16 @@ impl Tab {
             self.path_text = self.loc.display(|id| remote_label(ctx, id));
         }
         match self.loc.clone() {
-            Location::Local(p) => match list_local(&p) {
+            Location::Local(p) => match {
+                // Before listing: a change while it lists is noticed next time.
+                self.dir_stamp = crate::files::dirwatch::modified(&p);
+                self.stamp_settled = self.dir_stamp.is_none_or(|m| !crate::files::dirwatch::is_recent(m));
+                self.refresh_due = false;
+                let started = std::time::Instant::now();
+                let list = list_local(&p);
+                self.list_cost = started.elapsed();
+                list
+            } {
                 Ok(list) => self.set_entries(list, ctx),
                 Err(e) => {
                     self.error = Some(e);
@@ -419,10 +509,15 @@ impl Tab {
 
     /// Search every folder below this one (local folders only).
     pub fn start_search(&mut self, query: &str, ctx: &ListCtx) -> Result<(), String> {
+        let filter = Filter::parse(query)?;
+        self.start_search_with(query.to_string(), filter, ctx)
+    }
+
+    /// Search every folder below this one for what passes `filter`, shown as `label`.
+    pub fn start_search_with(&mut self, label: String, filter: Filter, ctx: &ListCtx) -> Result<(), String> {
         let Some(root) = self.loc.local_path().map(|p| p.to_path_buf()) else {
             return Err(t("Searching subfolders works on local folders"));
         };
-        let filter = Filter::parse(query)?;
         self.search = None;
         self.filter_text.clear();
         self.filter = Ok(Filter::All);
@@ -433,8 +528,7 @@ impl Tab {
         self.scroll_offset = 0.0;
         self.loading = None;
         self.error = None;
-        let (rx, cancel) = spawn_search(root, filter, ctx.show_hidden);
-        self.search = Some(Search { query: query.to_string(), running: true, truncated: false, rx, cancel, pending: None });
+        self.search = Some(Search::start(label, root, filter, ctx.show_hidden, None));
         self.view.clear();
         self.entries.clear();
         if self.loc.parent().is_some() {
@@ -446,12 +540,100 @@ impl Tab {
 
     /// Run the search again (a reload, e.g. after a file operation). The results shown
     /// stay until the new ones are complete; then the cursor and the marks are kept by name.
+    /// A search that was stopped is not run again: its results stay as they are.
     fn refresh_search(&mut self, ctx: &ListCtx) {
-        let Some(query) = self.search.as_ref().map(|s| s.query.clone()) else { return };
-        let (Some(root), Ok(filter)) = (self.loc.local_path().map(|p| p.to_path_buf()), Filter::parse(&query)) else { return };
-        let (rx, cancel) = spawn_search(root, filter, ctx.show_hidden);
+        if self.search.as_ref().is_some_and(|s| s.stopped || s.discard) {
+            return;
+        }
+        let Some((query, filter)) = self.search.as_ref().map(|s| (s.query.clone(), s.filter.clone())) else { return };
+        let Some(root) = self.loc.local_path().map(|p| p.to_path_buf()) else { return };
         // The search it replaces stops when dropped.
-        self.search = Some(Search { query, running: true, truncated: false, rx, cancel, pending: Some(Vec::new()) });
+        self.search = Some(Search::start(query, root, filter, ctx.show_hidden, Some(Vec::new())));
+    }
+
+    /// Stop the search or the reading of files under way; what was found so far stays.
+    pub fn stop_search(&mut self) {
+        if let Some(s) = self.search.as_mut().filter(|s| s.running) {
+            s.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            if s.pending.take().is_some() {
+                // A re-run: the complete results of the run before stay, not its part.
+                s.discard = true;
+            } else {
+                s.stopped = true;
+            }
+        }
+        if let Some(s) = self.scan.as_mut().filter(|s| s.running) {
+            s.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            s.stopped = true;
+        }
+    }
+
+    /// Run what the Find panel asks for: a filter of this folder, or a search of every
+    /// folder below. An empty text shows the folder again.
+    pub fn set_find(&mut self, find: Find, ctx: &ListCtx) -> Result<(), String> {
+        self.find_draft = find.clone();
+        if find.text.trim().is_empty() {
+            if self.search.is_some() || matches!(self.filter, Ok(Filter::Find(_))) {
+                self.clear_filter_and_search(ctx);
+            }
+            return Ok(());
+        }
+        if find.mode == FindMode::Content && self.loc.local_path().is_none() {
+            return Err(t("Searching file contents works on local folders"));
+        }
+        if find.subfolders {
+            return self.start_search_with(find.summary(), Filter::Find(find), ctx);
+        }
+        if self.search.take().is_some() {
+            self.reload(ctx);
+        }
+        self.park_scan();
+        self.filter_text = find.summary();
+        self.filter = Ok(Filter::Find(find));
+        self.end_range();
+        self.restart_scan(ctx);
+        if !self.rebuild_view(ctx) {
+            self.cursor = 0;
+        }
+        self.ensure_visible = true;
+        Ok(())
+    }
+
+    /// The filter as it is, to be put back later with `restore_filter` (the search box
+    /// and the palette filter the window while they are open).
+    pub fn filter_state(&self) -> (String, Result<Filter, String>) {
+        (self.filter_text.clone(), self.filter.clone())
+    }
+
+    pub fn restore_filter(&mut self, state: (String, Result<Filter, String>), ctx: &ListCtx) {
+        if self.filter_text == state.0 {
+            return;
+        }
+        self.park_scan();
+        let parked = self.parked_scan.take().filter(|(text, _)| *text == state.0);
+        self.filter_text = state.0;
+        self.filter = state.1;
+        self.end_range();
+        match parked {
+            Some((_, s)) => {
+                self.scan = Some(s);
+                self.keep_or_restart_scan(ctx);
+            }
+            None => self.restart_scan(ctx),
+        }
+        if !self.rebuild_view(ctx) {
+            self.cursor = 0;
+        }
+        self.ensure_visible = true;
+    }
+
+    fn clear_filter_and_search(&mut self, ctx: &ListCtx) {
+        if self.search.take().is_some() {
+            self.reload(ctx);
+        }
+        if !self.filter_text.is_empty() {
+            self.set_filter("", ctx);
+        }
     }
 
     /// Leave search / filter mode.
@@ -488,6 +670,7 @@ impl Tab {
             let (mut got, mut done) = (false, false);
             loop {
                 match s.rx.try_recv() {
+                    Ok(_) if s.discard => {}
                     Ok(batch) => match &mut s.pending {
                         Some(p) => p.extend(batch),
                         None => {
@@ -498,6 +681,7 @@ impl Tab {
                     Err(std::sync::mpsc::TryRecvError::Empty) => break,
                     Err(_) => {
                         s.running = false;
+                        s.took = Some(s.started.elapsed());
                         got = true;
                         done = true;
                         break;
@@ -622,8 +806,83 @@ impl Tab {
         changed
     }
 
+    /// The local folder shown and its stamp, for `files::dirwatch`: not while it loads or
+    /// shows search results (a reload would search again).
+    /// Nor while a filter reads the files (`source LIKE …`): each reload would read them
+    /// all again and empty the list meanwhile.
+    pub fn watched(&self) -> Option<(PathBuf, Option<std::time::SystemTime>)> {
+        match &self.loc {
+            Location::Local(p) if self.is_files() && self.search.is_none() && self.loading.is_none() && self.scan.is_none() => {
+                // A stamp taken too soon is looked at again: one that no folder has.
+                Some((p.clone(), if self.stamp_settled { self.dir_stamp } else { Some(std::time::SystemTime::UNIX_EPOCH) }))
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether an automatic reload may happen now: not under an open right-click menu,
+    /// and for a folder slow to list, not more than a twentieth of the time (so the
+    /// window stays usable in a huge folder that keeps changing).
+    /// A folder that takes long to list (huge, or on a slow network drive) does not
+    /// reload by itself at all: that would freeze the window each time.
+    pub fn may_refresh_quietly(&self) -> bool {
+        !self.menu_open && self.list_cost < SLOW_LISTING && self.quiet_at.is_none_or(|t| t.elapsed() >= self.list_cost * 20)
+    }
+
+    /// Reload because the folder changed on disk, without getting in the way: the list
+    /// does not scroll to the cursor, and the sizes counted for folders that are still
+    /// there stay (what is inside them did not change the folder's stamp).
+    /// A Shift range being made goes on from the same anchor.
+    pub fn refresh_quietly(&mut self, ctx: &ListCtx) {
+        // A folder removed and made again under the same name has another date: its old
+        // size is not the new one's.
+        let sizes: HashMap<String, (u64, Option<std::time::SystemTime>)> =
+            self.entries.iter().filter(|e| e.is_dir && !e.is_parent && e.size_known).map(|e| (e.name.clone(), (e.size, e.modified))).collect();
+        let ensure = self.ensure_visible;
+        let (anchor, range_marks) = (self.anchor.take(), std::mem::take(&mut self.range_marks));
+        self.reload(ctx);
+        self.quiet_at = Some(std::time::Instant::now());
+        self.ensure_visible = ensure;
+        if anchor.as_deref().is_some_and(|a| self.pos_of(a).is_some()) {
+            self.anchor = anchor;
+            self.range_marks = range_marks.into_iter().filter(|m| self.marked.contains(m)).collect();
+        }
+        if !sizes.is_empty() {
+            for e in self.entries.iter_mut().filter(|e| e.is_dir && !e.is_parent && !e.size_known) {
+                if let Some(&(s, modified)) = sizes.get(&e.name) {
+                    if modified == e.modified {
+                        e.size = s;
+                        e.size_known = true;
+                    }
+                }
+            }
+            self.rebuild_view(ctx);
+        }
+    }
+
     pub fn invalidate_archive_cache(&mut self) {
         self.archive_cache = None;
+    }
+
+    /// A filter reading files that was stopped keeps what it found (for the names
+    /// still there) instead of reading every file again.
+    fn keep_or_restart_scan(&mut self, ctx: &ListCtx) {
+        match self.scan.take() {
+            Some(mut s) if s.stopped && !s.running => {
+                let names: HashSet<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
+                s.hits.retain(|n| names.contains(n.as_str()));
+                self.scan = Some(s);
+            }
+            _ => self.restart_scan(ctx),
+        }
+    }
+
+    /// The filter is about to change: a stopped reading of files is put aside, to be
+    /// taken back if that filter is put back (`restore_filter`).
+    fn park_scan(&mut self) {
+        if self.scan.as_ref().is_some_and(|s| s.stopped && !s.running) {
+            self.parked_scan = self.scan.take().map(|s| (self.filter_text.clone(), s));
+        }
     }
 
     fn set_entries(&mut self, mut list: Vec<Entry>, ctx: &ListCtx) {
@@ -636,7 +895,7 @@ impl Tab {
         let existing: HashSet<&str> = self.entries.iter().map(|e| e.name.as_str()).collect();
         self.marked.retain(|m| existing.contains(m.as_str()));
         self.end_range();
-        self.restart_scan(ctx);
+        self.keep_or_restart_scan(ctx);
         self.rebuild_view(ctx);
         if let Some(name) = self.select_name.take() {
             if let Some(pos) = self.pos_of(&name) {
@@ -648,6 +907,7 @@ impl Tab {
     }
 
     pub fn set_filter(&mut self, text: &str, ctx: &ListCtx) {
+        self.park_scan();
         self.filter_text = text.to_string();
         self.filter = Filter::parse(text);
         self.end_range();
@@ -674,29 +934,8 @@ impl Tab {
         let show_hidden = ctx.show_hidden;
         // Search results are named by their path below the folder, which joins the same way.
         let entries: Vec<Entry> = self.entries.iter().filter(|e| !e.is_parent && !e.is_dir && (show_hidden || !e.hidden)).cloned().collect();
-        let (tx, rx) = channel();
-        let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stop = cancel.clone();
-        std::thread::spawn(move || {
-            let mut batch = Vec::new();
-            let mut last = std::time::Instant::now();
-            for e in entries {
-                if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    return;
-                }
-                if filter.matches_at(&e, Some(&dir.join(&e.name)), &stop) {
-                    batch.push(e.name);
-                }
-                if !batch.is_empty() && last.elapsed().as_millis() > 120 {
-                    if tx.send(std::mem::take(&mut batch)).is_err() {
-                        return;
-                    }
-                    last = std::time::Instant::now();
-                }
-            }
-            let _ = tx.send(batch);
-        });
-        self.scan = Some(ContentScan { running: true, hits: HashSet::new(), rx, cancel });
+        let (rx, cancel, progress) = crate::ui::search::spawn_scan(dir, filter, entries);
+        self.scan = Some(ContentScan { running: true, stopped: false, progress, started: std::time::Instant::now(), hits: HashSet::new(), rx, cancel });
     }
 
     /// Filter and sort the listing again, keeping the cursor on the same entry. Returns
@@ -713,14 +952,27 @@ impl Tab {
         }
     }
 
+    /// The folder is shown as a grid of icons (this window's choice, else Settings').
+    pub fn shows_icons(&self, ctx: &ListCtx) -> bool {
+        self.view_mode.unwrap_or(ctx.default_view) == crate::config::ViewMode::Icons
+    }
+
     fn build_view(&mut self, ctx: &ListCtx) {
+        // The entries themselves are kept in the order shown, so that the view taken from
+        // them comes out sorted: sorting a big folder from the disk's order on every
+        // keystroke of a filter is what made typing slow. Sorting what is already in
+        // order is quick (the sort finds the runs).
+        let (sort, desc, dirs_first) = (self.sort, self.desc, ctx.dirs_first);
+        self.entries.sort_by(|x, y| entry_order(x, y, sort, desc, dirs_first));
         let filter = self.filter.as_ref().ok();
         let hits = self.scan.as_ref().map(|s| &s.hits);
-        let mut view: Vec<usize> = (0..self.entries.len())
+        let icons = self.shows_icons(ctx);
+        let view: Vec<usize> = (0..self.entries.len())
             .filter(|&i| {
                 let e = &self.entries[i];
+                // ".." is a row of the list; the icon view goes up with Backspace or the path.
                 if e.is_parent {
-                    return true;
+                    return !icons;
                 }
                 if !ctx.show_hidden && e.hidden {
                     return false;
@@ -734,28 +986,6 @@ impl Tab {
                 }
             })
             .collect();
-        let (sort, desc, dirs_first) = (self.sort, self.desc, ctx.dirs_first);
-        let entries = &self.entries;
-        view.sort_by(|&a, &b| {
-            let (x, y) = (&entries[a], &entries[b]);
-            if x.is_parent != y.is_parent {
-                return if x.is_parent { Ordering::Less } else { Ordering::Greater };
-            }
-            if dirs_first && x.is_dir != y.is_dir {
-                return if x.is_dir { Ordering::Less } else { Ordering::Greater };
-            }
-            let o = match sort {
-                SortKey::Name => natural_cmp(&x.name, &y.name),
-                SortKey::Ext => x.ext.cmp(&y.ext).then_with(|| natural_cmp(&x.name, &y.name)),
-                SortKey::Size => x.size.cmp(&y.size).then_with(|| natural_cmp(&x.name, &y.name)),
-                SortKey::Modified => x.modified.cmp(&y.modified).then_with(|| natural_cmp(&x.name, &y.name)),
-            };
-            if desc {
-                o.reverse()
-            } else {
-                o
-            }
-        });
         self.view = view;
         self.cursor = self.cursor.min(self.view.len().saturating_sub(1));
     }
@@ -815,8 +1045,32 @@ impl Tab {
         self.ensure_visible = true;
     }
 
+    /// Up or down `lines` lines of the icon view. Past the first line nothing happens;
+    /// down to a shorter last line goes to its last icon, as in other file managers.
+    pub fn move_grid(&mut self, lines: isize, extend: bool) {
+        let (Some(cols), n) = (self.grid_cols, self.view.len() as isize) else { return self.move_cursor(lines, extend) };
+        let (cols, cur) = (cols as isize, self.cursor as isize);
+        let target = cur + lines * cols;
+        let to = if target < 0 {
+            return;
+        } else if target >= n {
+            // Already on the last line: stay.
+            if cur / cols == (n - 1) / cols {
+                return;
+            }
+            n - 1
+        } else {
+            target
+        };
+        self.move_cursor(to - cur, extend);
+    }
+
+    /// The cursor moves this far for Page Up / Page Down: a screenful less one line.
     pub fn page_rows(&self) -> isize {
-        ((self.view_height / ROW_H) as isize - 1).max(1)
+        match self.grid_cols {
+            Some(cols) => ((self.view_height / CELL_H) as isize - 1).max(1) * cols as isize,
+            None => ((self.view_height / ROW_H) as isize - 1).max(1),
+        }
     }
 
     /// The marks made so far stay as they are; the next Shift range starts afresh.
@@ -944,54 +1198,6 @@ impl Tab {
 
 /// Walk the folders below `root` in the background; the entries that pass `filter`
 /// arrive in batches, named by their path below `root`.
-fn spawn_search(root: PathBuf, filter: Filter, show_hidden: bool) -> (Receiver<Vec<Entry>>, Arc<std::sync::atomic::AtomicBool>) {
-    let (tx, rx) = channel();
-    let cancel = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let stop = cancel.clone();
-    std::thread::spawn(move || {
-        let mut batch = Vec::new();
-        let mut last = std::time::Instant::now();
-        let mut found = 0usize;
-        let walker = walkdir::WalkDir::new(&root)
-            .min_depth(1)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|d| show_hidden || !d.file_name().to_string_lossy().starts_with('.'));
-        for d in walker.flatten() {
-            if stop.load(std::sync::atomic::Ordering::Relaxed) {
-                return;
-            }
-            let meta = d.metadata().ok();
-            let is_dir = d.file_type().is_dir();
-            let mut e = Entry::new(
-                d.file_name().to_string_lossy().to_string(),
-                is_dir,
-                meta.as_ref().filter(|_| !is_dir).map(|m| m.len()).unwrap_or(0),
-                meta.and_then(|m| m.modified().ok()),
-            );
-            e.is_link = d.path_is_symlink();
-            if !filter.matches_at(&e, Some(d.path()), &stop) {
-                continue;
-            }
-            // Results are named by their path below the search folder.
-            e.name = d.path().strip_prefix(&root).unwrap_or(d.path()).to_string_lossy().to_string();
-            batch.push(e);
-            found += 1;
-            if batch.len() >= 500 || last.elapsed().as_millis() > 120 {
-                if tx.send(std::mem::take(&mut batch)).is_err() {
-                    return;
-                }
-                last = std::time::Instant::now();
-            }
-            if found >= SEARCH_LIMIT {
-                break;
-            }
-        }
-        let _ = tx.send(batch);
-    });
-    (rx, cancel)
-}
-
 impl Location {
     /// Raw last component (no archive decoration) for cursor restoration.
     pub fn short_name_raw(&self) -> String {
@@ -1039,6 +1245,9 @@ impl Pane {
 // ---------------------------------------------------------------- rendering
 
 pub const ROW_H: f32 = 28.0;
+/// A cell of the icon view: its least width and its height.
+pub const CELL_W: f32 = 104.0;
+pub const CELL_H: f32 = 100.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cmd {
@@ -1132,6 +1341,8 @@ pub enum PaneEvent {
     Du(crate::tools::diskusage::DuAction),
     /// Quick filter: category `i` of the settings, or off.
     QuickFilter(Option<usize>),
+    /// The Find panel's search (an empty text: off).
+    Find(crate::ui::filter::Find),
     /// Open Settings → Quick filters.
     EditQuickFilters,
     /// A Settings window: the area its pages go in (the app draws them).
@@ -1180,6 +1391,8 @@ pub struct PaneUiCtx<'a> {
     pub git_label: bool,
     pub git_style: crate::config::GitStyle,
     pub git_status: bool,
+    /// Thumbnails of pictures and videos in the icon view (`None`: turned off).
+    pub thumbs: Option<&'a crate::preview::thumbs::Thumbs>,
 }
 
 pub const SIDE_PAD: f32 = 10.0;
@@ -1209,6 +1422,28 @@ fn branch_color(state: crate::files::gitinfo::State, colored: bool, filled: bool
 /// A git folder's branch after its name ending at `name_right`: `(git) [branch]` as text,
 /// or `git · branch` on a filled label. The branch is cut with "…" to fit the name
 /// column; nothing when there is no room for even a little of it. Its rect.
+/// The order of a listing: ".." first, folders before files if asked, then by the
+/// sort key (ties by name).
+fn entry_order(x: &Entry, y: &Entry, sort: SortKey, desc: bool, dirs_first: bool) -> Ordering {
+    if x.is_parent != y.is_parent {
+        return if x.is_parent { Ordering::Less } else { Ordering::Greater };
+    }
+    if dirs_first && x.is_dir != y.is_dir {
+        return if x.is_dir { Ordering::Less } else { Ordering::Greater };
+    }
+    let o = match sort {
+        SortKey::Name => natural_cmp(&x.name, &y.name),
+        SortKey::Ext => x.ext.cmp(&y.ext).then_with(|| natural_cmp(&x.name, &y.name)),
+        SortKey::Size => x.size.cmp(&y.size).then_with(|| natural_cmp(&x.name, &y.name)),
+        SortKey::Modified => x.modified.cmp(&y.modified).then_with(|| natural_cmp(&x.name, &y.name)),
+    };
+    if desc {
+        o.reverse()
+    } else {
+        o
+    }
+}
+
 fn branch_label(p: &egui::Painter, branch: &str, name_rect: Rect, name_right: f32, label: bool, filled: bool, color: Color32) -> Option<Rect> {
     let font = FontId::proportional(if filled { 12.0 } else { 13.0 });
     let pad = if filled { vec2(5.0, 1.5) } else { vec2(0.0, 0.0) };
@@ -1541,75 +1776,203 @@ fn folder_tree_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut 
     }
 }
 
-/// The quick filter button and its menu of file categories: each one is ticked or
-/// unticked by a click, and the menu stays open so that several can be chosen.
-fn quick_filter_button(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
+/// The Find and filter button (a funnel) and its panel. On top, Find: by name (it
+/// contains the text, or fits a pattern) or by text inside files, in this folder or in
+/// every folder below; cheap ones apply as you type, the others with Enter or Find.
+/// Below, the quick filter's file categories: each one is ticked or unticked by a
+/// click, and the panel stays open so that several can be chosen.
+fn quick_filter_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
+    const FIND_W: f32 = 340.0;
+    const KINDS_W: f32 = 240.0;
     let th = c.theme;
-    let on = tab.quick.is_some();
+    let finding = matches!(tab.filter, Ok(Filter::Find(_))) || tab.search.as_ref().is_some_and(|s| matches!(s.filter, Filter::Find(_)));
+    let on = tab.quick.is_some() || finding;
     let accent = th.accent;
     let r = icons::icon_button(ui, 26.0, true, th, |p, r, col| icons::funnel(p, r, if on { accent } else { col }, on));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Quick filter")));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Find and filter")));
     let tip = match &tab.quick {
         Some(q) => format!("{}: {}", t("Quick filter"), q.label()),
-        None => t("Quick filter: show only some kinds of files"),
+        None => format!("{} ({})", t("Find and filter"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::Filter)),
     };
     let r = r.on_hover_text(tip);
     let id = egui::Id::new(("quick-filter", tab.uid));
-    if r.clicked() {
+    let focus = id.with("focus");
+    if std::mem::take(&mut tab.open_find) {
+        ui.memory_mut(|m| m.open_popup(id));
+        ui.data_mut(|d| d.insert_temp(focus, true));
+    } else if r.clicked() {
         ui.memory_mut(|m| m.toggle_popup(id));
+        ui.data_mut(|d| d.insert_temp(focus, true));
     }
     egui::popup::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
-        ui.set_min_width(240.0);
         menu_style(ui);
-        ui.label(egui::RichText::new(t("Show only")).size(11.5).color(th.weak));
-        // Files of the listing by extension, to count each category.
-        let mut by_ext: HashMap<&str, usize> = HashMap::new();
-        for e in tab.entries.iter().filter(|e| !e.is_dir && (c.list.show_hidden || !e.hidden)) {
-            *by_ext.entry(e.ext.as_str()).or_default() += 1;
-        }
-        for (i, q) in c.quick_filters.iter().enumerate() {
-            let exts = q.ext_list();
-            let count: usize = exts.iter().map(|x| by_ext.get(x.as_str()).copied().unwrap_or(0)).sum();
-            let (row, resp) = ui.allocate_exact_size(vec2(240.0, 28.0), Sense::click());
-            let sel = tab.quick.as_ref().is_some_and(|a| a.has(&q.name));
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, sel, t(&q.name)));
-            menu_row_fill(ui, row, th, sel, resp.hovered());
-            // The tick box.
-            let bx = Rect::from_center_size(pos2(row.left() + 13.0, row.center().y), vec2(15.0, 15.0));
-            if sel {
-                ui.painter().rect_filled(bx, 3.5, th.accent);
-                let s = egui::Stroke::new(1.8_f32, th.on_accent());
-                ui.painter().line_segment([pos2(bx.left() + 3.5, bx.center().y + 0.2), pos2(bx.left() + 6.3, bx.bottom() - 4.0)], s);
-                ui.painter().line_segment([pos2(bx.left() + 6.3, bx.bottom() - 4.0), pos2(bx.right() - 3.2, bx.top() + 4.0)], s);
-            } else {
-                ui.painter().rect_stroke(bx, 3.5, egui::Stroke::new(1.2_f32, th.weak), egui::StrokeKind::Inside);
-            }
-            quick_filter_icon(ui.painter(), Rect::from_center_size(pos2(row.left() + 36.0, row.center().y), vec2(16.0, 16.0)), &exts, th);
-            ui.painter().text(pos2(row.left() + 52.0, row.center().y), Align2::LEFT_CENTER, t(&q.name), FontId::proportional(13.5), th.text);
-            // How many files here are of this kind (none: no number).
-            if count > 0 {
-                ui.painter().text(pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, count.to_string(), FontId::proportional(11.5), th.weak);
-            }
-            let shown: Vec<String> = exts.iter().take(14).map(|e| format!(".{e}")).collect();
-            let more = if exts.len() > 14 { " …" } else { "" };
-            let tip = format!("{}{more}\n{count} {}", shown.join(" "), t("files here"));
-            if resp.on_hover_text(tip).clicked() {
-                ev.push(PaneEvent::QuickFilter(Some(i)));
-            }
-        }
-        if c.quick_filters.is_empty() {
-            ui.label(egui::RichText::new(t("No quick filters yet")).color(th.weak));
-        }
-        ui.separator();
-        if on && ui.button(t("Show all files")).clicked() {
-            ev.push(PaneEvent::QuickFilter(None));
-            ui.memory_mut(|m| m.close_popup());
-        }
-        if ui.button(t("Edit quick filters…")).clicked() {
-            ev.push(PaneEvent::EditQuickFilters);
-            ui.memory_mut(|m| m.close_popup());
+        // Side by side when the window has the room: Find, then the kinds of files.
+        if ui.ctx().screen_rect().width() >= FIND_W + KINDS_W + 80.0 {
+            ui.horizontal_top(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(FIND_W);
+                    find_column(ui, tab, c, ev, focus, finding, FIND_W);
+                });
+                ui.add_space(6.0);
+                ui.add(egui::Separator::default().vertical().spacing(10.0));
+                ui.vertical(|ui| {
+                    ui.set_width(KINDS_W);
+                    kinds_column(ui, tab, c, ev, KINDS_W);
+                });
+            });
+        } else {
+            ui.set_width(FIND_W);
+            find_column(ui, tab, c, ev, focus, finding, FIND_W);
+            ui.separator();
+            kinds_column(ui, tab, c, ev, FIND_W);
         }
     });
+}
+
+/// The Find column of the panel: what to look for, how, and where.
+fn find_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>, focus: egui::Id, finding: bool, w: f32) {
+    let th = c.theme;
+    let local = tab.loc.local_path().is_some();
+    let mut d = tab.find_draft.clone();
+    let weak = |s: String| egui::RichText::new(s).size(11.5).color(th.weak);
+    ui.label(weak(t("Find")));
+    // What to look for.
+    let hint = match d.mode {
+        FindMode::Contains => t("Part of a name, e.g. report"),
+        FindMode::Like => t("A pattern, e.g. IMG_*.jpg"),
+        FindMode::Content => t("Text inside files, e.g. TODO"),
+    };
+    let field = ui.add(egui::TextEdit::singleline(&mut d.text).hint_text(hint).desired_width(w - 8.0));
+    if ui.data_mut(|m| m.remove_temp::<bool>(focus)).unwrap_or(false) {
+        field.request_focus();
+    }
+    let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut d.mode, FindMode::Contains, t("Name contains"));
+        ui.selectable_value(&mut d.mode, FindMode::Like, t("Name like"));
+        ui.add_enabled_ui(local, |ui| {
+            ui.selectable_value(&mut d.mode, FindMode::Content, t("Text in files")).on_disabled_hover_text(t("Works on folders of this computer"));
+        });
+    });
+    let explain = match d.mode {
+        FindMode::Contains => t("Names with the text anywhere in them."),
+        FindMode::Like => t("The whole name fits the pattern: * or % stands for any text, ? for one character."),
+        FindMode::Content => t("Lines inside files, like grep. Binary files are skipped; reading takes longer."),
+    };
+    ui.label(weak(explain));
+    ui.add_space(2.0);
+    ui.horizontal(|ui| {
+        ui.label(t("Show"));
+        ui.checkbox(&mut d.files, t("Files"));
+        ui.add_enabled_ui(d.mode != FindMode::Content, |ui| {
+            ui.checkbox(&mut d.folders, t("Folders")).on_disabled_hover_text(t("Text is looked for in files only"));
+        });
+    });
+    ui.checkbox(&mut d.loose, t("Ignore case, - _ and spaces")).on_hover_text(t("my-file also finds My_File and my file"));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut d.subfolders, false, t("This folder"));
+        ui.add_enabled_ui(local, |ui| {
+            ui.radio_value(&mut d.subfolders, true, t("Subfolders too")).on_disabled_hover_text(t("Works on folders of this computer"));
+        });
+    });
+    if !local {
+        d.subfolders = false;
+        if d.mode == FindMode::Content {
+            d.mode = FindMode::Contains;
+        }
+    }
+    // Heavy ones (reading files, every folder below) wait for Enter or Find.
+    let heavy = d.subfolders || d.mode == FindMode::Content;
+    ui.add_space(4.0);
+    let mut find = enter;
+    let mut clear = false;
+    ui.horizontal(|ui| {
+        if heavy {
+            ui.label(weak(t("Press Enter or Find to start.")));
+        } else {
+            ui.label(weak(t("Applies as you type.")));
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            // Real buttons, though the panel's other items are frameless menu rows.
+            let primary = egui::Button::new(egui::RichText::new(t("Find")).color(th.on_accent())).fill(th.accent).frame(true).min_size(vec2(64.0, 24.0));
+            find |= ui.add_enabled(!d.text.trim().is_empty(), primary).on_hover_text("Enter").clicked();
+            let plain = egui::Button::new(t("Clear")).stroke(egui::Stroke::new(1.0_f32, th.border)).frame(true).min_size(vec2(56.0, 24.0));
+            clear = ui.add_enabled(finding || !d.text.is_empty(), plain).clicked();
+        });
+    });
+    if clear {
+        d.text.clear();
+        find = true;
+    }
+    let changed = d != tab.find_draft;
+    tab.find_draft = d.clone();
+    // Switched to one that waits for Find: the filter applied while typing is for
+    // other choices, so the folder shows whole until then.
+    if changed && heavy && matches!(&tab.filter, Ok(Filter::Find(f)) if !f.subfolders && f.mode != FindMode::Content) {
+        tab.set_filter("", &c.list);
+    }
+    if find || (changed && !heavy) {
+        ev.push(PaneEvent::Find(d));
+        // A search shows its progress in the window: out of the way.
+        if find && heavy && !clear {
+            ui.memory_mut(|m| m.close_popup());
+        }
+    }
+}
+
+/// The quick filter column: kinds of files to show, ticked or unticked by a click (the
+/// panel stays open, so that several can be chosen).
+fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>, w: f32) {
+    let th = c.theme;
+    ui.label(egui::RichText::new(t("Show only")).size(11.5).color(th.weak));
+    // Files of the listing by extension, to count each category.
+    let mut by_ext: HashMap<&str, usize> = HashMap::new();
+    for e in tab.entries.iter().filter(|e| !e.is_dir && (c.list.show_hidden || !e.hidden)) {
+        *by_ext.entry(e.ext.as_str()).or_default() += 1;
+    }
+    for (i, q) in c.quick_filters.iter().enumerate() {
+        let exts = q.ext_list();
+        let count: usize = exts.iter().map(|x| by_ext.get(x.as_str()).copied().unwrap_or(0)).sum();
+        let (row, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+        let sel = tab.quick.as_ref().is_some_and(|a| a.has(&q.name));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, sel, t(&q.name)));
+        menu_row_fill(ui, row, th, sel, resp.hovered());
+        // The tick box.
+        let bx = Rect::from_center_size(pos2(row.left() + 13.0, row.center().y), vec2(15.0, 15.0));
+        if sel {
+            ui.painter().rect_filled(bx, 3.5, th.accent);
+            let s = egui::Stroke::new(1.8_f32, th.on_accent());
+            ui.painter().line_segment([pos2(bx.left() + 3.5, bx.center().y + 0.2), pos2(bx.left() + 6.3, bx.bottom() - 4.0)], s);
+            ui.painter().line_segment([pos2(bx.left() + 6.3, bx.bottom() - 4.0), pos2(bx.right() - 3.2, bx.top() + 4.0)], s);
+        } else {
+            ui.painter().rect_stroke(bx, 3.5, egui::Stroke::new(1.2_f32, th.weak), egui::StrokeKind::Inside);
+        }
+        quick_filter_icon(ui.painter(), Rect::from_center_size(pos2(row.left() + 36.0, row.center().y), vec2(16.0, 16.0)), &exts, th);
+        ui.painter().text(pos2(row.left() + 52.0, row.center().y), Align2::LEFT_CENTER, t(&q.name), FontId::proportional(13.5), th.text);
+        // How many files here are of this kind (none: no number).
+        if count > 0 {
+            ui.painter().text(pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, count.to_string(), FontId::proportional(11.5), th.weak);
+        }
+        let shown: Vec<String> = exts.iter().take(14).map(|e| format!(".{e}")).collect();
+        let more = if exts.len() > 14 { " …" } else { "" };
+        let tip = format!("{}{more}\n{count} {}", shown.join(" "), t("files here"));
+        if resp.on_hover_text(tip).clicked() {
+            ev.push(PaneEvent::QuickFilter(Some(i)));
+        }
+    }
+    if c.quick_filters.is_empty() {
+        ui.label(egui::RichText::new(t("No quick filters yet")).color(th.weak));
+    }
+    ui.separator();
+    if tab.quick.is_some() && ui.button(t("Show all files")).clicked() {
+        ev.push(PaneEvent::QuickFilter(None));
+        ui.memory_mut(|m| m.close_popup());
+    }
+    if ui.button(t("Edit quick filters…")).clicked() {
+        ev.push(PaneEvent::EditQuickFilters);
+        ui.memory_mut(|m| m.close_popup());
+    }
 }
 
 /// Background of a row in a custom menu: hover shows on every row, the chosen
@@ -2290,7 +2653,8 @@ fn sep(ui: &mut egui::Ui, th: &Theme, w: f32) {
 
 fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
     let th = c.theme;
-    // Column header
+    let grid = tab.shows_icons(&c.list);
+    // Column header (the icon view has no columns: just the sort keys, side by side)
     let avail_w = ui.available_width();
     let (w_ext, w_size, w_date) = (64.0, 86.0, 132.0);
     let show_date = avail_w > 460.0;
@@ -2299,17 +2663,26 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     let name_x = icon_x + 26.0;
     let w_name = avail_w - name_x - w_size - SIDE_PAD - if show_ext { w_ext } else { 0.0 } - if show_date { w_date } else { 0.0 };
     let (hrect, _) = ui.allocate_exact_size(vec2(avail_w, 22.0), Sense::hover());
-    let mut cols: Vec<(SortKey, String, f32, f32, Align2)> = vec![(SortKey::Name, t("Name"), name_x, w_name, Align2::LEFT_CENTER)];
-    let mut x = name_x + w_name;
-    if show_ext {
-        cols.push((SortKey::Ext, t("Ext"), x, w_ext, Align2::LEFT_CENTER));
-        x += w_ext;
-    }
-    cols.push((SortKey::Size, t("Size"), x, w_size, Align2::RIGHT_CENTER));
-    x += w_size;
-    if show_date {
-        cols.push((SortKey::Modified, t("Modified"), x, w_date, Align2::RIGHT_CENTER));
-    }
+    let cols: Vec<(SortKey, String, f32, f32, Align2)> = if grid {
+        [(SortKey::Name, t("Name")), (SortKey::Ext, t("Ext")), (SortKey::Size, t("Size")), (SortKey::Modified, t("Modified"))]
+            .into_iter()
+            .enumerate()
+            .map(|(i, (key, label))| (key, label, icon_x + i as f32 * 92.0, 88.0, Align2::LEFT_CENTER))
+            .collect()
+    } else {
+        let mut cols = vec![(SortKey::Name, t("Name"), name_x, w_name, Align2::LEFT_CENTER)];
+        let mut x = name_x + w_name;
+        if show_ext {
+            cols.push((SortKey::Ext, t("Ext"), x, w_ext, Align2::LEFT_CENTER));
+            x += w_ext;
+        }
+        cols.push((SortKey::Size, t("Size"), x, w_size, Align2::RIGHT_CENTER));
+        x += w_size;
+        if show_date {
+            cols.push((SortKey::Modified, t("Modified"), x, w_date, Align2::RIGHT_CENTER));
+        }
+        cols
+    };
     for (key, label, x, w, align) in &cols {
         let r = Rect::from_min_size(pos2(hrect.left() + x, hrect.top()), vec2(*w, hrect.height()));
         let resp = ui.interact(r, egui::Id::new(("hdr", side, *key as u8)), Sense::click());
@@ -2343,16 +2716,20 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     }
     ui.painter().hline((hrect.left() + SIDE_PAD)..=(hrect.right() - SIDE_PAD), hrect.bottom(), egui::Stroke::new(1.0_f32, th.border));
 
-    // Rows
+    // Rows: one entry per line, or as many cells per line as fit.
+    let per_line = if grid { ((avail_w - 2.0 * SIDE_PAD) / CELL_W).floor().max(1.0) as usize } else { 1 };
+    let cell_w = if grid { (avail_w - 2.0 * SIDE_PAD) / per_line as f32 } else { avail_w };
+    let line_h = if grid { CELL_H } else { ROW_H };
+    tab.grid_cols = grid.then_some(per_line);
     let footer_h = 28.0;
-    let list_h = (ui.available_height() - footer_h).max(ROW_H * 2.0);
+    let list_h = (ui.available_height() - footer_h).max(line_h * 2.0);
     tab.view_height = list_h;
     if tab.ensure_visible {
-        let y = tab.cursor as f32 * ROW_H;
+        let y = (tab.cursor / per_line) as f32 * line_h;
         if y < tab.scroll_offset {
             tab.scroll_offset = y;
-        } else if y + ROW_H > tab.scroll_offset + list_h {
-            tab.scroll_offset = y + ROW_H - list_h;
+        } else if y + line_h > tab.scroll_offset + list_h {
+            tab.scroll_offset = y + line_h - list_h;
         }
     }
     let mut sa = egui::ScrollArea::vertical().id_salt(("list", tab.uid, format!("{:?}", tab.loc))).auto_shrink([false, false]).max_height(list_h);
@@ -2372,38 +2749,109 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     let mut context: Option<(usize, Cmd)> = None;
     let mut bg_context: Option<Cmd> = None;
     let mut menu_open = false;
+    let mut bg_menu_open = false;
+    let mut menu_for: Option<String> = None;
     let n = tab.view.len();
-    let only_parent = n <= 1 && tab.entries.iter().filter(|e| !e.is_parent).count() == tab.entries.len().saturating_sub(1);
+    let lines = n.div_ceil(per_line);
+    // Nothing to show but ".." (which the icon view leaves out).
+    let only_parent = !tab.view.iter().any(|&i| !tab.entries[i].is_parent);
     let out = ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
-        sa.show_rows(ui, ROW_H, n, |ui, range| {
-            for row in range {
-                let e = &tab.entries[tab.view[row]];
-                let (rect, resp) = ui.allocate_exact_size(vec2(avail_w, ROW_H), Sense::click_and_drag());
-                if resp.drag_started() && !e.is_parent {
-                    let items = if tab.marked.contains(&e.name) { tab.selection() } else { vec![e.clone()] };
-                    drag_started = Some((row, items));
+        let tab_ro: &Tab = tab;
+        // One entry, in a row of the list or a cell of the icon view: its look, and what
+        // the mouse does to it (the same in both views).
+        let mut item = |ui: &mut egui::Ui, row: usize, rect: Rect, resp: egui::Response| {
+            let tab = tab_ro;
+            let e = &tab.entries[tab.view[row]];
+            if resp.drag_started() && !e.is_parent {
+                let items = if tab.marked.contains(&e.name) { tab.selection() } else { vec![e.clone()] };
+                drag_started = Some((row, items));
+            }
+            let p = ui.painter();
+            let is_cur = row == tab.cursor;
+            let is_marked = tab.marked.contains(&e.name);
+            let (pill, radius) = if grid { (rect.shrink2(vec2(4.0, 3.0)), 8.0) } else { (rect.shrink2(vec2(6.0, 1.0)), 6.0) };
+            if is_marked {
+                p.rect_filled(pill, radius, th.marked.gamma_multiply(if th.dark { 0.10 } else { 0.08 }));
+            }
+            if is_cur {
+                if c.active {
+                    p.rect_filled(pill, radius, th.selection);
+                } else {
+                    p.rect_stroke(pill, radius, egui::Stroke::new(1.0_f32, th.selection.lerp_to_gamma(th.text, 0.15)), egui::StrokeKind::Inside);
                 }
-                let p = ui.painter();
-                let is_cur = row == tab.cursor;
-                let is_marked = tab.marked.contains(&e.name);
-                let pill = rect.shrink2(vec2(6.0, 1.0));
-                if is_marked {
-                    p.rect_filled(pill, 6.0, th.marked.gamma_multiply(if th.dark { 0.10 } else { 0.08 }));
-                }
-                if is_cur {
-                    if c.active {
-                        p.rect_filled(pill, 6.0, th.selection);
-                    } else {
-                        p.rect_stroke(pill, 6.0, egui::Stroke::new(1.0_f32, th.selection.lerp_to_gamma(th.text, 0.15)), egui::StrokeKind::Inside);
+            } else if resp.hovered() {
+                p.rect_filled(pill, radius, th.hover());
+            }
+            if is_marked {
+                let bar = if grid {
+                    Rect::from_min_size(pos2(pill.left() + 3.0, pill.top() + 8.0), vec2(3.0, 14.0))
+                } else {
+                    Rect::from_min_size(pos2(pill.left() + 2.0, pill.center().y - 6.0), vec2(3.0, 12.0))
+                };
+                p.rect_filled(bar, 1.5, th.marked);
+            }
+            let is_arch = !e.is_dir && archive::is_archive(std::path::Path::new(&e.name));
+            let is_sum = !e.is_dir && crate::tools::checksum::is_checksum_file(&e.name);
+            let name_color = if is_marked {
+                th.marked
+            } else if e.is_parent || e.hidden {
+                th.weak
+            } else if is_cur && c.active {
+                th.strong()
+            } else {
+                th.text
+            };
+            // On the lit cursor row every colour is made to read against it.
+            let on_row = |col: egui::Color32| if is_cur && c.active { th.on_cursor(col) } else { col };
+            let name_color = on_row(name_color);
+            let size_txt = if e.is_parent {
+                String::new()
+            } else if e.is_dir && !e.size_known {
+                "—".into()
+            } else {
+                human_size(e.size)
+            };
+            if grid {
+                // A large icon (or the picture's thumbnail) with the whole name under it,
+                // on two lines at most.
+                let icon_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 33.0), vec2(46.0, 46.0));
+                let thumb = match (&tab.loc, c.thumbs) {
+                    (Location::Local(dir), Some(thumbs)) if !e.is_dir && crate::preview::thumbs::has_thumbnail(&e.name) => {
+                        thumbs.get(&dir.join(&e.name), e.modified, e.size)
                     }
-                } else if resp.hovered() {
-                    p.rect_filled(pill, 6.0, th.hover());
+                    _ => None,
+                };
+                match thumb {
+                    Some(tex) => {
+                        let area = Rect::from_center_size(icon_rect.center() - vec2(0.0, 1.0), vec2(cell_w - 22.0, 52.0));
+                        let [w, h] = tex.size().map(|v| v.max(1) as f32);
+                        let scale = (area.width() / w).min(area.height() / h);
+                        let r = Rect::from_center_size(area.center(), vec2(w * scale, h * scale));
+                        p.image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                        p.rect_stroke(r, 0.0, egui::Stroke::new(1.0_f32, th.border), egui::StrokeKind::Outside);
+                        if crate::preview::classify(&e.name) == crate::preview::Kind::Video {
+                            // A video: a play mark in the corner.
+                            let c0 = pos2(r.right() - 9.0, r.bottom() - 9.0);
+                            p.circle_filled(c0, 7.0, Color32::from_black_alpha(150));
+                            let tri = vec![c0 + vec2(-2.0, -3.5), c0 + vec2(-2.0, 3.5), c0 + vec2(3.5, 0.0)];
+                            p.add(egui::Shape::convex_polygon(tri, Color32::WHITE, egui::Stroke::NONE));
+                        }
+                    }
+                    None => icons::entry_icon(p, icon_rect, e, th),
                 }
-                if is_marked {
-                    let bar = Rect::from_min_size(pos2(pill.left() + 2.0, pill.center().y - 6.0), vec2(3.0, 12.0));
-                    p.rect_filled(bar, 1.5, th.marked);
+                let mut job = egui::text::LayoutJob::single_section(
+                    e.name.clone(),
+                    egui::TextFormat { font_id: FontId::proportional(12.5), color: name_color, ..Default::default() },
+                );
+                job.wrap = egui::text::TextWrapping { max_width: cell_w - 14.0, max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
+                job.halign = egui::Align::Center;
+                let galley = ui.fonts(|f| f.layout_job(job));
+                p.galley(pos2(rect.center().x, rect.top() + 62.0), galley, name_color);
+                if !e.is_parent && ui.rect_contains_pointer(rect) && payload.is_none() {
+                    resp.clone().on_hover_text(format!("{}\n{} · {}", e.name, size_txt, format_time(e.modified)));
                 }
+            } else {
                 let icon_rect = Rect::from_center_size(pos2(rect.left() + icon_x + 8.0, rect.center().y), vec2(17.0, 17.0));
                 icons::entry_icon(p, icon_rect, e, th);
                 // A git folder: its branch after the name.
@@ -2413,22 +2861,6 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     }
                     _ => None,
                 };
-                let is_arch = !e.is_dir && archive::is_archive(std::path::Path::new(&e.name));
-                let is_sum = !e.is_dir && crate::tools::checksum::is_checksum_file(&e.name);
-                let name_color = if is_marked {
-                    th.marked
-                } else if e.is_parent {
-                    th.weak
-                } else if e.hidden {
-                    th.weak
-                } else if is_cur && c.active {
-                    th.strong()
-                } else {
-                    th.text
-                };
-                // On the lit cursor row every colour is made to read against it.
-                let on_row = |col: egui::Color32| if is_cur && c.active { th.on_cursor(col) } else { col };
-                let name_color = on_row(name_color);
                 let base_name = match e.name.rfind('.') {
                     Some(i) if show_ext && !e.is_dir && !e.ext.is_empty() && i > 0 => &e.name[..i],
                     _ => e.name.as_str(),
@@ -2458,77 +2890,109 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     p.with_clip_rect(r).text(r.left_center(), Align2::LEFT_CENTER, &e.ext, meta.clone(), meta_color);
                     x += w_ext;
                 }
-                let size_txt = if e.is_parent {
-                    String::new()
-                } else if e.is_dir && !e.size_known {
-                    "—".into()
-                } else {
-                    human_size(e.size)
-                };
                 p.text(pos2(x + w_size, rect.center().y), Align2::RIGHT_CENTER, size_txt, meta.clone(), meta_color);
                 x += w_size;
                 if show_date {
                     p.text(pos2(x + w_date, rect.center().y), Align2::RIGHT_CENTER, format_time(e.modified), meta, on_row(th.weak));
                 }
-                if let Some(pl) = &payload {
-                    let dragged_here = pl.side == side && pl.loc == tab.loc && pl.items.iter().any(|i| i.name == e.name);
-                    if dragged_here {
-                        p.rect_filled(rect, 0.0, th.bg.gamma_multiply(0.55));
-                    } else if e.is_dir && ui.rect_contains_pointer(rect) {
-                        let target = if e.is_parent { tab.loc.parent() } else { Some(tab.loc.child(&e.name)) };
-                        if let Some(target) = target.filter(|t| drop_allowed(pl, t)) {
-                            p.rect_filled(pill, 6.0, th.accent.gamma_multiply(0.16));
-                            p.rect_stroke(pill, 6.0, egui::Stroke::new(1.5_f32, th.accent), egui::StrokeKind::Inside);
-                            row_target = Some((target, e.name.clone()));
-                        }
-                    }
-                }
-                if resp.clicked() {
-                    clicked = Some((row, ui.input(|i| i.modifiers)));
-                }
-                if resp.double_clicked() {
-                    double = Some(row);
-                }
-                // A right-click outside the marked rows is about that row alone (as in
-                // Finder): the marks go, so the menu and its command name the same items.
-                if resp.secondary_clicked() && !tab.marked.contains(&e.name) {
-                    clicked = Some((row, egui::Modifiers::NONE));
-                    // ".." has no commands that act on items: the marks stay.
-                    unmark = !e.is_parent;
-                }
-                let (entry_is_dir, entry_is_parent) = (e.is_dir, e.is_parent);
-                resp.context_menu(|ui| {
-                    menu_open = true;
-                    // The local folders the menu acts on: the marked ones when this row is
-                    // one of them, else this row (a right-click there unmarks the others).
-                    let dirs: Vec<String> = if !matches!(tab.loc, Location::Local(_)) || entry_is_parent {
-                        vec![]
-                    } else if tab.marked.contains(&e.name) {
-                        tab.selection().into_iter().filter(|x| x.is_dir).map(|x| x.name).collect()
-                    } else if entry_is_dir {
-                        vec![e.name.clone()]
-                    } else {
-                        vec![]
-                    };
-                    if let Some(cmd) = context_menu(ui, entry_is_dir, entry_is_parent, is_arch, is_sum, &dirs, c) {
-                        context = Some((row, cmd));
-                        ui.close_menu();
-                    }
-                });
             }
-            // Empty area below the rows.
+            if let Some(pl) = &payload {
+                let dragged_here = pl.side == side && pl.loc == tab.loc && pl.items.iter().any(|i| i.name == e.name);
+                if dragged_here {
+                    p.rect_filled(rect, 0.0, th.bg.gamma_multiply(0.55));
+                } else if e.is_dir && ui.rect_contains_pointer(rect) {
+                    let target = if e.is_parent { tab.loc.parent() } else { Some(tab.loc.child(&e.name)) };
+                    if let Some(target) = target.filter(|t| drop_allowed(pl, t)) {
+                        p.rect_filled(pill, radius, th.accent.gamma_multiply(0.16));
+                        p.rect_stroke(pill, radius, egui::Stroke::new(1.5_f32, th.accent), egui::StrokeKind::Inside);
+                        row_target = Some((target, e.name.clone()));
+                    }
+                }
+            }
+            if resp.clicked() {
+                clicked = Some((row, ui.input(|i| i.modifiers)));
+            }
+            if resp.double_clicked() {
+                double = Some(row);
+            }
+            if resp.secondary_clicked() {
+                menu_for = Some(e.name.clone());
+            }
+            // A right-click outside the marked rows is about that row alone (as in
+            // Finder): the marks go, so the menu and its command name the same items.
+            if resp.secondary_clicked() && !tab.marked.contains(&e.name) {
+                clicked = Some((row, egui::Modifiers::NONE));
+                // ".." has no commands that act on items: the marks stay.
+                unmark = !e.is_parent;
+            }
+            let (entry_is_dir, entry_is_parent) = (e.is_dir, e.is_parent);
+            resp.context_menu(|ui| {
+                menu_open = true;
+                // The local folders the menu acts on: the marked ones when this row is
+                // one of them, else this row (a right-click there unmarks the others).
+                let dirs: Vec<String> = if !matches!(tab.loc, Location::Local(_)) || entry_is_parent {
+                    vec![]
+                } else if tab.marked.contains(&e.name) {
+                    tab.selection().into_iter().filter(|x| x.is_dir).map(|x| x.name).collect()
+                } else if entry_is_dir {
+                    vec![e.name.clone()]
+                } else {
+                    vec![]
+                };
+                if let Some(cmd) = context_menu(ui, entry_is_dir, entry_is_parent, is_arch, is_sum, &dirs, c) {
+                    context = Some((row, cmd));
+                    ui.close_menu();
+                }
+            });
+        };
+        sa.show_rows(ui, line_h, lines, |ui, range| {
+            for line in range {
+                if grid {
+                    let (line_rect, _) = ui.allocate_exact_size(vec2(avail_w, CELL_H), Sense::hover());
+                    for k in 0..per_line {
+                        let row = line * per_line + k;
+                        if row >= n {
+                            break;
+                        }
+                        let rect = Rect::from_min_size(pos2(line_rect.left() + SIDE_PAD + k as f32 * cell_w, line_rect.top()), vec2(cell_w, CELL_H));
+                        let resp = ui.interact(rect, egui::Id::new(("cell", tab_ro.uid, row)), Sense::click_and_drag());
+                        item(ui, row, rect, resp);
+                    }
+                    // The empty cells after the last icon are background, as below it.
+                    let used = (n - line * per_line).min(per_line);
+                    if used < per_line {
+                        let x0 = line_rect.left() + SIDE_PAD + used as f32 * cell_w;
+                        let rest = Rect::from_min_max(pos2(x0, line_rect.top()), pos2(line_rect.right(), line_rect.bottom()));
+                        let bg = ui.interact(rest, egui::Id::new(("cells-rest", tab_ro.uid)), Sense::click());
+                        if bg.clicked() {
+                            ev.push(PaneEvent::Focus);
+                        }
+                        bg.context_menu(|ui| {
+                            bg_menu_open = true;
+                            if let Some(cmd) = background_menu(ui, c) {
+                                bg_context = Some(cmd);
+                                ui.close_menu();
+                            }
+                        });
+                    }
+                } else {
+                    let (rect, resp) = ui.allocate_exact_size(vec2(avail_w, ROW_H), Sense::click_and_drag());
+                    item(ui, line, rect, resp);
+                }
+            }
             // Empty space below the rows, only when the rows do not fill the
             // view (measured in content coordinates so it never grows the
             // scrollable height).
-            let rest = vec2(0.0, (list_h - n as f32 * ROW_H - 1.0).max(0.0));
+            let rest = vec2(0.0, (list_h - lines as f32 * line_h - 1.0).max(0.0));
             if rest.y > 4.0 {
                 let (r, bg) = ui.allocate_exact_size(vec2(avail_w, rest.y.max(ROW_H)), Sense::click());
-                if only_parent && !tab.is_loading() && tab.error.is_none() {
+                // A search under way says so (its progress is in the footer).
+                if only_parent && tab_ro.loading.is_none() && tab_ro.error.is_none() {
                     // Empty state: an icon, what is going on and what one can do.
-                    let searching = tab.search.as_ref().is_some_and(|s| s.running) || tab.is_scanning();
+                    let searching = tab_ro.search.as_ref().is_some_and(|s| s.running) || tab_ro.is_scanning();
                     let (msg, hint) = if searching {
                         (t("Searching…"), String::new())
-                    } else if tab.is_filtered() {
+                    } else if tab_ro.is_filtered() {
                         (t("No matches"), t("Click the filter chip or press Esc to show everything"))
                     } else {
                         (t("This folder is empty"), t("Drop files here, or press F7 for a new folder"))
@@ -2536,7 +3000,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     let top = r.top() + (r.height() * 0.18).clamp(28.0, 120.0);
                     let icon = Rect::from_center_size(pos2(r.center().x, top), vec2(40.0, 40.0));
                     let ic = th.weak.gamma_multiply(0.45);
-                    if tab.is_filtered() || searching {
+                    if tab_ro.is_filtered() || searching {
                         icons::search(ui.painter(), icon, ic);
                     } else {
                         icons::mi_open(ui.painter(), icon, ic);
@@ -2556,7 +3020,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     ev.push(PaneEvent::Focus);
                 }
                 bg.context_menu(|ui| {
-                    menu_open = true;
+                    bg_menu_open = true;
                     if let Some(cmd) = background_menu(ui, c) {
                         bg_context = Some(cmd);
                         ui.close_menu();
@@ -2568,7 +3032,10 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     if !tab.ensure_visible {
         tab.scroll_offset = out.inner.state.offset.y;
     }
-    tab.menu_open = menu_open;
+    tab.menu_open = menu_open || bg_menu_open;
+    if menu_for.is_some() {
+        tab.menu_target = menu_for;
+    }
     if let Some((row, items)) = drag_started {
         tab.cursor = row;
         egui::DragAndDrop::set_payload(ui.ctx(), DragPayload { side, loc: tab.loc.clone(), items });
@@ -2655,9 +3122,17 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
         ev.push(PaneEvent::Open);
     }
     if let Some((row, cmd)) = context {
-        tab.cursor = row;
-        ev.push(PaneEvent::Focus);
-        ev.push(PaneEvent::Command(cmd));
+        // The entry the menu was opened on, found by name: if the folder was reloaded
+        // while the menu was open, the row may now hold another file. Gone: nothing.
+        let at = match tab.menu_target.take() {
+            Some(name) => tab.pos_of(&name),
+            None => Some(row),
+        };
+        if let Some(at) = at {
+            tab.cursor = at;
+            ev.push(PaneEvent::Focus);
+            ev.push(PaneEvent::Command(cmd));
+        }
     }
     if let Some(cmd) = bg_context {
         ev.push(PaneEvent::Focus);
@@ -2670,6 +3145,59 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     p.hline((frect.left() + SIDE_PAD)..=(frect.right() - SIDE_PAD), frect.top(), egui::Stroke::new(1.0_f32, th.border));
     let small = FontId::proportional(11.5);
     let left = pos2(frect.left() + SIDE_PAD + 4.0, frect.center().y);
+    // A search or a filter reading files: how far it is, the time left, and Stop.
+    let job = match (&tab.search, &tab.scan) {
+        (Some(s), _) if s.running || s.stopped => Some((s.running, s.progress.clone(), s.started, t("Searching subfolders…"))),
+        (_, Some(s)) if s.running || s.stopped => Some((s.running, s.progress.clone(), s.started, t("Reading files…"))),
+        _ => None,
+    };
+    if let Some((running, progress, started, what)) = job {
+        let fraction = progress.fraction();
+        let found = crate::util::fmt_count(progress.found());
+        let right = frect.right() - SIDE_PAD - 4.0;
+        let mut x = left.x;
+        if running {
+            let g = p.layout_no_wrap(what, small.clone(), th.text);
+            p.galley(pos2(x, frect.center().y - g.size().y / 2.0), g.clone(), th.text);
+            x += g.size().x + 10.0;
+            // The bar, then what it means in words.
+            let bar = Rect::from_min_size(pos2(x, frect.center().y - 3.0), vec2(110.0, 6.0));
+            p.rect_filled(bar, 3.0, th.surface);
+            p.rect_filled(Rect::from_min_size(bar.min, vec2(bar.width() * fraction, bar.height())), 3.0, th.accent);
+            x = bar.right() + 10.0;
+            let left_txt = match crate::ui::search::time_left(started.elapsed(), fraction) {
+                Some(d) if d.as_secs() >= 60 => format!("{} {} {}", t("about"), d.as_secs().div_ceil(60), t("min left")),
+                Some(d) => format!("{} {} {}", t("about"), d.as_secs().max(1), t("s left")),
+                None => t("estimating…"),
+            };
+            let checked = crate::util::fmt_count(progress.checked());
+            let info = format!("{:.0}% · {left_txt} · {found} {} · {checked} {}", fraction * 100.0, t("found"), t("checked"));
+            // Stop, at the right end.
+            let stop = Rect::from_min_size(pos2(right - 64.0, frect.center().y - 10.0), vec2(64.0, 20.0));
+            let resp = ui.interact(stop, egui::Id::new(("stop-search", tab.uid)), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Stop")));
+            p.rect(
+                stop,
+                5.0,
+                if resp.hovered() { th.danger.gamma_multiply(0.18) } else { th.surface },
+                egui::Stroke::new(1.0_f32, th.border),
+                egui::StrokeKind::Inside,
+            );
+            let sq = Rect::from_center_size(pos2(stop.left() + 13.0, stop.center().y), vec2(8.0, 8.0));
+            p.rect_filled(sq, 1.5, th.danger);
+            p.text(pos2(stop.left() + 23.0, stop.center().y), Align2::LEFT_CENTER, t("Stop"), small.clone(), th.text);
+            let clip = Rect::from_min_max(pos2(x, frect.top()), pos2(stop.left() - 8.0, frect.bottom()));
+            p.with_clip_rect(clip).text(pos2(x, frect.center().y), Align2::LEFT_CENTER, info, small.clone(), th.weak);
+            if resp.on_hover_text(format!("{} (Esc)", t("Stop searching; what was found so far stays"))).clicked() {
+                tab.stop_search();
+            }
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+        } else {
+            let txt = format!("{} {:.0}% · {found} {}   ·   {}", t("Stopped at"), fraction * 100.0, t("found"), t("Esc shows the folder again"));
+            p.with_clip_rect(frect).text(left, Align2::LEFT_CENTER, txt, small.clone(), th.marked);
+        }
+        return;
+    }
     if tab.is_loading() {
         p.text(left, Align2::LEFT_CENTER, t("Loading…"), small.clone(), th.weak);
         ui.ctx().request_repaint();
@@ -3012,7 +3540,7 @@ mod quick_filter_tests {
             std::fs::write(dir.join(f), b"x").unwrap();
         }
         let remotes = HashMap::new();
-        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
         let mut tab = Tab::new(Location::Local(dir.clone()));
         tab.reload(&ctx);
         wait(&mut tab, &ctx);
@@ -3107,7 +3635,7 @@ mod list_state_tests {
     fn shift_range_survives_new_folders_and_shrinks() {
         let dir = tree("shift");
         let remotes = HashMap::new();
-        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
         let mut tab = Tab::new(Location::Local(dir.join("big")));
         tab.reload(&ctx);
         tab.cursor = 50;
@@ -3147,7 +3675,7 @@ mod list_state_tests {
     fn cursor_lands_on_the_folder_left_and_stays_put() {
         let dir = tree("up");
         let remotes = HashMap::new();
-        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
         let mut tab = Tab::new(Location::Local(dir.join("small")));
         tab.reload(&ctx);
         tab.go_up(&ctx);
@@ -3182,7 +3710,7 @@ mod list_state_tests {
         let dir = tree("sort");
         std::fs::write(dir.join("big/.aaa"), b"x").unwrap();
         let remotes = HashMap::new();
-        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
         let mut tab = Tab::new(Location::Local(dir.join("big")));
         tab.reload(&ctx);
         tab.select_name("f7.txt");
@@ -3199,7 +3727,7 @@ mod list_state_tests {
     fn reload_keeps_search_results_cursor_and_marks() {
         let dir = tree("search");
         let remotes = HashMap::new();
-        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
         let mut tab = Tab::new(Location::Local(dir.clone()));
         tab.reload(&ctx);
         tab.start_search("*.txt", &ctx).unwrap();
@@ -3222,7 +3750,7 @@ mod list_state_tests {
     fn address_being_typed_survives_a_reload() {
         let dir = tree("addr");
         let remotes = HashMap::new();
-        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
         let mut tab = Tab::new(Location::Local(dir.clone()));
         tab.reload(&ctx);
         tab.editing_path = true;
@@ -3236,7 +3764,7 @@ mod list_state_tests {
     fn marks_hidden_by_the_filter_are_not_acted_on() {
         let dir = tree("marks");
         let remotes = HashMap::new();
-        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
         let mut tab = Tab::new(Location::Local(dir.clone()));
         tab.reload(&ctx);
         tab.marked.insert("one.txt".into());
@@ -3270,7 +3798,7 @@ mod list_state_tests {
         }
         std::fs::write(dir.join("one/same/deep/f.bin"), vec![1u8; 3000]).unwrap();
         let remotes = HashMap::new();
-        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true };
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
         let mut tab = Tab::new(Location::Local(dir.join("one")));
         tab.reload(&ctx);
         let names = |t: &Tab| t.entries.iter().filter(|e| e.is_dir && !e.is_parent).map(|e| e.name.clone()).collect::<Vec<_>>();
@@ -3291,6 +3819,354 @@ mod list_state_tests {
         let get = |n: &str| tab.entries.iter().find(|e| e.name == n).cloned().unwrap();
         assert_eq!((get("same").size, get("same").size_known), (3000, true));
         assert_eq!((get("empty").size, get("empty").size_known), (0, true));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A reload because the folder changed keeps the cursor, the view and the counted
+    /// folder sizes, and lists the new file.
+    #[test]
+    fn a_quiet_refresh_keeps_cursor_view_and_sizes() {
+        let dir = std::env::temp_dir().join(format!("mf-pane-quiet-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        for n in ["b.txt", "c.txt"] {
+            std::fs::write(dir.join(n), "x").unwrap();
+        }
+        let remotes = HashMap::new();
+        let ctx = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        assert_eq!(tab.watched().map(|w| w.0), Some(dir.clone()), "watched");
+        tab.cursor = tab.pos_of("c.txt").unwrap();
+        let sub = tab.entries.iter_mut().find(|e| e.name == "sub").unwrap();
+        (sub.size, sub.size_known) = (1234, true);
+        tab.ensure_visible = false;
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        tab.refresh_quietly(&ctx);
+        assert!(tab.entries.iter().any(|e| e.name == "a.txt"), "the new file");
+        assert_eq!(cur(&tab), "c.txt", "the cursor stays on its file");
+        assert!(!tab.ensure_visible, "the list does not jump to the cursor");
+        let sub = tab.entries.iter().find(|e| e.name == "sub").unwrap();
+        assert_eq!((sub.size, sub.size_known), (1234, true), "the counted size stays");
+        // A folder removed and made again under the same name is not the one counted.
+        std::fs::remove_dir(dir.join("sub")).unwrap();
+        std::fs::create_dir(dir.join("sub")).unwrap();
+        let earlier = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::open(dir.join("sub")).unwrap().set_modified(earlier).unwrap();
+        tab.refresh_quietly(&ctx);
+        assert!(!tab.entries.iter().find(|e| e.name == "sub").unwrap().size_known, "a new folder of the same name");
+        let sub = tab.entries.iter_mut().find(|e| e.name == "sub").unwrap();
+        (sub.size, sub.size_known) = (1234, true);
+        // A plain reload (after a copy, say) counts again.
+        tab.reload(&ctx);
+        assert!(!tab.entries.iter().find(|e| e.name == "sub").unwrap().size_known);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ".." is a row of the list only; an empty folder shows nothing in the icon view.
+    #[test]
+    fn the_icon_view_has_no_parent_entry() {
+        let dir = std::env::temp_dir().join(format!("mf-pane-icons-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("empty")).unwrap();
+        std::fs::write(dir.join("a.txt"), "x").unwrap();
+        let remotes = HashMap::new();
+        let list = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
+        let icons = ListCtx { default_view: crate::config::ViewMode::Icons, ..list.clone() };
+        let names = |t: &Tab| t.view.iter().map(|&i| t.entries[i].name.clone()).collect::<Vec<_>>();
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&list);
+        assert_eq!(names(&tab), ["..", "empty", "a.txt"]);
+        // Settings' default, then this window's own choice over it.
+        tab.rebuild_view(&icons);
+        assert_eq!(names(&tab), ["empty", "a.txt"]);
+        tab.view_mode = Some(crate::config::ViewMode::List);
+        tab.rebuild_view(&icons);
+        assert_eq!(names(&tab), ["..", "empty", "a.txt"]);
+        tab.view_mode = Some(crate::config::ViewMode::Icons);
+        tab.navigate(Location::Local(dir.join("empty")), &list);
+        assert!(tab.view.is_empty(), "an empty folder: no icon at all");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn ctx_of(remotes: &HashMap<u64, (String, SharedRemote)>, view: crate::config::ViewMode) -> ListCtx<'_> {
+        ListCtx { remotes, show_hidden: false, dirs_first: true, default_view: view }
+    }
+
+    fn folder_with(tag: &str, names: &[&str]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("mf-pane-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for n in names {
+            std::fs::write(dir.join(n), "x").unwrap();
+        }
+        dir
+    }
+
+    /// A Shift range made before a folder reloads by itself goes on from its anchor.
+    #[test]
+    fn a_quiet_refresh_keeps_the_shift_range() {
+        let dir = folder_with("range", &["a", "b", "c", "d", "e"]);
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::List);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        tab.cursor = tab.pos_of("a").unwrap();
+        tab.extend_to(tab.pos_of("d").unwrap());
+        assert_eq!(marks(&tab), ["a", "b", "c", "d"]);
+        std::fs::write(dir.join("0"), "x").unwrap();
+        tab.refresh_quietly(&ctx);
+        // Shrinking the range back to b: from the anchor a, so c and d are let go.
+        tab.extend_to(tab.pos_of("b").unwrap());
+        assert_eq!(marks(&tab), ["a", "b"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Not watched while a filter reads the files; a slow folder or an open menu waits.
+    #[test]
+    fn when_a_folder_may_reload_by_itself() {
+        let dir = folder_with("may", &["a.txt"]);
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::List);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        assert!(tab.watched().is_some());
+        tab.set_filter("source LIKE '%x%'", &ctx);
+        assert!(tab.watched().is_none(), "a filter reading the files");
+        tab.set_filter("", &ctx);
+        assert!(tab.watched().is_some());
+        assert!(tab.may_refresh_quietly());
+        tab.menu_open = true;
+        assert!(!tab.may_refresh_quietly(), "under an open menu");
+        tab.menu_open = false;
+        // Listing took 100 ms: not again for 2 s.
+        tab.list_cost = std::time::Duration::from_millis(100);
+        tab.quiet_at = Some(std::time::Instant::now());
+        assert!(!tab.may_refresh_quietly(), "a slow folder");
+        tab.quiet_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(3));
+        assert!(tab.may_refresh_quietly());
+        // So slow that each reload would freeze the window: not by itself at all.
+        tab.list_cost = std::time::Duration::from_millis(600);
+        tab.quiet_at = None;
+        assert!(!tab.may_refresh_quietly(), "too slow to list");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A folder that changed just before it was listed is looked at again (its time may
+    /// not show the next change on a disk with coarse times); an older one is not.
+    #[test]
+    fn a_fresh_folder_time_is_checked_again() {
+        let dir = folder_with("fresh", &["a.txt"]);
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::List);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        assert_eq!(tab.watched().unwrap().1, Some(std::time::SystemTime::UNIX_EPOCH), "just changed: checked again");
+        let earlier = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+        std::fs::File::open(&dir).unwrap().set_modified(earlier).unwrap();
+        tab.reload(&ctx);
+        assert_eq!(tab.watched().unwrap().1, crate::files::dirwatch::modified(&dir), "settled: its own time");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Up and down in the icon view go a line; past the first line nothing happens, and
+    /// down to a shorter last line goes to its last icon.
+    #[test]
+    fn arrows_in_the_icon_view() {
+        let names: Vec<String> = (0..10).map(|i| format!("f{i}")).collect();
+        let dir = folder_with("grid", &names.iter().map(String::as_str).collect::<Vec<_>>());
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::Icons);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        assert_eq!(tab.view.len(), 10, "no \"..\" among the icons");
+        tab.grid_cols = Some(4);
+        for (from, lines, to) in [(2, -1, 2), (5, 1, 9), (7, 1, 9), (9, 1, 9), (8, -1, 4), (1, 1, 5)] {
+            tab.cursor = from;
+            tab.move_grid(lines, false);
+            assert_eq!(tab.cursor, to, "from {from} by {lines}");
+        }
+        tab.cursor = 2;
+        tab.move_grid(-1, true);
+        assert!(tab.marked.is_empty(), "Shift+Up on the first line marks nothing");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn wait_search(tab: &mut Tab, ctx: &ListCtx) {
+        let t0 = std::time::Instant::now();
+        while tab.search.as_ref().is_some_and(|s| s.running) && t0.elapsed().as_secs() < 10 {
+            tab.poll(ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        tab.poll(ctx);
+    }
+
+    fn shown(t: &Tab) -> Vec<String> {
+        let mut v: Vec<String> = t.view.iter().map(|&i| t.entries[i].name.clone()).filter(|n| n != "..").collect();
+        v.sort();
+        v
+    }
+
+    /// The Find panel: a filter of this folder, a search below it, and back.
+    #[test]
+    fn find_filters_here_or_searches_below() {
+        let dir = folder_with("find", &["My_Report.txt", "my-report.md", "notes.txt"]);
+        std::fs::create_dir_all(dir.join("deep")).unwrap();
+        std::fs::write(dir.join("deep/Q3 report.pdf"), "x").unwrap();
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::List);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        let mut f = Find { text: "MY report".into(), ..Default::default() };
+        tab.set_find(f.clone(), &ctx).unwrap();
+        assert_eq!(shown(&tab), ["My_Report.txt", "my-report.md"]);
+        assert!(tab.is_filtered() && tab.filter_text.contains("MY report"));
+        // The search box borrows the filter and puts the Find filter back as it was.
+        let state = tab.filter_state();
+        tab.set_filter("notes", &ctx);
+        assert_eq!(shown(&tab), ["notes.txt"]);
+        tab.restore_filter(state, &ctx);
+        assert_eq!(shown(&tab), ["My_Report.txt", "my-report.md"]);
+        // Every folder below.
+        f.text = "report".into();
+        f.subfolders = true;
+        tab.set_find(f.clone(), &ctx).unwrap();
+        wait_search(&mut tab, &ctx);
+        let sep = std::path::MAIN_SEPARATOR;
+        assert_eq!(shown(&tab), ["My_Report.txt", format!("deep{sep}Q3 report.pdf").as_str(), "my-report.md"]);
+        let s = tab.search.as_ref().unwrap();
+        assert!(!s.running && !s.stopped && s.took.is_some());
+        // An empty text: the whole folder again.
+        f.text.clear();
+        tab.set_find(f, &ctx).unwrap();
+        assert!(tab.search.is_none() && !tab.is_filtered());
+        assert_eq!(shown(&tab).len(), 4);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Stop keeps what was found; going into another folder ends the search at once.
+    #[test]
+    fn a_search_stops_and_ends_when_leaving() {
+        let dir = folder_with("find-stop", &[]);
+        for i in 0..40 {
+            std::fs::create_dir_all(dir.join(format!("d{i}"))).unwrap();
+            for j in 0..40 {
+                std::fs::write(dir.join(format!("d{i}/f{j}.txt")), "x").unwrap();
+            }
+        }
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::List);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        let f = Find { text: "f".into(), subfolders: true, ..Default::default() };
+        tab.set_find(f.clone(), &ctx).unwrap();
+        tab.stop_search();
+        let s = tab.search.as_ref().unwrap();
+        assert!(s.stopped && s.cancel.load(std::sync::atomic::Ordering::Relaxed));
+        wait_search(&mut tab, &ctx);
+        let s = tab.search.as_ref().expect("the results stay");
+        assert!(!s.running && s.stopped);
+        assert!(s.progress.found() < 40 * 41, "stopped early");
+        // Again, then into a folder: that search is dropped and told to stop.
+        tab.set_find(f, &ctx).unwrap();
+        let cancel = tab.search.as_ref().unwrap().cancel.clone();
+        tab.navigate(Location::Local(dir.join("d0")), &ctx);
+        assert!(tab.search.is_none());
+        assert!(cancel.load(std::sync::atomic::Ordering::Relaxed), "the worker stops");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn wait_scan(tab: &mut Tab, ctx: &ListCtx) {
+        let t0 = std::time::Instant::now();
+        while tab.scan.as_ref().is_some_and(|s| s.running) && t0.elapsed().as_secs() < 10 {
+            tab.poll(ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        tab.poll(ctx);
+    }
+
+    /// Stopping a search's re-run (after a reload) keeps the complete results of the
+    /// run before, not the part the re-run found.
+    #[test]
+    fn stopping_a_rerun_keeps_the_full_results() {
+        let names: Vec<String> = (0..300).map(|i| format!("f{i}.txt")).collect();
+        let dir = folder_with("rerun", &names.iter().map(String::as_str).collect::<Vec<_>>());
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::List);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        tab.set_find(Find { text: "f".into(), subfolders: true, ..Default::default() }, &ctx).unwrap();
+        wait_search(&mut tab, &ctx);
+        assert_eq!(shown(&tab).len(), 300);
+        tab.refresh_search(&ctx);
+        tab.stop_search();
+        wait_search(&mut tab, &ctx);
+        assert_eq!(shown(&tab).len(), 300, "the full list stays");
+        let s = tab.search.as_ref().unwrap();
+        assert!(!s.running && !s.stopped, "complete, from the run before");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What was stopped stays stopped: a reload (after a job, a tab shown again) does
+    /// not start the search or the reading of files over.
+    #[test]
+    fn a_stopped_search_or_scan_is_not_run_again() {
+        let names: Vec<String> = (0..400).map(|i| format!("f{i}.txt")).collect();
+        let dir = folder_with("stopped", &names.iter().map(String::as_str).collect::<Vec<_>>());
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::List);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        // A search below.
+        tab.set_find(Find { text: "f".into(), subfolders: true, ..Default::default() }, &ctx).unwrap();
+        tab.stop_search();
+        wait_search(&mut tab, &ctx);
+        let found = shown(&tab).len();
+        tab.reload(&ctx);
+        tab.poll(&ctx);
+        let s = tab.search.as_ref().unwrap();
+        assert!(s.stopped && !s.running, "not started again");
+        assert_eq!(shown(&tab).len(), found);
+        tab.clear_search(&ctx);
+        // A filter reading the files of this folder.
+        let text = Find { text: "x".into(), mode: FindMode::Content, ..Default::default() };
+        tab.set_find(text, &ctx).unwrap();
+        tab.stop_search();
+        wait_scan(&mut tab, &ctx);
+        let hits = tab.scan.as_ref().unwrap().hits.len();
+        let checked = tab.scan.as_ref().unwrap().progress.checked();
+        assert!(tab.scan.as_ref().unwrap().stopped);
+        tab.reload(&ctx);
+        let s = tab.scan.as_ref().expect("kept");
+        assert!(s.stopped && !s.running && s.hits.len() == hits, "a reload keeps it");
+        // The search box borrows the filter and puts it back: still the stopped one.
+        let state = tab.filter_state();
+        tab.set_filter("f1", &ctx);
+        assert!(tab.scan.is_none());
+        tab.restore_filter(state, &ctx);
+        let s = tab.scan.as_ref().expect("taken back");
+        assert!(s.stopped && !s.running && s.progress.checked() == checked, "not read again");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The entries are kept in the order shown, whatever the sort, so that a filter's
+    /// view comes out sorted without sorting a big folder again.
+    #[test]
+    fn entries_stay_in_display_order() {
+        let dir = folder_with("order", &["b10.txt", "B2.md", "a1.txt", "c.rs"]);
+        std::fs::create_dir_all(dir.join("zdir")).unwrap();
+        let remotes = HashMap::new();
+        let ctx = ctx_of(&remotes, crate::config::ViewMode::List);
+        let mut tab = Tab::new(Location::Local(dir.clone()));
+        tab.reload(&ctx);
+        let order = |t: &Tab| t.entries.iter().map(|e| e.name.clone()).collect::<Vec<_>>();
+        let shown = |t: &Tab| t.view.iter().map(|&i| t.entries[i].name.clone()).collect::<Vec<_>>();
+        assert_eq!(order(&tab), ["..", "zdir", "a1.txt", "B2.md", "b10.txt", "c.rs"]);
+        tab.set_filter("b", &ctx);
+        assert_eq!(shown(&tab), ["..", "B2.md", "b10.txt"]);
+        tab.set_sort(SortKey::Ext, &ctx);
+        assert_eq!(order(&tab), ["..", "zdir", "B2.md", "c.rs", "a1.txt", "b10.txt"]);
+        assert_eq!(shown(&tab), ["..", "B2.md", "b10.txt"]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

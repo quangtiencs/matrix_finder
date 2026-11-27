@@ -369,6 +369,7 @@ impl App {
                 if tool_icon(ui, th, &t("Settings"), self.settings_shown(), icons::gear).clicked() {
                     self.open_settings(self.settings_page);
                 }
+                self.view_options_button(ui, th);
                 let n_jobs = self.jobs.len();
                 let tr_shown = self.panes[self.active].tab().transfers;
                 let gauge = self.transfers_gauge();
@@ -701,6 +702,44 @@ impl App {
     }
 }
 
+impl App {
+    /// The toolbar's view options for the focused file window: hidden files, and list
+    /// or icons. Dimmed (and closed) while another kind of window has the focus.
+    fn view_options_button(&mut self, ui: &mut egui::Ui, th: &Theme) {
+        use crate::config::ViewMode;
+        let id = egui::Id::new("view-options");
+        let tab = self.panes[self.active].tab();
+        let files = tab.is_files();
+        let mode = tab.view_mode.unwrap_or(self.cfg.default_view);
+        if !files && ui.memory(|m| m.is_popup_open(id)) {
+            ui.memory_mut(|m| m.close_popup());
+        }
+        let open = ui.memory(|m| m.is_popup_open(id));
+        let resp = ui
+            .add_enabled_ui(files, |ui| tool_icon(ui, th, &t("View options"), open, |p, r, c| view_icon(p, r, c, mode == ViewMode::Icons)))
+            .inner
+            .on_disabled_hover_text(t("View options are for file windows"));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, files, t("View options")));
+        if resp.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(id));
+        }
+        egui::popup::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+            ui.set_min_width(230.0);
+            let mut hidden = self.cfg.show_hidden;
+            if ui.checkbox(&mut hidden, format!("{}  ({})", t("Show hidden files"), hint(Action::ToggleHidden))).changed() {
+                self.toggle_hidden();
+            }
+            ui.separator();
+            let mut chosen = mode;
+            ui.radio_value(&mut chosen, ViewMode::List, t("List"));
+            ui.radio_value(&mut chosen, ViewMode::Icons, t("Icons"));
+            if chosen != mode {
+                self.set_view_mode(chosen);
+            }
+        });
+    }
+}
+
 /// A flat toolbar icon; `active` draws a toggled background.
 fn tool_icon(ui: &mut egui::Ui, th: &Theme, tip: &str, active: bool, draw: impl FnOnce(&egui::Painter, egui::Rect, egui::Color32)) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 28.0), egui::Sense::click());
@@ -718,6 +757,25 @@ fn tool_icon(ui: &mut egui::Ui, th: &Theme, tip: &str, active: bool, draw: impl 
     };
     draw(ui.painter(), rect.shrink2(egui::vec2(8.0, 7.0)), color);
     resp.on_hover_text(tip)
+}
+
+/// The view of a file window: three rows, or four tiles for the icon view.
+fn view_icon(p: &egui::Painter, r: egui::Rect, c: egui::Color32, icons: bool) {
+    let s = egui::Stroke::new(1.3_f32, c);
+    if icons {
+        let g = r.width() * 0.16;
+        let w = (r.width() - g) / 2.0;
+        for (i, j) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+            let tile = egui::Rect::from_min_size(r.min + egui::vec2(i * (w + g), j * (w + g)), egui::vec2(w, w));
+            p.rect_stroke(tile, 1.5, s, egui::StrokeKind::Inside);
+        }
+    } else {
+        for k in 0..3 {
+            let y = r.top() + 1.5 + k as f32 * (r.height() - 3.0) / 2.0;
+            p.circle_filled(egui::pos2(r.left() + 1.5, y), 1.3, c);
+            p.line_segment([egui::pos2(r.left() + 5.0, y), egui::pos2(r.right(), y)], s);
+        }
+    }
 }
 
 fn sidebar_icon(p: &egui::Painter, r: egui::Rect, c: egui::Color32) {

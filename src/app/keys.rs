@@ -277,9 +277,13 @@ impl App {
                     self.panes[a].tab_mut().go_up(&lc!(self));
                 }
             }
+            // The Find panel of a file window (the funnel button); elsewhere the palette.
             Action::Filter => {
-                let q = self.panes[a].tab().search.as_ref().map(|s| s.query.clone()).unwrap_or_else(|| self.panes[a].tab().filter_text.clone());
-                self.palette.open_with(&q);
+                if self.panes[a].tab().is_files() {
+                    self.panes[a].tab_mut().open_find = true;
+                } else {
+                    self.palette.open_with("");
+                }
             }
             Action::FocusPath => self.panes[a].tab_mut().focus_path = true,
             Action::Bookmark => self.run_cmd(Cmd::Bookmark),
@@ -290,10 +294,7 @@ impl App {
                     self.run_cmd(Cmd::Refresh);
                 }
             }
-            Action::ToggleHidden => {
-                self.cfg.show_hidden = !self.cfg.show_hidden;
-                self.rebuild_views();
-            }
+            Action::ToggleHidden => self.toggle_hidden(),
             Action::Palette => self.palette.toggle(),
             Action::OpenTerminal => self.open_terminal(),
             Action::QuickView => self.toggle_quick_view(),
@@ -358,7 +359,7 @@ impl App {
         }
         ctx.input_mut(|i| i.events.retain(|e| !matches!(e, egui::Event::Text(_))));
         let tab = self.panes[self.active].tab();
-        self.type_search = Some(TypeSearch { side: self.active, uid: tab.uid, loc: tab.loc.clone(), before: tab.filter_text.clone(), text: typed });
+        self.type_search = Some(TypeSearch { side: self.active, uid: tab.uid, loc: tab.loc.clone(), before: tab.filter_state(), text: typed });
         self.apply_type_search();
         true
     }
@@ -450,9 +451,7 @@ impl App {
         }
         let lc = lc!(self);
         if let Some(tab) = self.panes.get_mut(ts.side).map(|p| p.tab_mut()).filter(|t| t.uid == ts.uid) {
-            if tab.filter_text != ts.before {
-                tab.set_filter(&ts.before, &lc);
-            }
+            tab.restore_filter(ts.before, &lc);
         }
     }
 
@@ -519,6 +518,7 @@ impl App {
             let a = self.active;
             let shift = m.shift;
             let plain = !m.command && !m.alt && !m.ctrl;
+            let grid = self.panes[a].tab().grid_cols.is_some();
             match key {
                 Key::Tab => {
                     self.active = if shift { self.layout.prev_before(self.active) } else { self.layout.next_after(self.active) };
@@ -532,6 +532,9 @@ impl App {
                         egui::DragAndDrop::clear_payload(ctx);
                     } else if self.viewer.is_some() {
                         self.viewer = None;
+                    } else if self.panes[a].tab().search.as_ref().is_some_and(|s| s.running) || self.panes[a].tab().is_scanning() {
+                        // A search under way stops first; its results stay until the next Esc.
+                        self.panes[a].tab_mut().stop_search();
                     } else if self.panes[a].tab().marked.is_empty() && self.panes[a].tab().is_filtered() {
                         self.panes[a].tab_mut().clear_search(&lc!(self));
                     } else {
@@ -539,8 +542,13 @@ impl App {
                     }
                 }
                 _ if !has_list => {}
+                // The icon view: up and down go a line of icons, left and right one icon.
+                Key::ArrowUp if plain && grid => self.panes[a].tab_mut().move_grid(-1, shift),
+                Key::ArrowDown if plain && grid => self.panes[a].tab_mut().move_grid(1, shift),
                 Key::ArrowUp if plain => self.panes[a].tab_mut().move_cursor(-1, shift),
                 Key::ArrowDown if plain => self.panes[a].tab_mut().move_cursor(1, shift),
+                Key::ArrowLeft if plain && grid => self.panes[a].tab_mut().move_cursor(-1, shift),
+                Key::ArrowRight if plain && grid => self.panes[a].tab_mut().move_cursor(1, shift),
                 Key::ArrowLeft if plain && !shift => {
                     self.panes[a].tab_mut().move_cursor(isize::MIN / 2, false);
                 }

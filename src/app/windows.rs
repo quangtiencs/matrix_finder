@@ -236,13 +236,40 @@ impl App {
         self.prev_active = prev.min(n - 1);
         self.last_active = self.active;
         self.live = want;
+        let c = lc!(self);
         for p in &mut self.panes {
             if let Some(t) = &mut p.tab_mut().term {
                 t.activity = false;
             }
+            if std::mem::take(&mut p.tab_mut().stale) {
+                p.tab_mut().reload(&c);
+            }
         }
         self.focus_window();
         self.quick = None;
+    }
+
+    /// Reload the shown folders that changed on disk (Settings → Files & layout →
+    /// Refresh folders automatically), and tell the checker what is shown now.
+    /// A folder waits while a menu or popup is open or something is being dragged: the
+    /// rows under it must not move.
+    pub(super) fn poll_dir_watch(&mut self, ctx: &egui::Context) {
+        let changed = self.dir_watch.take_changed();
+        let busy = ctx.memory(|m| m.any_popup_open()) || crate::ui::pane::drag_payload(ctx).is_some();
+        let c = lc!(self);
+        for p in &mut self.panes {
+            let tab = p.tab_mut();
+            let Some((dir, _)) = tab.watched() else { continue };
+            if changed.contains(&dir) {
+                tab.refresh_due = true;
+            }
+            if tab.refresh_due && !busy && tab.may_refresh_quietly() {
+                tab.refresh_quietly(&c);
+            }
+        }
+        let every = self.cfg.auto_refresh.then(|| Duration::from_secs(self.cfg.auto_refresh_secs.into()));
+        let dirs = self.panes.iter().filter_map(|p| p.tab().watched()).collect();
+        self.dir_watch.watch(every, dirs);
     }
 
     /// Give the focused window the keyboard (a terminal takes it explicitly).

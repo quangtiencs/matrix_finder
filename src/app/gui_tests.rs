@@ -4727,7 +4727,7 @@ fn quick_filter_ticks_several_kinds() {
     };
     let menu_open = |h: &Harness<'static, App>| h.ctx.memory(|m| m.is_popup_open(egui::Id::new(("quick-filter", h.state().panes[0].tab().uid))));
     let funnel = |h: &mut Harness<'static, App>| {
-        h.query_all_by_role_and_label(Role::Button, &t("Quick filter"))
+        h.query_all_by_role_and_label(Role::Button, &t("Find and filter"))
             .min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0))
             .unwrap()
             .click();
@@ -5329,4 +5329,299 @@ fn bookmark_toolbar_adds_folders_and_groups() {
     if let Some(dir) = &shots {
         h.render().unwrap().save(format!("{dir}/bookmarks-group.png")).unwrap();
     }
+}
+
+/// A compression that finishes while its folder's tab is hidden (the Tasks tab is shown)
+/// is listed once that tab is shown again, without leaving the folder.
+#[test]
+#[ignore]
+fn a_hidden_tab_shows_files_made_meanwhile() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let dir = d.demo.join("out").join("pack-hidden");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // 32 MB that does not compress much: still running when it is paused below.
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let bytes: Vec<u8> = (0..32 << 20)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x as u8
+        })
+        .collect();
+    std::fs::write(dir.join("notes.txt"), &bytes).unwrap();
+    h.state_mut().shot_pane(0, &dir, Some("notes.txt"));
+    h.state_mut().shot_pane(1, &dir, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    h.state_mut().run_cmd(Cmd::Pack);
+    settle(&mut h, 3);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    // Held until the Tasks tab is shown, so that it finishes while the folder is hidden.
+    let job = h.state().jobs.first().map(|j| j.job.progress.clone()).expect("compressing");
+    job.pause();
+    let folder_tab = h.state().strip.active;
+    h.state_mut().open_transfers();
+    settle(&mut h, 2);
+    assert_ne!(h.state().strip.active, folder_tab, "Tasks is another tab");
+    job.resume();
+    wait_until(&mut h, 30.0, |a| a.jobs.is_empty());
+    assert!(dir.join("notes.zip").exists());
+    h.state_mut().show_tab(folder_tab);
+    settle(&mut h, 2);
+    for i in 0..2 {
+        assert!(h.state().panes[i].tab().entries.iter().any(|e| e.name == "notes.zip"), "window {i} lists the new file");
+    }
+}
+
+/// A file another program adds to a shown folder appears without a refresh; with the
+/// setting off it does not.
+#[test]
+#[ignore]
+fn shown_folders_refresh_by_themselves() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let dir = d.demo.join("out").join("auto-refresh");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("old.txt"), "x").unwrap();
+    h.state_mut().cfg.auto_refresh_secs = 1;
+    h.state_mut().shot_pane(0, &dir, Some("old.txt"));
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let lists = |a: &App, name: &str| a.panes[0].tab().entries.iter().any(|e| e.name == name);
+    std::fs::write(dir.join("new.txt"), "x").unwrap();
+    wait_until(&mut h, 10.0, |a| lists(a, "new.txt"));
+    assert_eq!(h.state().panes[0].tab().cursor_entry().map(|e| e.name.clone()).as_deref(), Some("old.txt"), "the cursor stays");
+    h.state_mut().cfg.auto_refresh = false;
+    settle(&mut h, 2);
+    std::fs::write(dir.join("later.txt"), "x").unwrap();
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_secs(3) {
+        h.step();
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(!lists(h.state(), "later.txt"), "off: not until a refresh");
+}
+
+/// The toolbar's view options: icons (arrow keys move in the grid) and list, hidden
+/// files, kept per window in the session; dimmed and inert in a terminal.
+#[test]
+#[ignore]
+fn view_options_switch_icons_and_hidden_files() {
+    use crate::config::ViewMode;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    assert_eq!(h.state().panes[0].tab().grid_cols, None, "the list by default");
+    let click_button = |h: &Harness<'static, App>| h.query_by_label("View options").expect("the button").click();
+    let choose = |h: &mut Harness<'static, App>, label: &str| {
+        click_button(h);
+        settle(h, 2);
+        h.query_by_label_contains(label).expect("in the menu").click();
+        settle(h, 2);
+        key_press(h, Key::Escape, None, Modifiers::NONE);
+        settle(h, 2);
+    };
+    choose(&mut h, &t("Icons"));
+    let cols = h.state().panes[0].tab().grid_cols.expect("icons");
+    assert!(cols > 1, "several icons per line: {cols}");
+    assert_eq!(h.state().panes[0].tab().view_mode, Some(ViewMode::Icons));
+    let has_parent = |a: &App| a.panes[0].tab().view.iter().any(|&i| a.panes[0].tab().entries[i].is_parent);
+    assert!(!has_parent(h.state()), "no \"..\" among the icons");
+    // Right goes one icon, Down a line of icons, Left back one.
+    h.state_mut().panes[0].tab_mut().cursor = 0;
+    for (key, want) in [(Key::ArrowRight, 1), (Key::ArrowDown, 1 + cols), (Key::ArrowLeft, cols)] {
+        key_press(&mut h, key, None, Modifiers::NONE);
+        settle(&mut h, 1);
+        assert_eq!(h.state().panes[0].tab().cursor, want, "{key:?}");
+    }
+    // Kept in the session, for this window only.
+    let saved = h.state().save_session();
+    assert_eq!(saved.tabs[saved.active].view, Some(ViewMode::Icons));
+    // Hidden files, from the same menu.
+    let hidden = h.state().cfg.show_hidden;
+    choose(&mut h, &t("Show hidden files"));
+    assert_eq!(h.state().cfg.show_hidden, !hidden);
+    choose(&mut h, &t("List"));
+    assert_eq!(h.state().panes[0].tab().grid_cols, None, "back to the list");
+    assert!(has_parent(h.state()), "\"..\" is back in the list");
+    // In a terminal the button is dimmed and does nothing.
+    h.state_mut().new_terminal_here(None, None);
+    settle(&mut h, 4);
+    assert!(h.state().panes[h.state().active].tab().is_terminal());
+    click_button(&h);
+    settle(&mut h, 2);
+    assert!(h.query_by_label(&t("Icons")).is_none(), "no menu in a terminal");
+}
+
+/// The icon view shows pictures by their thumbnail (Settings: on by default); turned
+/// off, no picture is read.
+#[test]
+#[ignore]
+fn the_icon_view_shows_thumbnails_unless_turned_off() {
+    let d = demo_env();
+    let mut cfg = settings("Breeze Light", &d);
+    assert!(cfg.thumbnails, "on by default");
+    cfg.thumbnails = false;
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().shot_pane(0, &d.demo.join("images"), None);
+    h.state_mut().shot_focus(0);
+    h.state_mut().set_view_mode(crate::config::ViewMode::Icons);
+    settle(&mut h, 4);
+    assert_eq!(h.state().thumbs.asked(), 0, "off: nothing read");
+    h.state_mut().cfg.thumbnails = true;
+    wait_until(&mut h, 10.0, |a| a.thumbs.made() >= 4);
+    // The list view asks for none.
+    let asked = h.state().thumbs.asked();
+    h.state_mut().set_view_mode(crate::config::ViewMode::List);
+    h.state_mut().shot_pane(0, &d.demo.join("data"), None);
+    settle(&mut h, 4);
+    assert_eq!(h.state().thumbs.asked(), asked);
+}
+
+/// A right-click menu acts on the file it was opened on: the folder does not reload by
+/// itself under the open menu, and if it reloads anyway (a job finished), the command
+/// still finds that file by name rather than by its row.
+#[test]
+#[ignore]
+fn a_right_click_menu_keeps_its_file() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    let dir = d.demo.join("out").join("menu-target");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for n in ["mm.txt", "zz.txt"] {
+        std::fs::write(dir.join(n), "x").unwrap();
+    }
+    h.state_mut().cfg.auto_refresh_secs = 1;
+    h.state_mut().shot_pane(0, &dir, Some("zz.txt"));
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let names = |a: &App| a.panes[0].tab().view.iter().map(|&i| a.panes[0].tab().entries[i].name.clone()).collect::<Vec<_>>();
+    assert_eq!(names(h.state()), ["..", "mm.txt", "zz.txt"]);
+    // Rows are 28 points high below the header: "..", mm.txt, zz.txt.
+    right_click(&mut h, pos2(420.0, 160.0 + 2.0 * 28.0));
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().menu_open, "the menu is open");
+    assert_eq!(h.state().panes[0].tab().cursor_entry().map(|e| e.name.clone()).as_deref(), Some("zz.txt"));
+    // A new file above it: no reload while the menu is open.
+    std::fs::write(dir.join("aa.txt"), "x").unwrap();
+    let t0 = Instant::now();
+    while t0.elapsed() < Duration::from_millis(3500) {
+        h.step();
+        std::thread::sleep(Duration::from_millis(40));
+    }
+    assert!(!names(h.state()).contains(&"aa.txt".to_string()), "not under the open menu");
+    // Reloaded anyway (as after a job): zz.txt's row now holds mm.txt.
+    let remotes = std::collections::HashMap::new();
+    let lc = ListCtx { remotes: &remotes, show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
+    h.state_mut().panes[0].tab_mut().reload(&lc);
+    settle(&mut h, 2);
+    assert_eq!(names(h.state()), ["..", "aa.txt", "mm.txt", "zz.txt"]);
+    h.query_by_label_contains(&t("Properties")).expect("the menu is still open").click();
+    settle(&mut h, 2);
+    match &h.state().dialog {
+        Some(Dialog::Message { text, .. }) => assert!(text.contains("zz.txt") && !text.contains("mm.txt"), "{text}"),
+        _ => panic!("no Properties"),
+    }
+    // The menu closed: the folder reloads by itself again.
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    std::fs::write(dir.join("ab.txt"), "x").unwrap();
+    wait_until(&mut h, 10.0, |a| names(a).contains(&"ab.txt".to_string()));
+}
+
+/// The Find panel of the funnel button: it filters as you type, searches the folders
+/// below with the Find button, and a running search shows its progress and stops with
+/// Stop (its results stay) or Esc.
+#[test]
+#[ignore]
+fn the_find_panel_filters_searches_and_stops() {
+    use egui::accesskit::Role;
+    let d = demo_env();
+    let dir = d.demo.join("out").join("find-panel");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("deep")).unwrap();
+    for f in ["My_Report.txt", "my-report.md", "notes.txt", "deep/Old my report.pdf"] {
+        std::fs::write(dir.join(f), "x").unwrap();
+    }
+    // Large files to read, for a search slow enough to catch running.
+    let chunk = vec![b'a'; 4 << 20];
+    for i in 0..60 {
+        let sub = dir.join("big").join(format!("part-{}", i / 10));
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join(format!("log_{i}.txt")), &chunk).unwrap();
+    }
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &dir, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 2);
+    let names = |a: &App| {
+        let t = a.panes[0].tab();
+        let mut v: Vec<String> = t.view.iter().map(|&i| t.entries[i].name.clone()).filter(|n| n != "..").collect();
+        v.sort();
+        v
+    };
+    // Ctrl+F opens it with the keyboard in its field; it filters as you type.
+    h.state_mut().panes[0].tab_mut().open_find = true;
+    settle(&mut h, 3);
+    push(&mut h, Event::Text("MY report".into()));
+    settle(&mut h, 3);
+    assert_eq!(names(h.state()), ["My_Report.txt", "my-report.md"]);
+    // Subfolders too: it waits for Find.
+    h.query_by_label(&t("Subfolders too")).expect("the choice").click();
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().search.is_none(), "not as you type");
+    assert_eq!(names(h.state()).len(), 5, "the whole folder until Find");
+    h.query_by_role_and_label(Role::Button, &t("Find")).expect("Find").click();
+    wait_until(&mut h, 10.0, |a| a.panes[0].tab().search.as_ref().is_some_and(|s| !s.running));
+    let sep = std::path::MAIN_SEPARATOR;
+    assert_eq!(names(h.state()), ["My_Report.txt", format!("deep{sep}Old my report.pdf").as_str(), "my-report.md"]);
+    // Text inside the big files: Stop, in the footer, keeps what was found so far.
+    let f = crate::ui::filter::Find { text: "needle".into(), mode: crate::ui::filter::FindMode::Content, subfolders: true, ..Default::default() };
+    h.state_mut().panes[0].tab_mut().find_draft = f.clone();
+    let lc = ListCtx { remotes: &std::collections::HashMap::new(), show_hidden: false, dirs_first: true, default_view: crate::config::ViewMode::List };
+    h.state_mut().panes[0].tab_mut().set_find(f.clone(), &lc).unwrap();
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().search.as_ref().is_some_and(|s| s.running), "still reading");
+    h.query_by_role_and_label(Role::Button, &t("Stop")).expect("Stop in the footer").click();
+    wait_until(&mut h, 10.0, |a| a.panes[0].tab().search.as_ref().is_some_and(|s| !s.running));
+    assert!(h.state().panes[0].tab().search.as_ref().unwrap().stopped);
+    // Esc stops a running search first, then shows the folder again.
+    h.state_mut().panes[0].tab_mut().set_find(f, &lc).unwrap();
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    wait_until(&mut h, 10.0, |a| a.panes[0].tab().search.as_ref().is_some_and(|s| s.stopped && !s.running));
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    assert!(h.state().panes[0].tab().search.is_none());
+    assert_eq!(names(h.state()), ["My_Report.txt", "big", "deep", "my-report.md", "notes.txt"]);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// In the icon view the empty cells after the last icon are background: a right-click
+/// there opens the folder's menu, as below the icons and in the list.
+#[test]
+#[ignore]
+fn empty_icon_cells_take_the_folder_menu() {
+    let d = demo_env();
+    let dir = d.demo.join("out").join("icon-cells");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("only.txt"), "x").unwrap();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &dir, None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 2);
+    h.state_mut().set_view_mode(crate::config::ViewMode::Icons);
+    settle(&mut h, 3);
+    assert!(h.state().panes[0].tab().grid_cols.is_some_and(|c| c >= 4));
+    // The first line: the icon at its left, empty cells to its right.
+    right_click(&mut h, pos2(640.0, 196.0));
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().menu_open, "the folder's menu");
+    assert!(h.query_by_label_contains(&t("Select all")).is_some());
 }

@@ -590,7 +590,7 @@ impl App {
             self.active = side;
         }
         // What the file lists depend on: they are rebuilt only when it changes.
-        let list_before = (self.cfg.show_hidden, self.cfg.dirs_first, self.cfg.quick_filters.clone());
+        let list_before = (self.cfg.show_hidden, self.cfg.dirs_first, self.cfg.quick_filters.clone(), self.cfg.default_view);
         let h = ui.available_height();
         ui.horizontal_top(|ui| {
             // ---- navigation
@@ -663,7 +663,9 @@ impl App {
         if changed {
             self.apply_fonts(&ctx);
             self.sync_terminal_profiles();
-            if (self.cfg.show_hidden, self.cfg.dirs_first, &self.cfg.quick_filters) != (list_before.0, list_before.1, &list_before.2) {
+            if (self.cfg.show_hidden, self.cfg.dirs_first, &self.cfg.quick_filters, self.cfg.default_view)
+                != (list_before.0, list_before.1, &list_before.2, list_before.3)
+            {
                 self.rebuild_views();
             }
             self.save_cfg_soon(&ctx);
@@ -836,6 +838,57 @@ impl App {
                     changed |= toggle_row(ui, th, &mut self.cfg.show_hidden, &t("Show hidden files"), "");
                     row_line(ui, th);
                     changed |= toggle_row(ui, th, &mut self.cfg.dirs_first, &t("Folders first"), "");
+                    row_line(ui, th);
+                    ui.add_space(4.0);
+                    ui.label(RichText::new(t("Default view")).color(th.text));
+                    ui.label(RichText::new(t("Each window can switch with the View options button in the toolbar.")).size(11.5).color(th.weak));
+                    ui.add_space(2.0);
+                    for (mode, label) in [(crate::config::ViewMode::List, t("List")), (crate::config::ViewMode::Icons, t("Icons"))] {
+                        changed |= ui.radio_value(&mut self.cfg.default_view, mode, label).changed();
+                    }
+                    ui.add_space(4.0);
+                    row_line(ui, th);
+                    changed |= toggle_row(
+                        ui,
+                        th,
+                        &mut self.cfg.thumbnails,
+                        &t("Show thumbnails in the icon view"),
+                        &t("Pictures, camera RAW and videos (a video's frame needs FFmpeg, or Quick Look on macOS). Made in the background and kept in memory only; on network drives each picture shown is read over the network."),
+                    );
+                    row_line(ui, th);
+                    changed |= toggle_row(
+                        ui,
+                        th,
+                        &mut self.cfg.auto_refresh,
+                        &t("Refresh folders automatically"),
+                        &t("Files added, removed or renamed in the open folders show up by themselves, also when another app made them."),
+                    );
+                    ui.add_enabled_ui(self.cfg.auto_refresh, |ui| {
+                        row_line(ui, th);
+                        row(ui, th, &t("Check every"), &t("Each check reads only the folder's date."), |ui| {
+                            changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut self.cfg.auto_refresh_secs)
+                                        .range(crate::config::AUTO_REFRESH_SECS)
+                                        .suffix(format!(" {}", t("s"))),
+                                )
+                                .changed();
+                        });
+                        ui.add_space(2.0);
+                        let refresh = crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::Refresh);
+                        for limit in [
+                            format!(
+                                "{} ({refresh}).",
+                                t("A file that is still being written, such as a download or a log, keeps its old size and date in the list until you refresh")
+                            ),
+                            t("Folders on servers (SFTP, FTP) and inside archives are not checked."),
+                            t("On network drives, changes made from other computers can show up late or only after a refresh."),
+                            t("A folder that takes long to read (very large, or on a slow network drive) is not refreshed by itself."),
+                        ] {
+                            ui.label(RichText::new(format!("•  {limit}")).size(11.5).color(th.weak));
+                        }
+                        ui.add_space(4.0);
+                    });
                     row_line(ui, th);
                     changed |= toggle_row(
                         ui,

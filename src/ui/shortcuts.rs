@@ -318,7 +318,7 @@ impl Action {
             A::Back => t("Back"),
             A::Forward => t("Forward"),
             A::UpFolder => t("Parent folder"),
-            A::Filter => t("Focus filter"),
+            A::Filter => t("Find and filter"),
             A::FocusPath => t("Focus path"),
             A::Bookmark => t("Bookmark current folder"),
             A::Refresh => t("Refresh"),
