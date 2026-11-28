@@ -818,7 +818,7 @@ fn move_to(h: &mut Harness<'static, App>, p: Pos2) {
 
 fn button(h: &mut Harness<'static, App>, p: Pos2, b: PointerButton, pressed: bool, m: Modifiers) {
     push(h, Event::PointerButton { pos: p, button: b, pressed, modifiers: m });
-    h.input_mut().modifiers = m;
+    h.input_mut().events.push(Event::ModifiersChanged(m));
     settle(h, 2);
 }
 
@@ -1602,7 +1602,7 @@ fn cmd_click_at(h: &mut Harness<'static, App>, at: Pos2) {
     move_to(h, at);
     button(h, at, PointerButton::Primary, true, Modifiers::COMMAND);
     button(h, at, PointerButton::Primary, false, Modifiers::COMMAND);
-    h.input_mut().modifiers = Modifiers::NONE;
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
     settle(h, 3);
 }
 
@@ -1993,7 +1993,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         for i in 1..=8 {
             let p = from + (to - from) * (i as f32 / 8.0);
             push(&mut h, Event::PointerMoved(p));
-            h.input_mut().modifiers = Modifiers::SHIFT;
+            h.input_mut().events.push(Event::ModifiersChanged(Modifiers::SHIFT));
             h.step();
         }
         // Capture before the spring-loaded folder (≈ 1 s of hovering) opens it.
@@ -2566,11 +2566,11 @@ fn animated_images_play_and_pause() {
 }
 
 fn key_press(h: &mut Harness<'static, App>, key: Key, physical: Option<Key>, m: Modifiers) {
-    h.input_mut().modifiers = m;
+    h.input_mut().events.push(Event::ModifiersChanged(m));
     push(h, Event::Key { key, physical_key: physical, pressed: true, repeat: false, modifiers: m });
     h.step();
     push(h, Event::Key { key, physical_key: physical, pressed: false, repeat: false, modifiers: m });
-    h.input_mut().modifiers = Modifiers::NONE;
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
     settle(h, 2);
 }
 
@@ -2644,10 +2644,10 @@ fn type_to_search_in_a_file_window() {
 
     // Text that comes with a shortcut does not start a search.
     h.state_mut().panes[0].tab_mut().marked.clear();
-    h.input_mut().modifiers = Modifiers::COMMAND;
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::COMMAND));
     push(&mut h, Event::Text("a".into()));
     settle(&mut h, 1);
-    h.input_mut().modifiers = Modifiers::NONE;
+    h.input_mut().events.push(Event::ModifiersChanged(Modifiers::NONE));
     settle(&mut h, 1);
     assert!(!h.state().palette.open && h.state().type_search.is_none());
 }

@@ -851,7 +851,12 @@ impl TermSession {
             }
             let to_global = ui.ctx().layer_transform_to_global(ui.layer_id()).unwrap_or_default();
             ui.ctx().output_mut(|out| {
-                out.ime = Some(egui::output::IMEOutput { rect: to_global * ime_rect, cursor_rect: to_global * ime_rect, should_interrupt_composition: false })
+                out.ime = Some(egui::output::IMEOutput {
+                    purpose: egui::IMEPurpose::Terminal,
+                    rect: to_global * ime_rect,
+                    cursor_rect: to_global * ime_rect,
+                    should_interrupt_composition: false,
+                })
             });
         }
 

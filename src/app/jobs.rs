@@ -402,7 +402,7 @@ impl App {
     }
 
     pub(super) fn handle_dropped_files(&mut self, ctx: &egui::Context) {
-        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
         if dropped.is_empty() {
             return;
         }
