@@ -776,8 +776,12 @@ impl TermSession {
         // system font that has them (the frame is repainted once one is added).
         if !others.is_empty() {
             let bold = self.bold_font.clone();
-            let missing: Vec<char> =
-                ui.fonts_mut(|f| others.into_iter().filter(|&c| !c.is_whitespace() && (!f.has_glyph(&font, c) || !f.has_glyph(&bold, c))).collect());
+            let missing: Vec<char> = ui.fonts_mut(|f| {
+                others
+                    .into_iter()
+                    .filter(|&c| !c.is_whitespace() && (!crate::style::fonts::draws(f, &font, c) || !crate::style::fonts::draws(f, &bold, c)))
+                    .collect()
+            });
             if !missing.is_empty() {
                 crate::style::fontfallback::request(ui.ctx(), missing);
             }
@@ -846,7 +850,9 @@ impl TermSession {
                 painter.rect_filled(Rect::from_min_size(pos2(ime_rect.right(), at.y), vec2(2.0, chh)), 0.0, pal.cursor);
             }
             let to_global = ui.ctx().layer_transform_to_global(ui.layer_id()).unwrap_or_default();
-            ui.ctx().output_mut(|out| out.ime = Some(egui::output::IMEOutput { rect: to_global * ime_rect, cursor_rect: to_global * ime_rect }));
+            ui.ctx().output_mut(|out| {
+                out.ime = Some(egui::output::IMEOutput { rect: to_global * ime_rect, cursor_rect: to_global * ime_rect, should_interrupt_composition: false })
+            });
         }
 
         // Scrollback position indicator.
@@ -1053,8 +1059,9 @@ impl TermSession {
                     self.write(t.into_bytes());
                     typed = true;
                 }
-                egui::Event::Ime(egui::ImeEvent::Preedit(t)) => {
-                    self.preedit = t;
+                // An empty one: the input method was dismissed.
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                    self.preedit = text;
                     typed = true;
                 }
                 egui::Event::Ime(egui::ImeEvent::Commit(t)) => {
@@ -1065,7 +1072,6 @@ impl TermSession {
                         typed = true;
                     }
                 }
-                egui::Event::Ime(egui::ImeEvent::Disabled) => self.preedit.clear(),
                 // Keys the input method also handles while it composes (like egui's text edit).
                 egui::Event::Key { repeat: true, .. }
                 | egui::Event::Key { key: Key::Backspace | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, .. }

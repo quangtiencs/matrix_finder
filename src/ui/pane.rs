@@ -2819,7 +2819,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     } else if let Some(off) = tab.force_scroll.take() {
         sa = sa.vertical_scroll_offset(off);
     }
-    let sa = sa.scroll_source(egui::scroll_area::ScrollSource { drag: false, ..egui::scroll_area::ScrollSource::ALL });
+    let sa = sa.scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..egui::scroll_area::ScrollSource::ALL });
     let payload = drag_payload(ui.ctx());
     let mut row_target: Option<(Location, String)> = None;
     let mut drag_started: Option<(usize, Vec<Entry>)> = None;

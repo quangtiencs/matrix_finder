@@ -1478,18 +1478,15 @@ sys.stdout.write("[<u[?1049l")
     // An input method (Telex here): what it composes is only drawn, with the input
     // method's window placed at the cursor; what it commits is typed.
     let start = read().len();
-    for e in [
-        Event::Ime(egui::ImeEvent::Enabled),
-        Event::Ime(egui::ImeEvent::Preedit("vie".into())),
-        Event::Text("x".into()),
-        Event::Ime(egui::ImeEvent::Preedit("việ".into())),
-    ] {
+    let preedit = |t: &str| Event::Ime(egui::ImeEvent::Preedit { text: t.into(), active_range_chars: None });
+    for e in [preedit("vie"), Event::Text("x".into()), preedit("việ")] {
         push(&mut h, e);
         settle(&mut h, 1);
     }
     let ime = h.output().platform_output.ime.expect("IME allowed in the terminal");
     assert!(ime.rect.width() > 0.0 && ime.rect.width() < W / 2.0, "{ime:?}");
-    for e in [Event::Ime(egui::ImeEvent::Disabled), Event::Ime(egui::ImeEvent::Commit("việt".into())), Event::Ime(egui::ImeEvent::Disabled)] {
+    // As winit ends a composition: the preedit emptied, then the commit.
+    for e in [preedit(""), Event::Ime(egui::ImeEvent::Commit("việt".into()))] {
         push(&mut h, e);
     }
     settle(&mut h, 2);
@@ -5024,7 +5021,7 @@ fn narrow_sidebar_leaves_no_band() {
             h.set_size(egui::vec2(w, H));
             settle(&mut h, 4);
             let img = h.render().unwrap();
-            let r = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("sidebar")).unwrap().rect;
+            let r = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("sidebar")).unwrap().outer_rect;
             let panel = h.state().theme.panel;
             let px = img.get_pixel(r.right() as u32 - 2, (H - 120.0) as u32).0;
             assert_eq!([px[0], px[1], px[2]], [panel.r(), panel.g(), panel.b()], "{chrome} sidebar {sidebar} window {w}: painted to its edge ({r:?})");

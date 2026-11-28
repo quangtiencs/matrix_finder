@@ -1473,7 +1473,7 @@ impl eframe::App for App {
                 .exact_size(self.cfg.sidebar_width.min((ctx.content_rect().width() * 0.26).max(160.0)).max(self.sidebar_min).round())
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: 8, right: 8, top: self.chrome.top_margin(), bottom: 6 }))
-                .show_inside(ui, |ui| {
+                .show(ui, |ui| {
                     // The gap on the right edge is the resize grip (no full-height line).
                     let inner = ui.max_rect();
                     let grip = egui::Rect::from_min_max(egui::pos2(inner.right() + 1.0, inner.top()), egui::pos2(inner.right() + 8.0, inner.bottom()));
@@ -1511,11 +1511,11 @@ impl eframe::App for App {
                 top: self.chrome.top_margin(),
                 bottom: 4,
             }))
-            .show_inside(ui, |ui| self.top_bar(ui));
+            .show(ui, |ui| self.top_bar(ui));
         egui::Panel::bottom("status")
             .show_separator_line(false)
             .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: 6, right: 10, top: 2, bottom: 4 }))
-            .show_inside(ui, |ui| self.status_bar(ui));
+            .show(ui, |ui| self.status_bar(ui));
         // One Quick View for all panes, docked at the right under the top bar.
         // It is hidden while a terminal tab is active (the setting is kept).
         let shown = self.panes[self.active.min(self.panes.len() - 1)].tab();
@@ -1530,7 +1530,7 @@ impl eframe::App for App {
                 .exact_size(w)
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: 10, right: 10, top: 4, bottom: 2 }))
-                .show_inside(ui, |ui| {
+                .show(ui, |ui| {
                     // The 10 px gap on the left edge is the resize grip.
                     let inner = ui.max_rect();
                     let grip = egui::Rect::from_min_max(egui::pos2(inner.left() - 10.0, inner.top()), egui::pos2(inner.left(), inner.bottom()));
@@ -1557,7 +1557,7 @@ impl eframe::App for App {
         let left = if self.cfg.show_sidebar { 0 } else { 10 };
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left, right: if show_quick { 0 } else { 10 }, top: 4, bottom: 2 }))
-            .show_inside(ui, |ui| self.panes_area(ui));
+            .show(ui, |ui| self.panes_area(ui));
 
         // Viewer window (Shift+F3)
         if self.viewer.is_some() {

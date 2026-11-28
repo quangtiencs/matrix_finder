@@ -1201,6 +1201,8 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
     ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
     let mut style = (*ctx.global_style()).clone();
     style.visuals = v;
+    // Round slider handles, as egui drew them until 0.35.
+    style.visuals.handle_shape = egui::style::HandleShape::Circle;
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 4.0);
     style.spacing.interact_size = egui::vec2(24.0, 26.0);
@@ -1212,6 +1214,10 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
     style.spacing.scroll.floating = true;
     // No fading at the edges of scrolled lists: the file lists paint their own background.
     style.spacing.scroll.fade.strength = 0.0;
+    // Snappy, as egui was until 0.35 (it now takes 0.2 s); a test harness turns it off.
+    if style.animation_time > 0.0 {
+        style.animation_time = 1.0 / 12.0;
+    }
     style.text_styles = [
         // Default text size: 14 px (Settings → UI scale zooms everything).
         (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
