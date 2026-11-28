@@ -1201,7 +1201,7 @@ impl App {
                 settings_section(ui, th, &t("Built-in terminal"), &t("Opens in a tab. Ctrl+Shift+C / Ctrl+Shift+V copy and paste, Ctrl+Click opens links."));
                 card(ui, th, |ui| {
                     row(ui, th, &t("Font"), "", |ui| {
-                        ui.label(format!("{} · {:.1} px", fonts::label(&self.cfg.term_font, &fonts::TERM_BUILTIN), self.cfg.term_font_size));
+                        ui.label(format!("{} · {:.0} px", fonts::label(&self.cfg.term_font, &fonts::TERM_BUILTIN), self.cfg.term_font_size));
                         if ui.button(t("Change…")).clicked() {
                             self.settings_page = SettingsPage::Fonts;
                         }
@@ -1372,7 +1372,7 @@ impl App {
             row_line(ui, th);
             row(ui, th, &t("Size"), "", |ui| {
                 ui.spacing_mut().slider_width = 200.0;
-                changed |= ui.add(egui::Slider::new(&mut self.cfg.ui_font_size, fonts::UI_SIZES).step_by(0.5).fixed_decimals(1).suffix(" px")).changed();
+                changed |= ui.add(egui::Slider::new(&mut self.cfg.ui_font_size, fonts::UI_SIZES).step_by(1.0).fixed_decimals(0).suffix(" px")).changed();
                 if self.cfg.ui_font_size != fonts::DEFAULT_UI_SIZE && ui.small_button(t("Reset")).clicked() {
                     self.cfg.ui_font_size = fonts::DEFAULT_UI_SIZE;
                     changed = true;
@@ -1446,7 +1446,7 @@ impl App {
             row_line(ui, th);
             row(ui, th, &t("Size"), "", |ui| {
                 ui.spacing_mut().slider_width = 200.0;
-                changed |= ui.add(egui::Slider::new(&mut self.cfg.term_font_size, fonts::TERM_SIZES).step_by(0.5).fixed_decimals(1).suffix(" px")).changed();
+                changed |= ui.add(egui::Slider::new(&mut self.cfg.term_font_size, fonts::TERM_SIZES).step_by(1.0).fixed_decimals(0).suffix(" px")).changed();
                 if self.cfg.term_font_size != fonts::DEFAULT_TERM_SIZE && ui.small_button(t("Reset")).clicked() {
                     self.cfg.term_font_size = fonts::DEFAULT_TERM_SIZE;
                     changed = true;
