@@ -23,7 +23,7 @@ pub enum Set {
 type Cache = HashMap<(Set, &'static str, u32), Option<egui::TextureHandle>>;
 
 fn cache_id() -> egui::Id {
-    egui::Id::new("bundled-icon-textures")
+    egui::Id::unique("bundled-icon-textures")
 }
 
 fn find(table: &'static [(&'static str, &'static str)], key: &str) -> Option<&'static str> {
@@ -150,7 +150,7 @@ fn texture(ctx: &egui::Context, set: Set, icon: &str, px: u32) -> Tex {
     }
     let frame = ctx.cumulative_pass_nr();
     let allowed = ctx.data_mut(|d| {
-        let b = d.get_temp_mut_or_default::<Budget>(egui::Id::new("bundled-icon-budget"));
+        let b = d.get_temp_mut_or_default::<Budget>(egui::Id::unique("bundled-icon-budget"));
         if b.0 != frame {
             *b = Budget(frame, 0);
         }
@@ -238,12 +238,14 @@ mod tests {
         let r = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(58.0, 58.0));
         let mut done = 0;
         for _ in 0..100 {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                let p = ctx.layer_painter(egui::LayerId::background());
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                let p = ui.ctx().layer_painter(egui::LayerId::background());
                 for n in &names {
                     assert!(draw(Set::Material, &p, r, n, false, "", th), "drawn or waiting its turn");
                 }
-            });
+            })
+            .textures_delta
+            .clear();
             let now = drawn(&ctx, Set::Material).len();
             assert!(now - done <= PER_FRAME, "at most {PER_FRAME} new icons a frame, not {}", now - done);
             done = now;

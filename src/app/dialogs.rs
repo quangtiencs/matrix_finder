@@ -106,7 +106,11 @@ impl App {
         if self.window_radius <= 0.0 {
             return dim;
         }
-        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("rounded-backdrop"))).rect_filled(ctx.screen_rect(), self.window_radius, dim);
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique("rounded-backdrop"))).rect_filled(
+            ctx.viewport_rect(),
+            self.window_radius,
+            dim,
+        );
         egui::Color32::TRANSPARENT
     }
 
@@ -192,7 +196,7 @@ impl App {
         let title = t("Update available");
         let chrome = &self.chrome;
         chrome
-            .dialog_window(ctx, &title, egui::Id::new("update"))
+            .dialog_window(ctx, &title, egui::Id::unique("update"))
             .open(&mut open)
             .resizable(false)
             .default_width(460.0)
@@ -273,7 +277,7 @@ impl App {
         let mut keep = false;
         let mut stop = false;
         let edited: Vec<String> = self.temp_copies.unsaved().map(|c| c.name.clone()).collect();
-        egui::Modal::new(egui::Id::new("quit-confirm")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
+        egui::Modal::new(egui::Id::unique("quit-confirm")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.heading(if n > 0 {
                 t("Quit while tasks are running?")
@@ -366,7 +370,7 @@ impl App {
         let mut confirmed = false;
         // The folder field of Copy / Move, Compress and Extract: its suggestions and tree
         // take their keys before the dialog does.
-        let dst_id = egui::Id::new("dialog-dst");
+        let dst_id = egui::Id::unique("dialog-dst");
         if let Dialog::Transfer { dst, .. } | Dialog::Pack { dest_dir: dst, .. } | Dialog::Unpack { dest: dst, .. } = &mut dialog {
             self.dialog_path.keys(ctx, dst, dst_id);
         }
@@ -387,7 +391,7 @@ impl App {
             _ => (Vec::new(), Vec::new()),
         };
         let focus = std::mem::take(&mut self.dialog_focus);
-        let modal = egui::Modal::new(egui::Id::new("dialog")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("dialog")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
             ui.set_min_width(440.0);
             let enter = ui.input(|i| i.key_pressed(Key::Enter));
             // Enter confirms from a text field, or when nothing has the keyboard. On a button
@@ -410,7 +414,7 @@ impl App {
                     ui.label(RichText::new(t("To:")).strong());
                     if !choices.is_empty() {
                         // Scrolls in a window too low for every choice, so the buttons stay in it.
-                        let max_h = (ctx.screen_rect().height() - 230.0).max(140.0);
+                        let max_h = (ctx.content_rect().height() - 230.0).max(140.0);
                         egui::ScrollArea::vertical().id_salt("transfer-choices").max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
                             // A split tab: one list where exactly one place is chosen, a window
                             // or "Another folder"; the address shows only for the latter.
@@ -447,7 +451,7 @@ impl App {
                                                 let o = crate::ui::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: ui.available_width(), hint: Some(t("Type a path, or pick one from the folder tree")) };
                                                 let r = self.dialog_path.show(ui, dst, dst_id, o, th);
                                                 // The tree in the choice, under its address: what a small window has room for.
-                                                let max_h = (ui.ctx().screen_rect().height() - 470.0).clamp(96.0, 220.0);
+                                                let max_h = (ui.ctx().content_rect().height() - 470.0).clamp(96.0, 220.0);
                                                 self.transfer_tree(ui, th, dst, base.as_deref(), home.as_deref(), r.changed(), dst_id, max_h);
                                                 r
                                             })
@@ -473,7 +477,7 @@ impl App {
                         let r = self.dialog_path.show(ui, dst, dst_id, o, th);
                         focus_edit(&r);
                         // One window: the folder tree right under the address, following it.
-                        let max_h = (ctx.screen_rect().height() - 300.0).clamp(120.0, 264.0);
+                        let max_h = (ctx.content_rect().height() - 300.0).clamp(120.0, 264.0);
                         self.transfer_tree(ui, th, dst, base.as_deref(), home.as_deref(), r.changed(), dst_id, max_h);
                     }
                     ui.horizontal(|ui| {
@@ -550,9 +554,9 @@ impl App {
                     ui.horizontal(|ui| {
                         row_label(ui, t("Name"));
                         let ext = format!(".{}", format.extension());
-                        let ext_w = ui.fonts(|f| f.layout_no_wrap(ext.clone(), egui::FontId::proportional(14.0), th.weak).size().x);
+                        let ext_w = ui.fonts_mut(|f| f.layout_no_wrap(ext.clone(), egui::FontId::proportional(14.0), th.weak).size().x);
                         let w = ui.available_width() - ext_w - ui.spacing().item_spacing.x - 8.0;
-                        let r = ui.add(egui::TextEdit::singleline(name).id(egui::Id::new("pack-name")).margin(egui::Margin::symmetric(4, 2)).desired_width(w));
+                        let r = ui.add(egui::TextEdit::singleline(name).id(egui::Id::unique("pack-name")).margin(egui::Margin::symmetric(4, 2)).desired_width(w));
                         focus_edit(&r);
                         // A format typed at the end of the name is chosen.
                         if r.changed() {
@@ -1118,7 +1122,7 @@ impl App {
         let title = t("Reset to defaults");
         let chrome = self.chrome.clone();
         chrome
-            .dialog_window(ctx, &title, egui::Id::new("settings-reset"))
+            .dialog_window(ctx, &title, egui::Id::unique("settings-reset"))
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .order(egui::Order::Foreground)
@@ -1164,7 +1168,7 @@ impl App {
         let mut go_to_settings = false;
         let title = t("Keyboard shortcuts");
         let chrome = self.chrome.clone();
-        chrome.dialog_window(ctx, &title, egui::Id::new("help")).open(&mut open).default_width(620.0).show(ctx, |ui| {
+        chrome.dialog_window(ctx, &title, egui::Id::unique("help")).open(&mut open).default_width(620.0).show(ctx, |ui| {
             if chrome.dialog_title(ui, self.theme, &title) {
                 self.show_help = false;
             }
@@ -1227,7 +1231,7 @@ impl App {
         let title = t("About");
         let chrome = self.chrome.clone();
         let mut close = false;
-        chrome.dialog_window(ctx, &title, egui::Id::new("about")).open(&mut open).resizable(false).default_width(420.0).show(ctx, |ui| {
+        chrome.dialog_window(ctx, &title, egui::Id::unique("about")).open(&mut open).resizable(false).default_width(420.0).show(ctx, |ui| {
             close |= chrome.dialog_title(ui, self.theme, &title);
             ui.vertical_centered(|ui| {
                 if let Some(tex) = &self.logo_large {
@@ -1252,8 +1256,9 @@ impl App {
             ui.vertical_centered(|ui| {
                 ui.horizontal(|ui| {
                     // Centre the credit line.
-                    let w =
-                        ui.fonts(|f| f.layout_no_wrap(format!("{} quangtiencs.com", t("Made by")), egui::FontId::proportional(14.0), self.theme.text).size().x);
+                    let w = ui.fonts_mut(|f| {
+                        f.layout_no_wrap(format!("{} quangtiencs.com", t("Made by")), egui::FontId::proportional(14.0), self.theme.text).size().x
+                    });
                     ui.add_space(((ui.available_width() - w) / 2.0 - 4.0).max(0.0));
                     ui.label(RichText::new(t("Made by")).color(self.theme.weak));
                     ui.hyperlink_to(RichText::new("quangtiencs.com").color(self.theme.accent), "https://quangtiencs.com");
@@ -1332,7 +1337,7 @@ fn other_folder_head(ui: &mut egui::Ui, th: &Theme, chosen: bool) -> egui::Respo
             th.weak,
         );
     }
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, chosen, &title));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, chosen, &title));
     resp
 }
 
@@ -1373,14 +1378,14 @@ fn dst_choice_row(ui: &mut egui::Ui, th: &Theme, c: &DstChoice, chosen: bool, th
         let font = if strong { egui::FontId::new(size, egui::FontFamily::Name("bold".into())) } else { egui::FontId::proportional(size) };
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
         job.wrap = egui::text::TextWrapping::truncate_at_width(w.max(10.0));
-        ui.fonts(|f| f.layout_job(job))
+        ui.fonts_mut(|f| f.layout_job(job))
     };
     let g1 = line(&title, 13.5, th.strong(), true);
     let g2 = line(&c.text, 11.5, th.weak, false);
     p.galley(egui::pos2(x, rect.top() + 6.0), g1, th.text);
     p.galley(egui::pos2(x, rect.top() + 25.0), g2, th.weak);
     let label = format!("{title}: {}", c.text);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, chosen, &label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, chosen, &label));
     resp.on_hover_text(c.text.clone())
 }
 
@@ -1403,7 +1408,7 @@ fn pack_dest(dir: &str, name: &str, fmt: ArchiveFormat, home: Option<&Path>, bas
 /// A format to choose in the Compress dialog.
 fn format_chip(ui: &mut egui::Ui, th: &Theme, f: ArchiveFormat, on: bool, enabled: bool) -> egui::Response {
     let text = format!(".{}", f.extension());
-    let g = ui.fonts(|fo| fo.layout_no_wrap(text.clone(), egui::FontId::proportional(13.0), th.text));
+    let g = ui.fonts_mut(|fo| fo.layout_no_wrap(text.clone(), egui::FontId::proportional(13.0), th.text));
     let size = egui::vec2(g.size().x + 20.0, 26.0);
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (r, resp) = ui.allocate_exact_size(size, sense);
@@ -1416,7 +1421,7 @@ fn format_chip(ui: &mut egui::Ui, th: &Theme, f: ArchiveFormat, on: bool, enable
     };
     ui.painter().rect(r, 13.0, fill, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, &text, egui::FontId::proportional(13.0), fg);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, &text));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, &text));
     if enabled {
         resp.on_hover_text(f.blurb())
     } else {

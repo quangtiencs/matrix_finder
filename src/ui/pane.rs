@@ -78,6 +78,7 @@ impl Drop for Search {
 }
 
 use crate::ui::search::SEARCH_LIMIT;
+use crate::ui::KeptContextMenu as _;
 
 /// Listing a folder that takes this long stops it from reloading by itself.
 const SLOW_LISTING: std::time::Duration = std::time::Duration::from_millis(500);
@@ -1702,7 +1703,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         };
         let room = ui.available_width() - 54.0 - extra - SIDE_PAD - 8.0;
         let cap = 300.0_f32.min((room - 80.0).max(60.0));
-        let chip_width = |text: &str| ui.fonts(|f| f.layout_no_wrap(text.to_string(), FontId::proportional(12.5), th.text).size().x) + 46.0;
+        let chip_width = |text: &str| ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), FontId::proportional(12.5), th.text).size().x) + 46.0;
         // Categories that do not fit: the first one and how many more, or only how many
         // (the tooltip names them), rather than "Spr…".
         if let (Some((text, false)), Some(q)) = (chip.as_mut(), tab.quick.as_ref()) {
@@ -1719,7 +1720,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         if let Some((text, recursive)) = chip {
             let (rect, resp) = ui.allocate_exact_size(vec2(chip_w, 24.0), Sense::click());
             let label = text.clone();
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
             let bad = !recursive && tab.filter.is_err();
             let base = if bad { th.danger } else { th.accent };
             let fill = base.gamma_multiply(if resp.hovered() { 0.32 } else { 0.2 });
@@ -1733,7 +1734,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
             let tw = rect.width() - 42.0;
             let mut job = egui::text::LayoutJob::simple_singleline(text, FontId::proportional(12.5), th.strong());
             job.wrap = egui::text::TextWrapping::truncate_at_width(tw.max(8.0));
-            let g = ui.fonts(|f| f.layout_job(job));
+            let g = ui.fonts_mut(|f| f.layout_job(job));
             ui.painter().galley(pos2(rect.left() + 26.0, rect.center().y - g.size().y / 2.0), g, th.strong());
             let x = Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), vec2(14.0, 14.0)).shrink(3.5);
             let s = egui::Stroke::new(1.4_f32, if resp.hovered() { th.strong() } else { th.weak });
@@ -1778,7 +1779,7 @@ fn folder_tree_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut 
     let shown = tab.tree.is_some();
     let accent = th.accent;
     let r = icons::icon_button(ui, 26.0, true, th, |p, r, col| foldertree::icon(p, r, if shown { accent } else { col })).on_hover_text(t("Folder tree"));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Folder tree")));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Folder tree")));
     if r.clicked() {
         tab.tree = match tab.tree {
             Some(_) => None,
@@ -1789,7 +1790,7 @@ fn folder_tree_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut 
         };
     }
     let Some(tree) = tab.tree.as_mut() else { return };
-    match foldertree::popup(ui, egui::Id::new(("folder-tree", tab.uid)), r.rect, tree, c.app_theme) {
+    match foldertree::popup(ui, egui::Id::unique(("folder-tree", tab.uid)), r.rect, tree, c.app_theme) {
         Popup::Picked(p) => {
             tab.tree = None;
             ev.push(PaneEvent::Navigate(Location::Local(p)));
@@ -1811,26 +1812,26 @@ fn quick_filter_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut
     let on = tab.quick.is_some() || finding;
     let accent = th.accent;
     let r = icons::icon_button(ui, 26.0, true, th, |p, r, col| icons::funnel(p, r, if on { accent } else { col }, on));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Find and filter")));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Find and filter")));
     let tip = match &tab.quick {
         Some(q) => format!("{}: {}", t("Quick filter"), q.label()),
         None => format!("{} ({})", t("Find and filter"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::Filter)),
     };
     let r = r.on_hover_text(tip);
-    let id = egui::Id::new(("quick-filter", tab.uid));
+    let id = egui::Id::unique(("quick-filter", tab.uid));
     let focus = id.with("focus");
     if std::mem::take(&mut tab.open_find) {
-        ui.memory_mut(|m| m.open_popup(id));
+        egui::Popup::open_id(ui.ctx(), id);
         ui.data_mut(|d| d.insert_temp(focus, true));
     } else if r.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(id));
+        egui::Popup::toggle_id(ui.ctx(), id);
         ui.data_mut(|d| d.insert_temp(focus, true));
     }
-    egui::popup::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+    crate::ui::popup_below(id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         menu_style(ui);
         ui.set_width(FIND_W);
         // One column: Find, then the kinds of files; it scrolls in a short window.
-        let room = (ui.ctx().screen_rect().bottom() - r.rect.bottom() - 40.0).max(160.0);
+        let room = (ui.ctx().content_rect().bottom() - r.rect.bottom() - 40.0).max(160.0);
         egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).auto_shrink([false, true]).show(ui, |ui| {
             find_column(ui, tab, c, ev, focus, finding, FIND_W);
             ui.separator();
@@ -1919,7 +1920,7 @@ fn find_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pan
         ev.push(PaneEvent::Find(d));
         // A search shows its progress in the window: out of the way.
         if find && heavy && !clear {
-            ui.memory_mut(|m| m.close_popup());
+            ui.close();
         }
     }
 }
@@ -1927,10 +1928,10 @@ fn find_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pan
 /// The Find panel's options, folded under one row that says which ones are changed:
 /// files and folders shown, and how names compare (case, `-` `_` and spaces).
 fn find_options(ui: &mut egui::Ui, d: &mut Find, th: &Theme, w: f32) {
-    let id = egui::Id::new("find-options-open");
+    let id = egui::Id::unique("find-options-open");
     let mut open = ui.data(|m| m.get_temp::<bool>(id)).unwrap_or(false);
     let (row, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, t("Options")));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, open, t("Options")));
     if resp.hovered() {
         ui.painter().rect_filled(row, 5.0, th.hover());
     }
@@ -1955,7 +1956,7 @@ fn find_options(ui: &mut egui::Ui, d: &mut Find, th: &Theme, w: f32) {
     if !changed.is_empty() {
         let mut job = egui::text::LayoutJob::simple_singleline(changed.join(" · "), FontId::proportional(11.5), th.accent);
         job.wrap = egui::text::TextWrapping::truncate_at_width((row.right() - label.right() - 16.0).max(10.0));
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.painter().galley(pos2(label.right() + 10.0, row.center().y - g.size().y / 2.0), g, th.accent);
     }
     if resp.on_hover_text(t("Files and folders shown, and how names compare")).clicked() {
@@ -2009,9 +2010,9 @@ fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pa
         let count: usize = exts.iter().map(|x| by_ext.get(x.as_str()).copied().unwrap_or(0)).sum();
         let at = pos2(left + (i % 2) as f32 * (col_w + gap), top + (i / 2) as f32 * 28.0);
         let row = Rect::from_min_size(at, vec2(col_w, 28.0));
-        let resp = ui.interact(row, egui::Id::new(("quick-kind", i)), Sense::click());
+        let resp = ui.interact(row, egui::Id::unique(("quick-kind", i)), Sense::click());
         let sel = tab.quick.as_ref().is_some_and(|a| a.has(&q.name));
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, sel, t(&q.name)));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, sel, t(&q.name)));
         menu_row_fill(ui, row, th, sel, resp.hovered());
         // The tick box.
         let bx = Rect::from_center_size(pos2(row.left() + 13.0, row.center().y), vec2(15.0, 15.0));
@@ -2033,7 +2034,7 @@ fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pa
         };
         let mut job = egui::text::LayoutJob::simple_singleline(q.display_name(), FontId::proportional(13.5), th.text);
         job.wrap = egui::text::TextWrapping::truncate_at_width((row.width() - 52.0 - 8.0 - count_w).max(10.0));
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.painter().galley(pos2(row.left() + 52.0, row.center().y - g.size().y / 2.0), g, th.text);
         let shown: Vec<String> = exts.iter().take(14).map(|e| format!(".{e}")).collect();
         let more = if exts.len() > 14 { " …" } else { "" };
@@ -2050,7 +2051,7 @@ fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pa
     // Unticking turns a kind off; the chip's × in the title row turns them all off.
     if ui.button(t("Edit quick filters…")).clicked() {
         ev.push(PaneEvent::EditQuickFilters);
-        ui.memory_mut(|m| m.close_popup());
+        ui.close();
     }
 }
 
@@ -2135,9 +2136,9 @@ fn window_buttons(ui: &mut egui::Ui, terminal: bool, c: &PaneUiCtx, ev: &mut Vec
     let sr = icons::icon_button(ui, 26.0, true, th, icons::mi_split).on_hover_text(t("Split window"));
     let id = sr.id.with("split-menu");
     if sr.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(id));
+        egui::Popup::toggle_id(ui.ctx(), id);
     }
-    egui::popup::popup_below_widget(ui, id, &sr, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+    crate::ui::popup_below(id, &sr, egui::PopupCloseBehavior::CloseOnClick, |ui| {
         ui.set_min_width(200.0);
         menu_style(ui);
         let mut out = None;
@@ -2196,16 +2197,16 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
         let (lr, lresp) = ui.allocate_exact_size(vec2(room, 26.0), Sense::click());
         let name = term.activity_label();
         let bold = FontId::new(13.0, egui::FontFamily::Name("bold".into()));
-        let name_g = ui.fonts(|f| f.layout_no_wrap(name, bold.clone(), th.strong()));
+        let name_g = ui.fonts_mut(|f| f.layout_no_wrap(name, bold.clone(), th.strong()));
         let name_w = name_g.size().x.min(room * 0.45);
         let mut job = egui::text::LayoutJob::simple_singleline(term.activity_label(), bold, if c.active { th.strong() } else { th.text });
         job.wrap = egui::text::TextWrapping::truncate_at_width(name_w + 1.0);
-        let name_g = ui.fonts(|f| f.layout_job(job));
+        let name_g = ui.fonts_mut(|f| f.layout_job(job));
         let p = ui.painter();
         p.galley(pos2(lr.left(), lr.center().y - name_g.size().y / 2.0), name_g, th.text);
         let mut x = lr.left() + name_w + 10.0;
         if let Some(code) = exited {
-            let g = ui.fonts(|f| f.layout_no_wrap(format!("{} ({code})", t("exited")), FontId::proportional(12.5), th.danger));
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(format!("{} ({code})", t("exited")), FontId::proportional(12.5), th.danger));
             p.galley(pos2(x, lr.center().y - g.size().y / 2.0), g.clone(), th.danger);
             x += g.size().x + 10.0;
         }
@@ -2216,25 +2217,25 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
         let cands = crate::util::short_path_candidates(&full);
         let pick = cands
             .iter()
-            .find(|cand| ui.fonts(|f| f.layout_no_wrap((*cand).clone(), font.clone(), th.weak).size().x) <= path_room)
+            .find(|cand| ui.fonts_mut(|f| f.layout_no_wrap((*cand).clone(), font.clone(), th.weak).size().x) <= path_room)
             .unwrap_or_else(|| cands.last().unwrap())
             .clone();
         let mut job = egui::text::LayoutJob::simple_singleline(pick, font, th.weak);
         job.wrap = egui::text::TextWrapping::truncate_at_width(path_room.max(4.0));
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         p.galley(pos2(x, lr.center().y - g.size().y / 2.0), g, th.weak);
         if lresp.clicked() {
             ev.push(PaneEvent::Focus);
         }
         let cwd = term.cwd.clone();
-        lresp.on_hover_text(cwd.display().to_string()).context_menu(|ui| {
+        lresp.on_hover_text(cwd.display().to_string()).kept_context_menu(|ui| {
             if ui.button(t("Copy path")).clicked() {
                 ui.ctx().copy_text(cwd.display().to_string());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button(t("Open folder in a file tab")).clicked() {
                 out.open_dir = Some(cwd.clone());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
 
@@ -2244,7 +2245,7 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
             use crate::system::agents::AgentAct;
             let idle = term.is_idle();
             let r = icons::icon_button(ui, 26.0, idle, th, |p, r, col| crate::system::agents::paint_logo(p, r.shrink(0.5), a, col));
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, idle, a.name));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, idle, a.name));
             let r = r.on_hover_ui(|ui| {
                 ui.label(egui::RichText::new(a.name).strong());
                 ui.label(if idle { t("Start it in this terminal") } else { t("Available when the terminal is idle (no program running)") });
@@ -2252,24 +2253,24 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
             if r.clicked() && idle {
                 ev.push(PaneEvent::Agent(AgentAct::Run(a.id)));
             }
-            r.context_menu(|ui| {
+            r.kept_context_menu(|ui| {
                 if c.agents.len() > 1 {
                     for f in c.agents {
                         let Some(other) = crate::system::agents::get(f.id) else { continue };
                         if ui.radio(other.id == a.id, other.name).clicked() {
                             ev.push(PaneEvent::Agent(AgentAct::Choose(other.id)));
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                     ui.separator();
                 }
                 if ui.button(t("Hide the AI button")).clicked() {
                     ev.push(PaneEvent::Agent(AgentAct::HideButton));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(t("AI button settings…")).clicked() {
                     ev.push(PaneEvent::Agent(AgentAct::Settings));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
             ui.add_space(8.0);
@@ -2281,7 +2282,7 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
                 _ => out.open_dir = Some(term.cwd.clone()),
             }
         }
-        let copied_key = egui::Id::new(("term-path-copied", tab.uid));
+        let copied_key = egui::Id::unique(("term-path-copied", tab.uid));
         let now = ui.input(|i| i.time);
         let copied = ui.ctx().data(|d| d.get_temp::<f64>(copied_key)).is_some_and(|at| now - at < 1.2);
         let ok_col = th.accent;
@@ -2344,22 +2345,22 @@ fn du_header(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneE
         let summary = du.summary(&t);
         let bold = FontId::new(13.0, egui::FontFamily::Name("bold".into()));
         let small = FontId::proportional(12.5);
-        let sum_w = ui.fonts(|f| f.layout_no_wrap(summary.clone(), small.clone(), th.weak).size().x).min(room * 0.5);
+        let sum_w = ui.fonts_mut(|f| f.layout_no_wrap(summary.clone(), small.clone(), th.weak).size().x).min(room * 0.5);
         let path_room = (room - sum_w - 12.0).max(20.0);
         let cands = crate::util::short_path_candidates(&full);
         let pick = cands
             .iter()
-            .find(|s| ui.fonts(|f| f.layout_no_wrap((*s).clone(), bold.clone(), th.strong()).size().x) <= path_room)
+            .find(|s| ui.fonts_mut(|f| f.layout_no_wrap((*s).clone(), bold.clone(), th.strong()).size().x) <= path_room)
             .unwrap_or_else(|| cands.last().unwrap())
             .clone();
         let mut job = egui::text::LayoutJob::simple_singleline(pick, bold, th.strong());
         job.wrap = egui::text::TextWrapping::truncate_at_width(path_room);
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         let gw = g.size().x;
         ui.painter().galley(pos2(lr.left(), lr.center().y - g.size().y / 2.0), g, th.strong());
         let mut job = egui::text::LayoutJob::simple_singleline(summary, small, th.weak);
         job.wrap = egui::text::TextWrapping::truncate_at_width(sum_w + 1.0);
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.painter().galley(pos2(lr.left() + gw + 12.0, lr.center().y - g.size().y / 2.0), g, th.weak);
         if lresp.clicked() {
             ev.push(PaneEvent::Focus);
@@ -2469,7 +2470,7 @@ fn crumb_label(l: &Location, c: &PaneUiCtx) -> String {
 fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
     let th = c.theme;
     let width = ui.available_width();
-    let path_id = egui::Id::new(("path", side));
+    let path_id = egui::Id::unique(("path", side));
     if tab.focus_path {
         tab.editing_path = true;
     }
@@ -2496,7 +2497,7 @@ fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
     let widths: Vec<f32> = segs
         .iter()
         .enumerate()
-        .map(|(i, (l, _))| ui.fonts(|f| f.layout_no_wrap(l.clone(), if i == last { bold.clone() } else { font.clone() }, th.text).size().x) + 12.0)
+        .map(|(i, (l, _))| ui.fonts_mut(|f| f.layout_no_wrap(l.clone(), if i == last { bold.clone() } else { font.clone() }, th.text).size().x) + 12.0)
         .collect();
     let sep_w = 12.0;
     // The "…" button for the folders left out, and its separator.
@@ -2720,7 +2721,7 @@ pub fn suggestion_popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, comp: &mu
 fn fit_text(ui: &egui::Ui, text: &str, font: FontId, color: Color32, width: f32) -> (Arc<egui::Galley>, bool) {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(4.0));
-    let galley = ui.fonts(|f| f.layout_job(job));
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
     let cut = galley.elided;
     (galley, cut)
 }
@@ -2764,7 +2765,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     };
     for (key, label, x, w, align) in &cols {
         let r = Rect::from_min_size(pos2(hrect.left() + x, hrect.top()), vec2(*w, hrect.height()));
-        let resp = ui.interact(r, egui::Id::new(("hdr", side, *key as u8)), Sense::click());
+        let resp = ui.interact(r, egui::Id::unique(("hdr", side, *key as u8)), Sense::click());
         let sorted = tab.sort == *key;
         let arrow = if sorted {
             if tab.desc {
@@ -2818,7 +2819,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     } else if let Some(off) = tab.force_scroll.take() {
         sa = sa.vertical_scroll_offset(off);
     }
-    let sa = sa.drag_to_scroll(false);
+    let sa = sa.scroll_source(egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..egui::scroll_area::ScrollSource::ALL });
     let payload = drag_payload(ui.ctx());
     let mut row_target: Option<(Location, String)> = None;
     let mut drag_started: Option<(usize, Vec<Entry>)> = None;
@@ -2925,7 +2926,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 );
                 job.wrap = egui::text::TextWrapping { max_width: cell_w - 14.0, max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
                 job.halign = egui::Align::Center;
-                let galley = ui.fonts(|f| f.layout_job(job));
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
                 p.galley(pos2(rect.center().x, rect.top() + 68.0), galley, name_color);
                 if !e.is_parent && ui.rect_contains_pointer(rect) && payload.is_none() {
                     resp.clone().on_hover_text(format!("{}\n{} · {}", e.name, size_txt, format_time(e.modified)));
@@ -3005,7 +3006,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 unmark = !e.is_parent;
             }
             let (entry_is_dir, entry_is_parent) = (e.is_dir, e.is_parent);
-            resp.context_menu(|ui| {
+            resp.kept_context_menu(|ui| {
                 menu_open = true;
                 // The local folders the menu acts on: the marked ones when this row is
                 // one of them, else this row (a right-click there unmarks the others).
@@ -3020,7 +3021,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 };
                 if let Some(cmd) = context_menu(ui, entry_is_dir, entry_is_parent, is_arch, is_sum, &dirs, c) {
                     context = Some((row, cmd));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
         };
@@ -3034,7 +3035,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                             break;
                         }
                         let rect = Rect::from_min_size(pos2(line_rect.left() + SIDE_PAD + k as f32 * cell_w, line_rect.top()), vec2(cell_w, CELL_H));
-                        let resp = ui.interact(rect, egui::Id::new(("cell", tab_ro.uid, row)), Sense::click_and_drag());
+                        let resp = ui.interact(rect, egui::Id::unique(("cell", tab_ro.uid, row)), Sense::click_and_drag());
                         item(ui, row, rect, resp);
                     }
                     // The empty cells after the last icon are background, as below it.
@@ -3042,15 +3043,15 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     if used < per_line {
                         let x0 = line_rect.left() + SIDE_PAD + used as f32 * cell_w;
                         let rest = Rect::from_min_max(pos2(x0, line_rect.top()), pos2(line_rect.right(), line_rect.bottom()));
-                        let bg = ui.interact(rest, egui::Id::new(("cells-rest", tab_ro.uid)), Sense::click());
+                        let bg = ui.interact(rest, egui::Id::unique(("cells-rest", tab_ro.uid)), Sense::click());
                         if bg.clicked() {
                             ev.push(PaneEvent::Focus);
                         }
-                        bg.context_menu(|ui| {
+                        bg.kept_context_menu(|ui| {
                             bg_menu_open = true;
                             if let Some(cmd) = background_menu(ui, c) {
                                 bg_context = Some(cmd);
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                         });
                     }
@@ -3098,18 +3099,18 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 if bg.clicked() {
                     ev.push(PaneEvent::Focus);
                 }
-                bg.context_menu(|ui| {
+                bg.kept_context_menu(|ui| {
                     bg_menu_open = true;
                     if let Some(cmd) = background_menu(ui, c) {
                         bg_context = Some(cmd);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
             }
         })
     });
     if !tab.ensure_visible {
-        tab.scroll_offset = out.inner.state.offset.y;
+        tab.scroll_offset = out.inner.state.clamped_offset().y;
     }
     tab.menu_open = menu_open || bg_menu_open;
     if menu_for.is_some() {
@@ -3253,8 +3254,8 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
             let info = format!("{:.0}% · {left_txt} · {found} {} · {checked} {}", fraction * 100.0, t("found"), t("checked"));
             // Stop, at the right end.
             let stop = Rect::from_min_size(pos2(right - 64.0, frect.center().y - 10.0), vec2(64.0, 20.0));
-            let resp = ui.interact(stop, egui::Id::new(("stop-search", tab.uid)), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Stop")));
+            let resp = ui.interact(stop, egui::Id::unique(("stop-search", tab.uid)), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Stop")));
             p.rect(
                 stop,
                 5.0,
@@ -3340,7 +3341,7 @@ fn mitem(ui: &mut egui::Ui, th: &Theme, icon: MenuIcon, label: &str, key: &str, 
     let r = ui.add(egui::Button::new(menu_text(ui, label, col)).shortcut_text(egui::RichText::new(key).color(th.weak)));
     paint_menu_icon(ui, r.rect, icon, if danger { th.danger } else { th.weak });
     if r.clicked() {
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
         return true;
     }
     false

@@ -60,6 +60,9 @@ apt-get install -y -qq build-essential pkg-config libssl-dev ca-certificates cur
 if ! command -v cargo >/dev/null; then
     echo "==> Rust"
     curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null
+else
+    # The toolchain kept in the volume may be older than Cargo.toml's rust-version.
+    rustup update --no-self-update stable >/dev/null
 fi
 command -v cargo-deb >/dev/null || { echo "==> cargo-deb"; cargo install --locked cargo-deb; }
 command -v cargo-generate-rpm >/dev/null || { echo "==> cargo-generate-rpm"; cargo install --locked cargo-generate-rpm; }

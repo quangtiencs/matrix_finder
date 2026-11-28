@@ -25,7 +25,7 @@ do not edit it by hand.
 | Material Icon Theme (file and folder icons) | | MIT; logos among them are trademarks of their owners | Built into the program |
 | Fluent UI System Icons (Microsoft) | | MIT | Built into the program |
 | egui's default fonts (Hack, Ubuntu Light, Noto Emoji, emoji-icon-font) | | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 | Built into the program by the `epaint_default_fonts` crate |
-| 643 Rust crates | | see below | |
+| 644 Rust crates | | see below | |
 
 UnRAR's license allows its use to read RAR archives, but not to write a RAR-compatible archiver or
 to re-create the RAR compression algorithm. Matrix Finder only reads RAR archives.
@@ -36,13 +36,14 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 |---|---|---|
 | ab_glyph | 0.2.32 | Apache-2.0 |
 | ab_glyph_rasterizer | 0.1.10 | Apache-2.0 |
-| accesskit | 0.17.1 | MIT OR Apache-2.0 |
-| accesskit_atspi_common | 0.10.1 | MIT OR Apache-2.0 |
-| accesskit_consumer | 0.26.0 | MIT OR Apache-2.0 |
-| accesskit_macos | 0.18.1 | MIT OR Apache-2.0 |
-| accesskit_unix | 0.13.1 | MIT OR Apache-2.0 |
-| accesskit_windows | 0.24.1 | MIT OR Apache-2.0 |
-| accesskit_winit | 0.23.1 | Apache-2.0 |
+| accesskit | 0.25.2 | MIT OR Apache-2.0 |
+| accesskit_atspi_common | 0.21.1 | MIT OR Apache-2.0 |
+| accesskit_consumer | 0.39.2 | MIT OR Apache-2.0 |
+| accesskit_ios | 0.2.2 | MIT OR Apache-2.0 |
+| accesskit_macos | 0.27.2 | MIT OR Apache-2.0 |
+| accesskit_unix | 0.24.1 | MIT OR Apache-2.0 |
+| accesskit_windows | 0.35.2 | MIT OR Apache-2.0 |
+| accesskit_winit | 0.34.2 | Apache-2.0 |
 | adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
 | aes | 0.9.4 | MIT OR Apache-2.0 |
 | ahash | 0.8.12 | MIT OR Apache-2.0 |
@@ -86,10 +87,9 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | atoi | 2.0.0 | MIT |
 | atoi_simd | 0.18.1 | MIT OR Apache-2.0 |
 | atomic-waker | 1.1.2 | Apache-2.0 OR MIT |
-| atspi | 0.22.0 | Apache-2.0 OR MIT |
-| atspi-common | 0.6.0 | Apache-2.0 OR MIT |
-| atspi-connection | 0.6.0 | Apache-2.0 OR MIT |
-| atspi-proxies | 0.6.0 | Apache-2.0 OR MIT |
+| atspi | 0.29.0 | Apache-2.0 OR MIT |
+| atspi-common | 0.13.0 | Apache-2.0 OR MIT |
+| atspi-proxies | 0.13.0 | Apache-2.0 OR MIT |
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
 | base64 | 0.23.1 | MIT OR Apache-2.0 |
 | bigdecimal | 0.4.11 | MIT/Apache-2.0 |
@@ -182,22 +182,22 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | document-features | 0.2.12 | MIT OR Apache-2.0 |
 | downcast-rs | 1.2.1 | MIT/Apache-2.0 |
 | dpi | 0.1.2 | Apache-2.0 AND MIT |
-| ecolor | 0.31.1 | MIT OR Apache-2.0 |
-| eframe | 0.31.1 | MIT OR Apache-2.0 |
-| egui | 0.31.1 | MIT OR Apache-2.0 |
-| egui-winit | 0.31.1 | MIT OR Apache-2.0 |
-| egui_extras | 0.31.1 | MIT OR Apache-2.0 |
-| egui_glow | 0.31.1 | MIT OR Apache-2.0 |
+| ecolor | 0.37.0 | MIT OR Apache-2.0 |
+| eframe | 0.37.0 | MIT OR Apache-2.0 |
+| egui | 0.37.0 | MIT OR Apache-2.0 |
+| egui-winit | 0.37.0 | MIT OR Apache-2.0 |
+| egui_extras | 0.37.0 | MIT OR Apache-2.0 |
+| egui_glow | 0.37.0 | MIT OR Apache-2.0 |
 | either | 1.19.0 | MIT OR Apache-2.0 |
-| emath | 0.31.1 | MIT OR Apache-2.0 |
+| emath | 0.37.0 | MIT OR Apache-2.0 |
 | encoding_rs | 0.8.44 | (Apache-2.0 OR MIT) AND BSD-3-Clause |
 | endi | 1.1.1 | MIT |
-| enum-map | 2.7.3 | MIT OR Apache-2.0 |
-| enum-map-derive | 0.17.0 | MIT OR Apache-2.0 |
+| enum-map | 3.1.0 | MIT OR Apache-2.0 |
+| enum-map-derive | 1.0.1 | MIT OR Apache-2.0 |
 | enumflags2 | 0.7.12 | MIT OR Apache-2.0 |
 | enumflags2_derive | 0.7.12 | MIT OR Apache-2.0 |
-| epaint | 0.31.1 | MIT OR Apache-2.0 |
-| epaint_default_fonts | 0.31.1 | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 |
+| epaint | 0.37.0 | MIT OR Apache-2.0 |
+| epaint_default_fonts | 0.37.0 | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 |
 | equivalent | 1.0.3 | Apache-2.0 OR MIT |
 | errno | 0.3.14 | MIT OR Apache-2.0 |
 | error-code | 3.4.0 | BSL-1.0 |
@@ -212,9 +212,11 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | fastrand | 2.5.0 | Apache-2.0 OR MIT |
 | fax | 0.2.7 | MIT |
 | fdeflate | 0.3.7 | MIT OR Apache-2.0 |
+| fearless_simd | 0.4.1 | Apache-2.0 OR MIT |
 | fearless_simd | 0.7.0 | Apache-2.0 OR MIT |
 | fearless_simd | 1.2.0 | Apache-2.0 OR MIT |
 | filetime | 0.2.29 | MIT/Apache-2.0 |
+| fixedbitset | 0.5.9 | MIT OR Apache-2.0 |
 | flatbuffers | 25.12.19 | Apache-2.0 |
 | flate2 | 1.1.10 | MIT OR Apache-2.0 |
 | float-cmp | 0.9.0 | MIT |
@@ -233,7 +235,6 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | futures-io | 0.3.34 | MIT OR Apache-2.0 |
 | futures-lite | 2.6.1 | Apache-2.0 OR MIT |
 | futures-macro | 0.3.34 | MIT OR Apache-2.0 |
-| futures-sink | 0.3.34 | MIT OR Apache-2.0 |
 | futures-task | 0.3.34 | MIT OR Apache-2.0 |
 | futures-util | 0.3.34 | MIT OR Apache-2.0 |
 | generic-array | 0.14.7 | MIT |
@@ -244,7 +245,7 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | gif | 0.13.3 | MIT OR Apache-2.0 |
 | gif | 0.14.2 | MIT OR Apache-2.0 |
 | globset | 0.4.21 | Unlicense OR MIT |
-| glow | 0.16.0 | MIT OR Apache-2.0 OR Zlib |
+| glow | 0.17.0 | MIT OR Apache-2.0 OR Zlib |
 | glutin | 0.32.3 | Apache-2.0 |
 | glutin-winit | 0.5.0 | MIT |
 | glutin_egl_sys | 0.7.1 | Apache-2.0 |
@@ -252,6 +253,7 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | glutin_wgl_sys | 0.6.1 | Apache-2.0 |
 | guillotiere | 0.7.0 | MIT/Apache-2.0 |
 | half | 2.7.1 | MIT OR Apache-2.0 |
+| harfrust | 0.12.0 | MIT |
 | hashbrown | 0.15.5 | MIT OR Apache-2.0 |
 | hashbrown | 0.17.1 | MIT OR Apache-2.0 |
 | hashlink | 0.12.2 | MIT OR Apache-2.0 |
@@ -286,11 +288,11 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | image | 0.25.10 | MIT OR Apache-2.0 |
 | image-webp | 0.2.4 | MIT OR Apache-2.0 |
 | imagesize | 0.13.0 | MIT |
-| immutable-chunkmap | 2.1.5 | Apache-2.0 OR MIT |
 | indexmap | 2.14.2 | Apache-2.0 OR MIT |
 | inout | 0.2.5 | MIT OR Apache-2.0 |
 | is-docker | 0.2.0 | MIT |
 | is-wsl | 0.4.0 | MIT |
+| itertools | 0.15.0 | MIT OR Apache-2.0 |
 | itoa | 1.0.18 | MIT OR Apache-2.0 |
 | jiff | 1.0.0 | Unlicense OR MIT |
 | jiff-core | 1.0.0 | Unlicense OR MIT |
@@ -349,10 +351,10 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | ndk | 0.9.0 | MIT OR Apache-2.0 |
 | ndk-context | 0.1.1 | MIT OR Apache-2.0 |
 | ndk-sys | 0.6.0+11769913 | MIT OR Apache-2.0 |
-| nix | 0.29.0 | MIT |
 | nix | 0.32.0 | MIT |
 | nohash-hasher | 0.2.0 | Apache-2.0 OR MIT |
 | nom | 7.1.3 | MIT |
+| nom | 8.0.0 | MIT |
 | ntapi | 0.4.3 | Apache-2.0 OR MIT |
 | num-bigint | 0.4.8 | MIT OR Apache-2.0 |
 | num-bigint | 0.5.1 | MIT OR Apache-2.0 |
@@ -373,6 +375,7 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | objc2-foundation | 0.2.2 | MIT |
 | objc2-foundation | 0.3.2 | MIT |
 | objc2-ui-kit | 0.2.2 | MIT |
+| objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT |
 | ogg_pager | 0.7.2 | MIT OR Apache-2.0 |
 | oid-registry | 0.8.1 | MIT OR Apache-2.0 |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
@@ -381,6 +384,7 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | option-ext | 0.2.0 | MPL-2.0 |
 | orbclient | 0.3.55 | MIT |
 | ordered-stream | 0.2.0 | MIT OR Apache-2.0 |
+| os_pipe | 1.2.3 | MIT |
 | owned_ttf_parser | 0.25.1 | Apache-2.0 |
 | parking | 2.2.1 | Apache-2.0 OR MIT |
 | parking_lot | 0.12.5 | MIT OR Apache-2.0 |
@@ -390,10 +394,15 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | pbkdf2 | 0.13.0 | MIT OR Apache-2.0 |
 | peniko | 0.6.1 | Apache-2.0 OR MIT |
 | percent-encoding | 2.3.2 | MIT OR Apache-2.0 |
+| petgraph | 0.8.3 | MIT OR Apache-2.0 |
 | phf | 0.13.1 | MIT |
+| phf | 0.14.0 | MIT |
 | phf_generator | 0.13.1 | MIT |
+| phf_generator | 0.14.0 | MIT |
 | phf_macros | 0.13.1 | MIT |
+| phf_macros | 0.14.0 | MIT |
 | phf_shared | 0.13.1 | MIT |
+| phf_shared | 0.14.0 | MIT |
 | pic-scale | 0.7.12 | BSD-3-Clause OR Apache-2.0 |
 | pico-args | 0.5.0 | MIT |
 | pin-project | 1.1.13 | Apache-2.0 OR MIT |
@@ -422,21 +431,18 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | qoi | 0.4.1 | MIT/Apache-2.0 |
 | quad-rand | 0.2.3 | MIT |
 | quick-error | 2.0.1 | MIT/Apache-2.0 |
-| quick-xml | 0.30.0 | MIT |
 | quick-xml | 0.41.0 | MIT |
 | quick-xml | 0.42.0 | MIT |
 | quote | 1.0.47 | MIT OR Apache-2.0 |
 | r-efi | 5.3.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
 | r-efi | 6.0.0 | MIT OR Apache-2.0 OR LGPL-2.1-or-later |
-| rand | 0.8.8 | MIT OR Apache-2.0 |
 | rand | 0.9.5 | MIT OR Apache-2.0 |
-| rand_chacha | 0.3.1 | MIT OR Apache-2.0 |
 | rand_chacha | 0.9.0 | MIT OR Apache-2.0 |
-| rand_core | 0.6.4 | MIT OR Apache-2.0 |
 | rand_core | 0.9.5 | MIT OR Apache-2.0 |
 | raw-window-handle | 0.6.2 | MIT OR Apache-2.0 OR Zlib |
 | rayon | 1.12.0 | MIT OR Apache-2.0 |
 | rayon-core | 1.13.0 | MIT OR Apache-2.0 |
+| read-fonts | 0.41.0 | MIT OR Apache-2.0 |
 | read-fonts | 0.46.0 | MIT OR Apache-2.0 |
 | redox_syscall | 0.4.1 | MIT |
 | redox_syscall | 0.5.18 | MIT |
@@ -464,6 +470,8 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | scoped-tls | 1.0.1 | MIT/Apache-2.0 |
 | scopeguard | 1.2.0 | MIT OR Apache-2.0 |
 | sctk-adwaita | 0.10.1 | MIT |
+| self_cell | 1.3.0 | Apache-2.0 OR GPL-2.0-only |
+| send_wrapper | 0.6.0 | MIT/Apache-2.0 |
 | seq-macro | 0.3.6 | MIT OR Apache-2.0 |
 | serde | 1.0.229 | MIT OR Apache-2.0 |
 | serde_bytes | 0.11.19 | MIT OR Apache-2.0 |
@@ -483,6 +491,7 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | simdutf8 | 0.1.5 | MIT OR Apache-2.0 |
 | simplecss | 0.2.2 | Apache-2.0 OR MIT |
 | siphasher | 1.0.4 | MIT OR Apache-2.0 |
+| skrifa | 0.44.0 | MIT OR Apache-2.0 |
 | skrifa | 0.49.0 | MIT OR Apache-2.0 |
 | slab | 0.4.12 | MIT |
 | slotmap | 1.1.1 | Zlib |
@@ -525,13 +534,14 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | tinystr | 0.8.5 | Unicode-3.0 |
 | tinyvec | 1.13.3 | Zlib OR Apache-2.0 OR MIT |
 | tokio | 1.54.1 | MIT |
-| toml_datetime | 1.1.2+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_datetime | 1.1.3+spec-1.1.0 | MIT OR Apache-2.0 |
 | toml_edit | 0.25.17+spec-1.1.0 | MIT OR Apache-2.0 |
-| toml_parser | 1.1.5+spec-1.1.0 | MIT OR Apache-2.0 |
+| toml_parser | 1.1.7+spec-1.1.0 | MIT OR Apache-2.0 |
 | tracing | 0.1.44 | MIT |
 | tracing-attributes | 0.1.31 | MIT |
 | tracing-core | 0.1.36 | MIT |
 | trash | 5.2.9 | MIT |
+| tree_magic_mini | 3.2.2 | MIT |
 | ttf-parser | 0.25.1 | MIT OR Apache-2.0 |
 | twox-hash | 2.1.5 | MIT |
 | typed-path | 0.13.0 | MIT OR Apache-2.0 |
@@ -541,6 +551,7 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | unicode-bidi | 0.3.18 | MIT OR Apache-2.0 |
 | unicode-bidi-mirroring | 0.4.0 | MIT/Apache-2.0 |
 | unicode-ccc | 0.4.0 | MIT/Apache-2.0 |
+| unicode-general-category | 1.1.0 | Apache-2.0 |
 | unicode-ident | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unicode-normalization | 0.1.26 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | unicode-properties | 0.1.5 | (MIT OR Apache-2.0) AND Unicode-3.0 |
@@ -556,7 +567,9 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | utf8_iter | 1.1.0 | Apache-2.0 OR MIT |
 | utf_types | 1.0.0 | Apache-2.0 OR MIT |
 | uuid | 1.29.0 | Apache-2.0 OR MIT |
+| vello_common | 0.2.0 | Apache-2.0 OR MIT |
 | vello_common | 0.3.0 | Apache-2.0 OR MIT |
+| vello_cpu | 0.2.0 | Apache-2.0 OR MIT |
 | vello_cpu | 0.3.0 | Apache-2.0 OR MIT |
 | vte | 0.15.0 | Apache-2.0 OR MIT |
 | walkdir | 2.5.0 | Unlicense/MIT |
@@ -580,7 +593,7 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | wayland-sys | 0.31.11 | MIT |
 | web-sys | 0.3.107 | MIT OR Apache-2.0 |
 | web-time | 1.1.0 | MIT OR Apache-2.0 |
-| webbrowser | 1.2.6 | MIT OR Apache-2.0 |
+| webbrowser | 1.2.7 | MIT OR Apache-2.0 |
 | weezl | 0.1.12 | MIT OR Apache-2.0 |
 | widestring | 1.2.1 | MIT OR Apache-2.0 |
 | winapi | 0.3.9 | MIT/Apache-2.0 |
@@ -588,25 +601,19 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | winapi-util | 0.1.11 | Unlicense OR MIT |
 | winapi-x86_64-pc-windows-gnu | 0.4.0 | MIT/Apache-2.0 |
 | windows | 0.57.0 | MIT OR Apache-2.0 |
-| windows | 0.58.0 | MIT OR Apache-2.0 |
 | windows | 0.62.2 | MIT OR Apache-2.0 |
 | windows-collections | 0.3.2 | MIT OR Apache-2.0 |
 | windows-core | 0.57.0 | MIT OR Apache-2.0 |
-| windows-core | 0.58.0 | MIT OR Apache-2.0 |
 | windows-core | 0.62.2 | MIT OR Apache-2.0 |
 | windows-future | 0.3.2 | MIT OR Apache-2.0 |
 | windows-implement | 0.57.0 | MIT OR Apache-2.0 |
-| windows-implement | 0.58.0 | MIT OR Apache-2.0 |
 | windows-implement | 0.60.2 | MIT OR Apache-2.0 |
 | windows-interface | 0.57.0 | MIT OR Apache-2.0 |
-| windows-interface | 0.58.0 | MIT OR Apache-2.0 |
 | windows-interface | 0.59.3 | MIT OR Apache-2.0 |
 | windows-link | 0.2.1 | MIT OR Apache-2.0 |
 | windows-numerics | 0.3.1 | MIT OR Apache-2.0 |
 | windows-result | 0.1.2 | MIT OR Apache-2.0 |
-| windows-result | 0.2.0 | MIT OR Apache-2.0 |
 | windows-result | 0.4.1 | MIT OR Apache-2.0 |
-| windows-strings | 0.1.0 | MIT OR Apache-2.0 |
 | windows-strings | 0.5.1 | MIT OR Apache-2.0 |
 | windows-sys | 0.52.0 | MIT OR Apache-2.0 |
 | windows-sys | 0.59.0 | MIT OR Apache-2.0 |
@@ -624,6 +631,7 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | winit | 0.30.13 | Apache-2.0 |
 | winnow | 1.0.4 | MIT |
 | wit-bindgen | 0.57.1 | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT |
+| wl-clipboard-rs | 0.9.5 | MIT OR Apache-2.0 |
 | writeable | 0.6.4 | Unicode-3.0 |
 | wuff | 0.2.10 | MIT |
 | x11-dl | 2.21.0 | MIT |
@@ -632,7 +640,6 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | x509-parser | 0.18.1 | MIT OR Apache-2.0 |
 | xattr | 1.7.0 | MIT OR Apache-2.0 |
 | xcursor | 0.3.11 | MIT |
-| xdg-home | 1.3.0 | MIT |
 | xkbcommon-dl | 0.4.2 | MIT |
 | xkeysym | 0.2.1 | MIT OR Apache-2.0 OR Zlib |
 | xmlwriter | 0.1.0 | MIT |
@@ -640,15 +647,12 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | yaml-rust | 0.4.5 | MIT/Apache-2.0 |
 | yoke | 0.8.4 | Unicode-3.0 |
 | yoke-derive | 0.8.4 | Unicode-3.0 |
-| zbus | 4.4.0 | MIT |
 | zbus | 5.19.0 | MIT |
-| zbus-lockstep | 0.4.4 | MIT |
-| zbus-lockstep-macros | 0.4.4 | MIT |
-| zbus_macros | 4.4.0 | MIT |
+| zbus-lockstep | 0.5.2 | MIT |
+| zbus-lockstep-macros | 0.5.2 | MIT |
 | zbus_macros | 5.19.0 | MIT |
-| zbus_names | 3.0.0 | MIT |
 | zbus_names | 4.3.5 | MIT |
-| zbus_xml | 4.0.0 | MIT |
+| zbus_xml | 5.2.1 | MIT |
 | zcheapstr | 1.2.0 | MIT |
 | zerocopy | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
 | zerocopy-derive | 0.8.63 | BSD-2-Clause OR Apache-2.0 OR MIT |
@@ -671,11 +675,8 @@ to re-create the RAR compression algorithm. Matrix Finder only reads RAR archive
 | zune-inflate | 0.2.54 | MIT OR Apache-2.0 OR Zlib |
 | zune-jpeg | 0.4.21 | MIT OR Apache-2.0 OR Zlib |
 | zune-jpeg | 0.5.15 | MIT OR Apache-2.0 OR Zlib |
-| zvariant | 4.2.0 | MIT |
 | zvariant | 5.15.1 | MIT |
-| zvariant_derive | 4.2.0 | MIT |
 | zvariant_derive | 5.15.1 | MIT |
-| zvariant_utils | 2.1.0 | MIT |
 | zvariant_utils | 4.2.0 | MIT |
 
 ## License texts
@@ -2165,7 +2166,7 @@ Used by: ab_glyph 0.2.32, ab_glyph_rasterizer 0.1.10, owned_ttf_parser 0.25.1, r
    END OF TERMS AND CONDITIONS
 ```
 
-Used by: adler2 2.0.1, aes 0.9.4, ahash 0.8.12, arrayvec 0.7.8, as-raw-xcb-connection 1.0.1, asn1-rs 0.7.2, asn1-rs-derive 0.6.0, async-channel 2.5.0, async-executor 1.14.1, async-fs 2.2.0, async-io 2.6.0, async-lock 3.4.2, async-net 2.0.0, async-process 2.5.0, async-recursion 1.2.0, async-signal 0.2.14, async-task 4.7.1, async-trait 0.1.92, atoi_simd 0.18.1, atomic-waker 1.1.2, atspi 0.22.0, atspi-common 0.6.0, atspi-connection 0.6.0, bigdecimal 0.4.11, bit-set 0.8.0, bit-vec 0.8.0, bitflags 1.3.2, bitflags 2.13.2, block-buffer 0.10.4, block-buffer 0.12.1, block-padding 0.4.2, blocking 1.7.0, brotli 8.0.4, bumpalo 3.20.3, bytes 1.12.1, bzip2 0.5.2, bzip2 0.6.1, bzip2-sys 0.1.13+1.0.8, calloop 0.13.0, calloop 0.14.5, calloop-wayland-source 0.3.0, calloop-wayland-source 0.4.1, cbc 0.2.1, cfg-if 1.0.5, cgl 0.3.2, cipher 0.5.2, cmov 0.5.4, concurrent-queue 2.5.0, const-oid 0.10.2, const-random 0.1.18, const-random-macro 0.1.16, core-foundation 0.9.4, core-foundation-sys 0.8.7, core-graphics 0.23.2, core-graphics-types 0.1.3, core_detect 1.0.0, cpubits 0.1.1, cpufeatures 0.2.17, cpufeatures 0.3.1, crypto-common 0.1.7, crypto-common 0.2.2, ctutils 0.4.8, cursor-icon 1.2.0, data-url 0.3.2, debug_unsafe 0.1.4, der-parser 10.0.0, deranged 0.5.9, digest 0.10.7, digest 0.11.3, dirs 6.0.0, dirs-sys 0.5.0, displaydoc 0.2.7, dlib 0.5.3, document-features 0.2.12, downcast-rs 1.2.1, either 1.19.0, endi 1.1.1, enumflags2 0.7.12, enumflags2_derive 0.7.12, equivalent 1.0.3, errno 0.3.14, euclid 0.22.14, event-listener 5.4.2, event-listener-strategy 0.5.4, fallible-iterator 0.3.0, fallible-streaming-iterator 0.1.9, fast-float2 0.2.4, fastrand 2.5.0, fearless_simd 0.7.0, fearless_simd 1.2.0, filetime 0.2.29, flate2 1.1.10, float-cmp 0.9.0, fnv 1.0.7, font-types 0.12.7, foreign-types 0.5.0, foreign-types-macros 0.2.4, foreign-types-shared 0.3.1, form_urlencoded 1.2.3, futures-channel 0.3.34, futures-core 0.3.34, futures-io 0.3.34, futures-lite 2.6.1, futures-macro 0.3.34, futures-sink 0.3.34, futures-task 0.3.34, futures-util 0.3.34, getrandom 0.2.17, getrandom 0.3.4, getrandom 0.4.3, glow 0.16.0, hashbrown 0.15.5, hashbrown 0.17.1, heck 0.5.0, hermit-abi 0.5.3, hex 0.4.3, hmac 0.13.0, home 0.5.12, hybrid-array 0.4.15, iana-time-zone 0.1.65, iana-time-zone-haiku 0.1.2, idna 1.1.0, idna_adapter 1.2.2, immutable-chunkmap 2.1.5, indexmap 2.14.2, inout 0.2.5, itoa 1.0.18, jni-sys 0.3.1, jni-sys 0.4.1, js-sys 0.3.107, kurbo 0.11.3, kurbo 0.13.1, lazy_static 1.5.1, lexical-core 1.0.6, lexical-parse-float 1.0.6, lexical-parse-integer 1.0.6, lexical-util 1.0.7, lexical-write-float 1.0.6, lexical-write-integer 1.0.6, libc 0.2.191, libsqlite3-sys 0.40.0, libssh2-sys 0.3.4, libz-sys 1.1.33, linked-hash-map 0.5.6, linux-raw-sys 0.12.1, linux-raw-sys 0.4.15, litrs 1.0.1, lock_api 0.4.14, log 0.4.35, lzma-sys 0.1.20, md-5 0.10.6, memmap2 0.9.12, memoffset 0.9.1, minimal-lexical 0.2.1, miow 0.6.1, multiversion 0.8.1, multiversion-macros 0.8.1, nohash-hasher 0.2.0, nom 7.1.3, num-bigint 0.4.8, num-bigint 0.5.1, num-complex 0.4.6, num-conv 0.2.2, num-integer 0.1.47, num-traits 0.2.19, num_enum 0.7.6, num_enum_derive 0.7.6, oid-registry 0.8.1, once_cell 1.21.4, openssl-sys 0.9.118, ordered-stream 0.2.0, parking 2.2.1, parking_lot 0.12.5, parking_lot_core 0.9.12, paste 1.0.15, pbkdf2 0.13.0, peniko 0.6.1, percent-encoding 2.3.2, pico-args 0.5.0, pin-project 1.1.13, pin-project-internal 1.1.13, pin-project-lite 0.2.17, piper 0.2.5, plain 0.2.3, plist 1.10.3, png 0.17.16, png 0.18.1, polling 3.11.0, pollster 0.4.0, polycool 0.4.0, portable-atomic 1.15.0, portable-atomic-util 0.2.8, powerfmt 0.2.1, ppv-lite86 0.2.21, prettyplease 0.3.0, proc-macro-crate 3.5.0, proc-macro2 1.0.107, qoi 0.4.1, quick-error 2.0.1, quote 1.0.47, rand 0.8.8, rand 0.9.5, rand_chacha 0.3.1, rand_chacha 0.9.0, rand_core 0.6.4, rand_core 0.9.5, rayon 1.12.0, rayon-core 1.13.0, read-fonts 0.46.0, regex 1.13.1, regex-automata 0.4.18, regex-lite 0.1.9, regex-syntax 0.8.11, resvg 0.45.1, rusqlite 0.43.0, rustc-hash 2.1.3, rusticata-macros 4.1.0, rustix 0.38.44, rustix 1.1.6, rustix-openpty 0.2.0, rustversion 1.0.23, scoped-tls 1.0.1, scopeguard 1.2.0, seq-macro 0.3.6, serde 1.0.229, serde_bytes 0.11.19, serde_core 1.0.229, serde_derive 1.0.229, serde_json 1.0.154, serde_repr 0.1.21, sha1 0.10.7, sha1 0.11.0, sha2 0.10.9, sha2 0.11.1, signal-hook 0.4.6, signal-hook-registry 1.4.8, simd_cesu8 1.2.0, siphasher 1.0.4, skrifa 0.49.0, slab 0.4.12, smallvec 1.16.4, smithay-client-toolkit 0.19.2, smithay-client-toolkit 0.20.0, smithay-clipboard 0.7.3, smol_str 0.2.2, ssh2 0.9.7, stable_deref_trait 1.2.1, strict-num 0.1.1, svgtypes 0.15.3, syn 2.0.119, syn 3.0.9, synstructure 0.13.2, synstructure 0.14.0, tar 0.4.46, target-features 0.1.6, tempfile 3.27.0, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, time 0.3.55, time-core 0.1.9, time-macros 0.2.32, tinyvec 1.13.3, toml_datetime 1.1.2+spec-1.1.0, toml_edit 0.25.17+spec-1.1.0, toml_parser 1.1.5+spec-1.1.0, tracing 0.1.44, tracing-attributes 0.1.31, tracing-core 0.1.36, trash 5.2.9, ttf-parser 0.25.1, typed-path 0.13.0, unicase 2.10.0, unicode-bidi 0.3.18, unicode-ident 1.0.27, unicode-normalization 0.1.26, unicode-properties 0.1.5, unicode-segmentation 1.13.3, unicode-width 0.2.3, unrar 0.5.8, url 2.5.9, urlencoding 2.1.3, usvg 0.45.1, uuid 1.29.0, vello_common 0.3.0, vello_cpu 0.3.0, vte 0.15.0, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wasm-bindgen 0.2.130, wasm-bindgen-futures 0.4.80, wasm-bindgen-macro 0.2.130, wasm-bindgen-macro-support 0.2.130, wasm-bindgen-shared 0.2.130, wayland-backend 0.3.17, wayland-client 0.31.15, wayland-csd-frame 0.3.0, wayland-cursor 0.31.14, wayland-protocols 0.32.13, wayland-protocols-experimental 20250721.0.1, wayland-protocols-misc 0.3.12, wayland-protocols-plasma 0.3.12, wayland-protocols-wlr 0.3.12, wayland-scanner 0.31.11, wayland-sys 0.31.11, web-sys 0.3.107, winapi 0.3.9, winnow 1.0.4, wit-bindgen 0.57.1, x11-dl 2.21.0, x11rb 0.13.2, x11rb-protocol 0.13.2, x509-parser 0.18.1, xattr 1.7.0, xdg-home 1.3.0, xkeysym 0.2.1, xz2 0.1.7, zbus 4.4.0, zbus 5.19.0, zbus-lockstep 0.4.4, zbus-lockstep-macros 0.4.4, zbus_macros 4.4.0, zbus_macros 5.19.0, zbus_names 3.0.0, zbus_names 4.3.5, zcheapstr 1.2.0, zerocopy 0.8.63, zerocopy-derive 0.8.63, zeroize 1.9.1, zeroize_derive 1.5.0, zmij 1.0.23, zvariant 4.2.0, zvariant 5.15.1, zvariant_derive 4.2.0, zvariant_derive 5.15.1, zvariant_utils 2.1.0, zvariant_utils 4.2.0
+Used by: adler2 2.0.1, aes 0.9.4, ahash 0.8.12, arrayvec 0.7.8, as-raw-xcb-connection 1.0.1, asn1-rs 0.7.2, asn1-rs-derive 0.6.0, async-channel 2.5.0, async-executor 1.14.1, async-fs 2.2.0, async-io 2.6.0, async-lock 3.4.2, async-net 2.0.0, async-process 2.5.0, async-recursion 1.2.0, async-signal 0.2.14, async-task 4.7.1, async-trait 0.1.92, atoi_simd 0.18.1, atomic-waker 1.1.2, atspi 0.29.0, atspi-common 0.13.0, atspi-proxies 0.13.0, bigdecimal 0.4.11, bit-set 0.8.0, bit-vec 0.8.0, bitflags 1.3.2, bitflags 2.13.2, block-buffer 0.10.4, block-buffer 0.12.1, block-padding 0.4.2, blocking 1.7.0, brotli 8.0.4, bumpalo 3.20.3, bytes 1.12.1, bzip2 0.5.2, bzip2 0.6.1, bzip2-sys 0.1.13+1.0.8, calloop 0.13.0, calloop 0.14.5, calloop-wayland-source 0.3.0, calloop-wayland-source 0.4.1, cbc 0.2.1, cfg-if 1.0.5, cgl 0.3.2, cipher 0.5.2, cmov 0.5.4, concurrent-queue 2.5.0, const-oid 0.10.2, const-random 0.1.18, const-random-macro 0.1.16, core-foundation 0.9.4, core-foundation-sys 0.8.7, core-graphics 0.23.2, core-graphics-types 0.1.3, core_detect 1.0.0, cpubits 0.1.1, cpufeatures 0.2.17, cpufeatures 0.3.1, crypto-common 0.1.7, crypto-common 0.2.2, ctutils 0.4.8, cursor-icon 1.2.0, data-url 0.3.2, debug_unsafe 0.1.4, der-parser 10.0.0, deranged 0.5.9, digest 0.10.7, digest 0.11.3, dirs 6.0.0, dirs-sys 0.5.0, displaydoc 0.2.7, dlib 0.5.3, document-features 0.2.12, downcast-rs 1.2.1, either 1.19.0, endi 1.1.1, enumflags2 0.7.12, enumflags2_derive 0.7.12, equivalent 1.0.3, errno 0.3.14, euclid 0.22.14, event-listener 5.4.2, event-listener-strategy 0.5.4, fallible-iterator 0.3.0, fallible-streaming-iterator 0.1.9, fast-float2 0.2.4, fastrand 2.5.0, fearless_simd 0.4.1, fearless_simd 0.7.0, fearless_simd 1.2.0, filetime 0.2.29, fixedbitset 0.5.9, flate2 1.1.10, float-cmp 0.9.0, fnv 1.0.7, font-types 0.12.7, foreign-types 0.5.0, foreign-types-macros 0.2.4, foreign-types-shared 0.3.1, form_urlencoded 1.2.3, futures-channel 0.3.34, futures-core 0.3.34, futures-io 0.3.34, futures-lite 2.6.1, futures-macro 0.3.34, futures-task 0.3.34, futures-util 0.3.34, getrandom 0.2.17, getrandom 0.3.4, getrandom 0.4.3, glow 0.17.0, hashbrown 0.15.5, hashbrown 0.17.1, heck 0.5.0, hermit-abi 0.5.3, hex 0.4.3, hmac 0.13.0, home 0.5.12, hybrid-array 0.4.15, iana-time-zone 0.1.65, iana-time-zone-haiku 0.1.2, idna 1.1.0, idna_adapter 1.2.2, indexmap 2.14.2, inout 0.2.5, itertools 0.15.0, itoa 1.0.18, jni-sys 0.3.1, jni-sys 0.4.1, js-sys 0.3.107, kurbo 0.11.3, kurbo 0.13.1, lazy_static 1.5.1, lexical-core 1.0.6, lexical-parse-float 1.0.6, lexical-parse-integer 1.0.6, lexical-util 1.0.7, lexical-write-float 1.0.6, lexical-write-integer 1.0.6, libc 0.2.191, libsqlite3-sys 0.40.0, libssh2-sys 0.3.4, libz-sys 1.1.33, linked-hash-map 0.5.6, linux-raw-sys 0.12.1, linux-raw-sys 0.4.15, litrs 1.0.1, lock_api 0.4.14, log 0.4.35, lzma-sys 0.1.20, md-5 0.10.6, memmap2 0.9.12, memoffset 0.9.1, minimal-lexical 0.2.1, miow 0.6.1, multiversion 0.8.1, multiversion-macros 0.8.1, nohash-hasher 0.2.0, nom 7.1.3, nom 8.0.0, num-bigint 0.4.8, num-bigint 0.5.1, num-complex 0.4.6, num-conv 0.2.2, num-integer 0.1.47, num-traits 0.2.19, num_enum 0.7.6, num_enum_derive 0.7.6, oid-registry 0.8.1, once_cell 1.21.4, openssl-sys 0.9.118, ordered-stream 0.2.0, parking 2.2.1, parking_lot 0.12.5, parking_lot_core 0.9.12, paste 1.0.15, pbkdf2 0.13.0, peniko 0.6.1, percent-encoding 2.3.2, petgraph 0.8.3, pico-args 0.5.0, pin-project 1.1.13, pin-project-internal 1.1.13, pin-project-lite 0.2.17, piper 0.2.5, plain 0.2.3, plist 1.10.3, png 0.17.16, png 0.18.1, polling 3.11.0, pollster 0.4.0, polycool 0.4.0, portable-atomic 1.15.0, portable-atomic-util 0.2.8, powerfmt 0.2.1, ppv-lite86 0.2.21, prettyplease 0.3.0, proc-macro-crate 3.5.0, proc-macro2 1.0.107, qoi 0.4.1, quick-error 2.0.1, quote 1.0.47, rand 0.9.5, rand_chacha 0.9.0, rand_core 0.9.5, rayon 1.12.0, rayon-core 1.13.0, read-fonts 0.41.0, read-fonts 0.46.0, regex 1.13.1, regex-automata 0.4.18, regex-lite 0.1.9, regex-syntax 0.8.11, resvg 0.45.1, rusqlite 0.43.0, rustc-hash 2.1.3, rusticata-macros 4.1.0, rustix 0.38.44, rustix 1.1.6, rustix-openpty 0.2.0, rustversion 1.0.23, scoped-tls 1.0.1, scopeguard 1.2.0, send_wrapper 0.6.0, seq-macro 0.3.6, serde 1.0.229, serde_bytes 0.11.19, serde_core 1.0.229, serde_derive 1.0.229, serde_json 1.0.154, serde_repr 0.1.21, sha1 0.10.7, sha1 0.11.0, sha2 0.10.9, sha2 0.11.1, signal-hook 0.4.6, signal-hook-registry 1.4.8, simd_cesu8 1.2.0, siphasher 1.0.4, skrifa 0.44.0, skrifa 0.49.0, slab 0.4.12, smallvec 1.16.4, smithay-client-toolkit 0.19.2, smithay-client-toolkit 0.20.0, smithay-clipboard 0.7.3, smol_str 0.2.2, ssh2 0.9.7, stable_deref_trait 1.2.1, strict-num 0.1.1, svgtypes 0.15.3, syn 2.0.119, syn 3.0.9, synstructure 0.13.2, synstructure 0.14.0, tar 0.4.46, target-features 0.1.6, tempfile 3.27.0, thiserror 1.0.69, thiserror 2.0.21, thiserror-impl 1.0.69, thiserror-impl 2.0.21, time 0.3.55, time-core 0.1.9, time-macros 0.2.32, tinyvec 1.13.3, toml_datetime 1.1.3+spec-1.1.0, toml_edit 0.25.17+spec-1.1.0, toml_parser 1.1.7+spec-1.1.0, tracing 0.1.44, tracing-attributes 0.1.31, tracing-core 0.1.36, trash 5.2.9, ttf-parser 0.25.1, typed-path 0.13.0, unicase 2.10.0, unicode-bidi 0.3.18, unicode-ident 1.0.27, unicode-normalization 0.1.26, unicode-properties 0.1.5, unicode-segmentation 1.13.3, unicode-width 0.2.3, unrar 0.5.8, url 2.5.9, urlencoding 2.1.3, usvg 0.45.1, uuid 1.29.0, vello_common 0.2.0, vello_common 0.3.0, vello_cpu 0.2.0, vello_cpu 0.3.0, vte 0.15.0, wasi 0.11.1+wasi-snapshot-preview1, wasip2 1.0.4+wasi-0.2.12, wasm-bindgen 0.2.130, wasm-bindgen-futures 0.4.80, wasm-bindgen-macro 0.2.130, wasm-bindgen-macro-support 0.2.130, wasm-bindgen-shared 0.2.130, wayland-backend 0.3.17, wayland-client 0.31.15, wayland-csd-frame 0.3.0, wayland-cursor 0.31.14, wayland-protocols 0.32.13, wayland-protocols-experimental 20250721.0.1, wayland-protocols-misc 0.3.12, wayland-protocols-plasma 0.3.12, wayland-protocols-wlr 0.3.12, wayland-scanner 0.31.11, wayland-sys 0.31.11, web-sys 0.3.107, winapi 0.3.9, winnow 1.0.4, wit-bindgen 0.57.1, wl-clipboard-rs 0.9.5, x11-dl 2.21.0, x11rb 0.13.2, x11rb-protocol 0.13.2, x509-parser 0.18.1, xattr 1.7.0, xkeysym 0.2.1, xz2 0.1.7, zbus 5.19.0, zbus-lockstep 0.5.2, zbus-lockstep-macros 0.5.2, zbus_macros 5.19.0, zbus_names 4.3.5, zbus_xml 5.2.1, zcheapstr 1.2.0, zerocopy 0.8.63, zerocopy-derive 0.8.63, zeroize 1.9.1, zeroize_derive 1.5.0, zmij 1.0.23, zvariant 5.15.1, zvariant_derive 5.15.1, zvariant_utils 4.2.0
 
 ```text
 Copyright (c) 2018-2024 The RustCrypto Project Developers
@@ -2217,6 +2218,7 @@ Copyright (c) 2014 Chris Wong
 Copyright (c) 2015 The rust-openssl-verify Developers
 Copyright (c) 2016 The fallible-streaming-iterator Developers
 Copyright (c) 2018 Raph Levien
+Copyright (c) 2015-2017
 Copyright (c) 2014-2026 Alex Crichton
 Copyright (c) 2014-2020 Optimal Computing (NZ) Ltd
 Copyright (c) 2017 Contributors
@@ -2233,7 +2235,6 @@ Copyright (c) 2013-2014 The Rust Project Developers.
 Copyright (c) 2015-2020 The rust-hex Developers
 Copyright (c) 2020 Andrew D. Straw
 Copyright (c) The rust-url developers
-Copyright 2022 Eric Stokes
 Copyright (c) 2016--2017
 Copyright (c) 2022-2025 The RustCrypto Project Developers
 Copyright (c) 2022 Artyom Pavlov
@@ -2291,6 +2292,7 @@ Copyright 2020 the Vello Authors
 Copyright (c) 2016 Joe Wilm
 Copyright (c) 2015 Elinor Berger
 Copyright (c) 2015-2018 The winapi-rs Developers
+Copyright (c) 2019 Ivan Molodetskikh
 Copyright 2019 x11rb Contributers
 Copyright (c) 2022-2023 John Nunley
 Copyright (c) 2024 Zeeshan Ali Khan & zbus contributors
@@ -2326,7 +2328,7 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
-Used by: aho-corasick 1.1.5, android_system_properties 0.1.6, async-broadcast 0.7.2, base64 0.22.1, base64 0.23.1, bincode 1.3.3, bit_field 0.10.4, bon 3.10.3, bon-macros 3.10.3, bstr 1.13.1, byteorder 1.5.0, byteorder-lite 0.1.0, calamine 0.38.0, color_quant 1.1.0, combine 4.6.9, crossbeam-deque 0.8.8, crossbeam-epoch 0.9.21, crossbeam-utils 0.8.23, crunchy 0.2.4, csv 1.4.0, csv-core 0.1.13, data-encoding 2.11.1, fontdb 0.23.0, generic-array 0.14.7, gif 0.13.3, gif 0.14.2, globset 0.4.21, guillotiere 0.7.0, jiff 1.0.0, jiff-core 1.0.0, jiff-static 1.0.0, lz4_flex 0.14.0, memchr 2.8.3, nix 0.29.0, nix 0.32.0, orbclient 0.3.55, phf 0.13.1, phf_generator 0.13.1, phf_macros 0.13.1, phf_shared 0.13.1, quick-xml 0.30.0, quick-xml 0.41.0, quick-xml 0.42.0, redox_users 0.5.3, roxmltree 0.20.0, rustybuzz 0.20.1, same-file 1.0.6, simplecss 0.2.2, strsim 0.11.1, sysinfo 0.33.1, twox-hash 2.1.5, typenum 1.20.1, unicode-bidi-mirroring 0.4.0, unicode-ccc 0.4.0, unicode-vo 0.1.0, walkdir 2.5.0, webbrowser 1.2.6, weezl 0.1.12, winapi-util 0.1.11, xkbcommon-dl 0.4.2, xmlwriter 0.1.0, yaml-rust 0.4.5, zip 9.6.1
+Used by: aho-corasick 1.1.5, android_system_properties 0.1.6, async-broadcast 0.7.2, base64 0.22.1, base64 0.23.1, bincode 1.3.3, bit_field 0.10.4, bon 3.10.3, bon-macros 3.10.3, bstr 1.13.1, byteorder 1.5.0, byteorder-lite 0.1.0, calamine 0.38.0, color_quant 1.1.0, combine 4.6.9, crossbeam-deque 0.8.8, crossbeam-epoch 0.9.21, crossbeam-utils 0.8.23, crunchy 0.2.4, csv 1.4.0, csv-core 0.1.13, data-encoding 2.11.1, fontdb 0.23.0, generic-array 0.14.7, gif 0.13.3, gif 0.14.2, globset 0.4.21, guillotiere 0.7.0, harfrust 0.12.0, jiff 1.0.0, jiff-core 1.0.0, jiff-static 1.0.0, lz4_flex 0.14.0, memchr 2.8.3, nix 0.32.0, orbclient 0.3.55, os_pipe 1.2.3, phf 0.13.1, phf 0.14.0, phf_generator 0.13.1, phf_generator 0.14.0, phf_macros 0.13.1, phf_macros 0.14.0, phf_shared 0.13.1, phf_shared 0.14.0, quick-xml 0.41.0, quick-xml 0.42.0, redox_users 0.5.3, roxmltree 0.20.0, rustybuzz 0.20.1, same-file 1.0.6, simplecss 0.2.2, strsim 0.11.1, sysinfo 0.33.1, twox-hash 2.1.5, typenum 1.20.1, unicode-bidi-mirroring 0.4.0, unicode-ccc 0.4.0, unicode-vo 0.1.0, walkdir 2.5.0, webbrowser 1.2.7, weezl 0.1.12, winapi-util 0.1.11, xkbcommon-dl 0.4.2, xmlwriter 0.1.0, yaml-rust 0.4.5, zip 9.6.1
 
 ```text
 Copyright (c) 2015 Andrew Gallant
@@ -2349,13 +2351,13 @@ Copyright (c) 2020 Yevhenii Reizner
 Copyright (c) 2015 Bartłomiej Kamiński
 Copyright (c) 2015 nwin
 Copyright (c) 2019 Nicolas Silva
+Copyright (c) HarfBuzz developers
 Copyright (c) 2020 Pascal Seitz
 Copyright (c) 2015 Carl Lerche + nix-rust Authors
 Copyright (c) 2015-2019 Jeremy Soller
 Copyright (c) 2014-2022 Steven Fackler, Yuki Okushi
 Copyright (c) 2017 Jose Narvaez
 Copyright (c) 2018 Yevhenii Reizner
-Copyright (c) HarfBuzz developers
 Copyright (c) 2017 Andrew Gallant
 Copyright (c) 2018 Reizner Evgeniy
 Copyright (c) 2015 Danny Guo
@@ -2635,7 +2637,7 @@ Redistribution and use in source and binary forms, with or without modification,
 THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-Used by: android-activity 0.6.1, android-properties 0.2.2, arboard 3.7.0, arrow-array 59.3.2, ashpd 0.11.1, atoi 2.0.0, color 0.3.3, core_maths 0.1.1, crc32fast 1.5.4, darling 0.24.1, darling_core 0.24.1, darling_macro 0.24.1, fdeflate 0.3.7, fontconfig-parser 0.5.8, half 2.7.1, hdf5-pure 0.13.0, ident_case 1.0.1, image 0.25.10, image-webp 0.2.4, imagesize 0.13.0, is-docker 0.2.0, is-wsl 0.4.0, lazy-regex 3.6.2, libredox 0.1.25, linebender_resource_handle 0.1.1, miniz_oxide 0.8.9, miniz_oxide 0.9.1, raw-window-handle 0.6.2, redox_syscall 0.4.1, redox_syscall 0.5.18, redox_syscall 0.9.5, rfd 0.15.4, rgb 0.8.53, sctk-adwaita 0.10.1, simd-adler32 0.3.10, simdutf8 0.1.5, sqlite-wasm-rs 0.6.3, static_assertions 1.1.0, strum 0.27.2, strum_macros 0.27.2, syntect 5.3.0, tiff 0.11.3, tokio 1.54.1, unicode-script 0.5.9, web-time 1.1.0, widestring 1.2.1, xcursor 0.3.11, zune-core 0.5.3, zune-jpeg 0.5.15
+Used by: android-activity 0.6.1, android-properties 0.2.2, arboard 3.7.0, arrow-array 59.3.2, ashpd 0.11.1, atoi 2.0.0, color 0.3.3, core_maths 0.1.1, crc32fast 1.5.4, darling 0.24.1, darling_core 0.24.1, darling_macro 0.24.1, fdeflate 0.3.7, fontconfig-parser 0.5.8, half 2.7.1, hdf5-pure 0.13.0, ident_case 1.0.1, image 0.25.10, image-webp 0.2.4, imagesize 0.13.0, is-docker 0.2.0, is-wsl 0.4.0, lazy-regex 3.6.2, libredox 0.1.25, linebender_resource_handle 0.1.1, miniz_oxide 0.8.9, miniz_oxide 0.9.1, raw-window-handle 0.6.2, redox_syscall 0.4.1, redox_syscall 0.5.18, redox_syscall 0.9.5, rfd 0.15.4, rgb 0.8.53, sctk-adwaita 0.10.1, simd-adler32 0.3.10, simdutf8 0.1.5, sqlite-wasm-rs 0.6.3, static_assertions 1.1.0, strum 0.27.2, strum_macros 0.27.2, syntect 5.3.0, tiff 0.11.3, tokio 1.54.1, tree_magic_mini 3.2.2, unicode-script 0.5.9, web-time 1.1.0, widestring 1.2.1, xcursor 0.3.11, zune-core 0.5.3, zune-jpeg 0.5.15
 
 ```text
 Copyright (c) 2020 Mikhail Lappo
@@ -2667,6 +2669,7 @@ Copyright (c) 2019 Peter Glotfelty
 Copyright (c) 2017 Tristan Hume, Keith Hall, Google Inc and other contributors
 Copyright (c) 2018 PistonDevelopers
 Copyright (c) Tokio Contributors
+Copyright (c) 2017 Aaron Hancock
 Copyright (c) 2019 Manish Goregaokar
 Copyright (c) 2023 dAxpeDDa
 Copyright (c) 2020 Samuele Esposito
@@ -4433,7 +4436,7 @@ the following restrictions:
 3. This notice may not be removed or altered from any source distribution.
 ```
 
-Used by: gethostname 1.1.0, lzma-rust2 0.23.0, sevenz-rust2 0.24.2
+Used by: gethostname 1.1.0, lzma-rust2 0.23.0, self_cell 1.3.0, sevenz-rust2 0.24.2
 
 ```text
                               Apache License
@@ -6315,7 +6318,7 @@ party to this document and has no duty or obligation with respect to
 this CC0 or use of the Work.
 ```
 
-Used by: rand 0.8.8, rand 0.9.5, rand_chacha 0.3.1, rand_chacha 0.9.0, rand_core 0.6.4, rand_core 0.9.5
+Used by: rand 0.9.5, rand_chacha 0.9.0, rand_core 0.9.5
 
 ```text
 Copyrights in the Rand project are retained by their contributors. No
@@ -6400,6 +6403,353 @@ is licensed under:
 at your option.
 ```
 
+Used by: self_cell 1.3.0
+
+```text
+Copyright (C) 1989, 1991 Free Software Foundation, Inc.,
+Copyright (C) <year>  <name of author>
+```
+
+```text
+                    GNU GENERAL PUBLIC LICENSE
+                       Version 2, June 1991
+
+ 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
+ Everyone is permitted to copy and distribute verbatim copies
+ of this license document, but changing it is not allowed.
+
+                            Preamble
+
+  The licenses for most software are designed to take away your
+freedom to share and change it.  By contrast, the GNU General Public
+License is intended to guarantee your freedom to share and change free
+software--to make sure the software is free for all its users.  This
+General Public License applies to most of the Free Software
+Foundation's software and to any other program whose authors commit to
+using it.  (Some other Free Software Foundation software is covered by
+the GNU Lesser General Public License instead.)  You can apply it to
+your programs, too.
+
+  When we speak of free software, we are referring to freedom, not
+price.  Our General Public Licenses are designed to make sure that you
+have the freedom to distribute copies of free software (and charge for
+this service if you wish), that you receive source code or can get it
+if you want it, that you can change the software or use pieces of it
+in new free programs; and that you know you can do these things.
+
+  To protect your rights, we need to make restrictions that forbid
+anyone to deny you these rights or to ask you to surrender the rights.
+These restrictions translate to certain responsibilities for you if you
+distribute copies of the software, or if you modify it.
+
+  For example, if you distribute copies of such a program, whether
+gratis or for a fee, you must give the recipients all the rights that
+you have.  You must make sure that they, too, receive or can get the
+source code.  And you must show them these terms so they know their
+rights.
+
+  We protect your rights with two steps: (1) copyright the software, and
+(2) offer you this license which gives you legal permission to copy,
+distribute and/or modify the software.
+
+  Also, for each author's protection and ours, we want to make certain
+that everyone understands that there is no warranty for this free
+software.  If the software is modified by someone else and passed on, we
+want its recipients to know that what they have is not the original, so
+that any problems introduced by others will not reflect on the original
+authors' reputations.
+
+  Finally, any free program is threatened constantly by software
+patents.  We wish to avoid the danger that redistributors of a free
+program will individually obtain patent licenses, in effect making the
+program proprietary.  To prevent this, we have made it clear that any
+patent must be licensed for everyone's free use or not licensed at all.
+
+  The precise terms and conditions for copying, distribution and
+modification follow.
+
+                    GNU GENERAL PUBLIC LICENSE
+   TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
+
+  0. This License applies to any program or other work which contains
+a notice placed by the copyright holder saying it may be distributed
+under the terms of this General Public License.  The "Program", below,
+refers to any such program or work, and a "work based on the Program"
+means either the Program or any derivative work under copyright law:
+that is to say, a work containing the Program or a portion of it,
+either verbatim or with modifications and/or translated into another
+language.  (Hereinafter, translation is included without limitation in
+the term "modification".)  Each licensee is addressed as "you".
+
+Activities other than copying, distribution and modification are not
+covered by this License; they are outside its scope.  The act of
+running the Program is not restricted, and the output from the Program
+is covered only if its contents constitute a work based on the
+Program (independent of having been made by running the Program).
+Whether that is true depends on what the Program does.
+
+  1. You may copy and distribute verbatim copies of the Program's
+source code as you receive it, in any medium, provided that you
+conspicuously and appropriately publish on each copy an appropriate
+copyright notice and disclaimer of warranty; keep intact all the
+notices that refer to this License and to the absence of any warranty;
+and give any other recipients of the Program a copy of this License
+along with the Program.
+
+You may charge a fee for the physical act of transferring a copy, and
+you may at your option offer warranty protection in exchange for a fee.
+
+  2. You may modify your copy or copies of the Program or any portion
+of it, thus forming a work based on the Program, and copy and
+distribute such modifications or work under the terms of Section 1
+above, provided that you also meet all of these conditions:
+
+    a) You must cause the modified files to carry prominent notices
+    stating that you changed the files and the date of any change.
+
+    b) You must cause any work that you distribute or publish, that in
+    whole or in part contains or is derived from the Program or any
+    part thereof, to be licensed as a whole at no charge to all third
+    parties under the terms of this License.
+
+    c) If the modified program normally reads commands interactively
+    when run, you must cause it, when started running for such
+    interactive use in the most ordinary way, to print or display an
+    announcement including an appropriate copyright notice and a
+    notice that there is no warranty (or else, saying that you provide
+    a warranty) and that users may redistribute the program under
+    these conditions, and telling the user how to view a copy of this
+    License.  (Exception: if the Program itself is interactive but
+    does not normally print such an announcement, your work based on
+    the Program is not required to print an announcement.)
+
+These requirements apply to the modified work as a whole.  If
+identifiable sections of that work are not derived from the Program,
+and can be reasonably considered independent and separate works in
+themselves, then this License, and its terms, do not apply to those
+sections when you distribute them as separate works.  But when you
+distribute the same sections as part of a whole which is a work based
+on the Program, the distribution of the whole must be on the terms of
+this License, whose permissions for other licensees extend to the
+entire whole, and thus to each and every part regardless of who wrote it.
+
+Thus, it is not the intent of this section to claim rights or contest
+your rights to work written entirely by you; rather, the intent is to
+exercise the right to control the distribution of derivative or
+collective works based on the Program.
+
+In addition, mere aggregation of another work not based on the Program
+with the Program (or with a work based on the Program) on a volume of
+a storage or distribution medium does not bring the other work under
+the scope of this License.
+
+  3. You may copy and distribute the Program (or a work based on it,
+under Section 2) in object code or executable form under the terms of
+Sections 1 and 2 above provided that you also do one of the following:
+
+    a) Accompany it with the complete corresponding machine-readable
+    source code, which must be distributed under the terms of Sections
+    1 and 2 above on a medium customarily used for software interchange; or,
+
+    b) Accompany it with a written offer, valid for at least three
+    years, to give any third party, for a charge no more than your
+    cost of physically performing source distribution, a complete
+    machine-readable copy of the corresponding source code, to be
+    distributed under the terms of Sections 1 and 2 above on a medium
+    customarily used for software interchange; or,
+
+    c) Accompany it with the information you received as to the offer
+    to distribute corresponding source code.  (This alternative is
+    allowed only for noncommercial distribution and only if you
+    received the program in object code or executable form with such
+    an offer, in accord with Subsection b above.)
+
+The source code for a work means the preferred form of the work for
+making modifications to it.  For an executable work, complete source
+code means all the source code for all modules it contains, plus any
+associated interface definition files, plus the scripts used to
+control compilation and installation of the executable.  However, as a
+special exception, the source code distributed need not include
+anything that is normally distributed (in either source or binary
+form) with the major components (compiler, kernel, and so on) of the
+operating system on which the executable runs, unless that component
+itself accompanies the executable.
+
+If distribution of executable or object code is made by offering
+access to copy from a designated place, then offering equivalent
+access to copy the source code from the same place counts as
+distribution of the source code, even though third parties are not
+compelled to copy the source along with the object code.
+
+  4. You may not copy, modify, sublicense, or distribute the Program
+except as expressly provided under this License.  Any attempt
+otherwise to copy, modify, sublicense or distribute the Program is
+void, and will automatically terminate your rights under this License.
+However, parties who have received copies, or rights, from you under
+this License will not have their licenses terminated so long as such
+parties remain in full compliance.
+
+  5. You are not required to accept this License, since you have not
+signed it.  However, nothing else grants you permission to modify or
+distribute the Program or its derivative works.  These actions are
+prohibited by law if you do not accept this License.  Therefore, by
+modifying or distributing the Program (or any work based on the
+Program), you indicate your acceptance of this License to do so, and
+all its terms and conditions for copying, distributing or modifying
+the Program or works based on it.
+
+  6. Each time you redistribute the Program (or any work based on the
+Program), the recipient automatically receives a license from the
+original licensor to copy, distribute or modify the Program subject to
+these terms and conditions.  You may not impose any further
+restrictions on the recipients' exercise of the rights granted herein.
+You are not responsible for enforcing compliance by third parties to
+this License.
+
+  7. If, as a consequence of a court judgment or allegation of patent
+infringement or for any other reason (not limited to patent issues),
+conditions are imposed on you (whether by court order, agreement or
+otherwise) that contradict the conditions of this License, they do not
+excuse you from the conditions of this License.  If you cannot
+distribute so as to satisfy simultaneously your obligations under this
+License and any other pertinent obligations, then as a consequence you
+may not distribute the Program at all.  For example, if a patent
+license would not permit royalty-free redistribution of the Program by
+all those who receive copies directly or indirectly through you, then
+the only way you could satisfy both it and this License would be to
+refrain entirely from distribution of the Program.
+
+If any portion of this section is held invalid or unenforceable under
+any particular circumstance, the balance of the section is intended to
+apply and the section as a whole is intended to apply in other
+circumstances.
+
+It is not the purpose of this section to induce you to infringe any
+patents or other property right claims or to contest validity of any
+such claims; this section has the sole purpose of protecting the
+integrity of the free software distribution system, which is
+implemented by public license practices.  Many people have made
+generous contributions to the wide range of software distributed
+through that system in reliance on consistent application of that
+system; it is up to the author/donor to decide if he or she is willing
+to distribute software through any other system and a licensee cannot
+impose that choice.
+
+This section is intended to make thoroughly clear what is believed to
+be a consequence of the rest of this License.
+
+  8. If the distribution and/or use of the Program is restricted in
+certain countries either by patents or by copyrighted interfaces, the
+original copyright holder who places the Program under this License
+may add an explicit geographical distribution limitation excluding
+those countries, so that distribution is permitted only in or among
+countries not thus excluded.  In such case, this License incorporates
+the limitation as if written in the body of this License.
+
+  9. The Free Software Foundation may publish revised and/or new versions
+of the General Public License from time to time.  Such new versions will
+be similar in spirit to the present version, but may differ in detail to
+address new problems or concerns.
+
+Each version is given a distinguishing version number.  If the Program
+specifies a version number of this License which applies to it and "any
+later version", you have the option of following the terms and conditions
+either of that version or of any later version published by the Free
+Software Foundation.  If the Program does not specify a version number of
+this License, you may choose any version ever published by the Free Software
+Foundation.
+
+  10. If you wish to incorporate parts of the Program into other free
+programs whose distribution conditions are different, write to the author
+to ask for permission.  For software which is copyrighted by the Free
+Software Foundation, write to the Free Software Foundation; we sometimes
+make exceptions for this.  Our decision will be guided by the two goals
+of preserving the free status of all derivatives of our free software and
+of promoting the sharing and reuse of software generally.
+
+                            NO WARRANTY
+
+  11. BECAUSE THE PROGRAM IS LICENSED FREE OF CHARGE, THERE IS NO WARRANTY
+FOR THE PROGRAM, TO THE EXTENT PERMITTED BY APPLICABLE LAW.  EXCEPT WHEN
+OTHERWISE STATED IN WRITING THE COPYRIGHT HOLDERS AND/OR OTHER PARTIES
+PROVIDE THE PROGRAM "AS IS" WITHOUT WARRANTY OF ANY KIND, EITHER EXPRESSED
+OR IMPLIED, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF
+MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE.  THE ENTIRE RISK AS
+TO THE QUALITY AND PERFORMANCE OF THE PROGRAM IS WITH YOU.  SHOULD THE
+PROGRAM PROVE DEFECTIVE, YOU ASSUME THE COST OF ALL NECESSARY SERVICING,
+REPAIR OR CORRECTION.
+
+  12. IN NO EVENT UNLESS REQUIRED BY APPLICABLE LAW OR AGREED TO IN WRITING
+WILL ANY COPYRIGHT HOLDER, OR ANY OTHER PARTY WHO MAY MODIFY AND/OR
+REDISTRIBUTE THE PROGRAM AS PERMITTED ABOVE, BE LIABLE TO YOU FOR DAMAGES,
+INCLUDING ANY GENERAL, SPECIAL, INCIDENTAL OR CONSEQUENTIAL DAMAGES ARISING
+OUT OF THE USE OR INABILITY TO USE THE PROGRAM (INCLUDING BUT NOT LIMITED
+TO LOSS OF DATA OR DATA BEING RENDERED INACCURATE OR LOSSES SUSTAINED BY
+YOU OR THIRD PARTIES OR A FAILURE OF THE PROGRAM TO OPERATE WITH ANY OTHER
+PROGRAMS), EVEN IF SUCH HOLDER OR OTHER PARTY HAS BEEN ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGES.
+
+                     END OF TERMS AND CONDITIONS
+
+            How to Apply These Terms to Your New Programs
+
+  If you develop a new program, and you want it to be of the greatest
+possible use to the public, the best way to achieve this is to make it
+free software which everyone can redistribute and change under these terms.
+
+  To do so, attach the following notices to the program.  It is safest
+to attach them to the start of each source file to most effectively
+convey the exclusion of warranty; and each file should have at least
+the "copyright" line and a pointer to where the full notice is found.
+
+    <one line to give the program's name and a brief idea of what it does.>
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation; either version 2 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License along
+    with this program; if not, write to the Free Software Foundation, Inc.,
+    51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
+
+Also add information on how to contact you by electronic and paper mail.
+
+If the program is interactive, make it output a short notice like this
+when it starts in an interactive mode:
+
+    Gnomovision version 69, Copyright (C) year name of author
+    Gnomovision comes with ABSOLUTELY NO WARRANTY; for details type `show w'.
+    This is free software, and you are welcome to redistribute it
+    under certain conditions; type `show c' for details.
+
+The hypothetical commands `show w' and `show c' should show the appropriate
+parts of the General Public License.  Of course, the commands you use may
+be called something other than `show w' and `show c'; they could even be
+mouse-clicks or menu items--whatever suits your program.
+
+You should also get your employer (if you work as a programmer) or your
+school, if any, to sign a "copyright disclaimer" for the program, if
+necessary.  Here is a sample; alter the names:
+
+  Yoyodyne, Inc., hereby disclaims all copyright interest in the program
+  `Gnomovision' (which makes passes at compilers) written by James Hacker.
+
+  <signature of Ty Coon>, 1 April 1989
+  Ty Coon, President of Vice
+
+This General Public License does not permit incorporating your program into
+proprietary programs.  If your program is a subroutine library, you may
+consider it more useful to permit linking proprietary applications with the
+library.  If this is what you want to do, use the GNU Lesser General
+Public License instead of this License.
+```
+
 Used by: siphasher 1.0.4
 
 ```text
@@ -6456,7 +6806,7 @@ Used by: typenum 1.20.1
 MIT OR Apache-2.0
 ```
 
-Used by: uds_windows 1.2.1, windows 0.57.0, windows 0.58.0, windows 0.62.2, windows-collections 0.3.2, windows-core 0.57.0, windows-core 0.58.0, windows-core 0.62.2, windows-future 0.3.2, windows-implement 0.57.0, windows-implement 0.58.0, windows-implement 0.60.2, windows-interface 0.57.0, windows-interface 0.58.0, windows-interface 0.59.3, windows-link 0.2.1, windows-numerics 0.3.1, windows-result 0.1.2, windows-result 0.2.0, windows-result 0.4.1, windows-strings 0.1.0, windows-strings 0.5.1, windows-sys 0.52.0, windows-sys 0.59.0, windows-sys 0.61.2, windows-targets 0.52.6, windows-threading 0.2.1, windows_aarch64_gnullvm 0.52.6, windows_aarch64_msvc 0.52.6, windows_i686_gnu 0.52.6, windows_i686_gnullvm 0.52.6, windows_i686_msvc 0.52.6, windows_x86_64_gnu 0.52.6, windows_x86_64_gnullvm 0.52.6, windows_x86_64_msvc 0.52.6
+Used by: uds_windows 1.2.1, windows 0.57.0, windows 0.62.2, windows-collections 0.3.2, windows-core 0.57.0, windows-core 0.62.2, windows-future 0.3.2, windows-implement 0.57.0, windows-implement 0.60.2, windows-interface 0.57.0, windows-interface 0.59.3, windows-link 0.2.1, windows-numerics 0.3.1, windows-result 0.1.2, windows-result 0.4.1, windows-strings 0.5.1, windows-sys 0.52.0, windows-sys 0.59.0, windows-sys 0.61.2, windows-targets 0.52.6, windows-threading 0.2.1, windows_aarch64_gnullvm 0.52.6, windows_aarch64_msvc 0.52.6, windows_i686_gnu 0.52.6, windows_i686_gnullvm 0.52.6, windows_i686_msvc 0.52.6, windows_x86_64_gnu 0.52.6, windows_x86_64_gnullvm 0.52.6, windows_x86_64_msvc 0.52.6
 
 ```text
 Copyright (c) Microsoft Corporation. All rights reserved.
@@ -6497,6 +6847,212 @@ http://www.apache.org/licenses/LICENSE-2.0> or the MIT license <LICENSE-MIT or
 http://opensource.org/licenses/MIT>, at your option. All files in the project
 carrying such notice may not be copied, modified, or distributed except
 according to those terms.
+```
+
+Used by: unicode-general-category 1.1.0
+
+```text
+                                 Apache License
+                           Version 2.0, January 2004
+                        http://www.apache.org/licenses/
+
+   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+   1. Definitions.
+
+      "License" shall mean the terms and conditions for use, reproduction,
+      and distribution as defined by Sections 1 through 9 of this document.
+
+      "Licensor" shall mean the copyright owner or entity authorized by
+      the copyright owner that is granting the License.
+
+      "Legal Entity" shall mean the union of the acting entity and all
+      other entities that control, are controlled by, or are under common
+      control with that entity. For the purposes of this definition,
+      "control" means (i) the power, direct or indirect, to cause the
+      direction or management of such entity, whether by contract or
+      otherwise, or (ii) ownership of fifty percent (50%) or more of the
+      outstanding shares, or (iii) beneficial ownership of such entity.
+
+      "You" (or "Your") shall mean an individual or Legal Entity
+      exercising permissions granted by this License.
+
+      "Source" form shall mean the preferred form for making modifications,
+      including but not limited to software source code, documentation
+      source, and configuration files.
+
+      "Object" form shall mean any form resulting from mechanical
+      transformation or translation of a Source form, including but
+      not limited to compiled object code, generated documentation,
+      and conversions to other media types.
+
+      "Work" shall mean the work of authorship, whether in Source or
+      Object form, made available under the License, as indicated by a
+      copyright notice that is included in or attached to the work
+      (an example is provided in the Appendix below).
+
+      "Derivative Works" shall mean any work, whether in Source or Object
+      form, that is based on (or derived from) the Work and for which the
+      editorial revisions, annotations, elaborations, or other modifications
+      represent, as a whole, an original work of authorship. For the purposes
+      of this License, Derivative Works shall not include works that remain
+      separable from, or merely link (or bind by name) to the interfaces of,
+      the Work and Derivative Works thereof.
+
+      "Contribution" shall mean any work of authorship, including
+      the original version of the Work and any modifications or additions
+      to that Work or Derivative Works thereof, that is intentionally
+      submitted to Licensor for inclusion in the Work by the copyright owner
+      or by an individual or Legal Entity authorized to submit on behalf of
+      the copyright owner. For the purposes of this definition, "submitted"
+      means any form of electronic, verbal, or written communication sent
+      to the Licensor or its representatives, including but not limited to
+      communication on electronic mailing lists, source code control systems,
+      and issue tracking systems that are managed by, or on behalf of, the
+      Licensor for the purpose of discussing and improving the Work, but
+      excluding communication that is conspicuously marked or otherwise
+      designated in writing by the copyright owner as "Not a Contribution."
+
+      "Contributor" shall mean Licensor and any individual or Legal Entity
+      on behalf of whom a Contribution has been received by Licensor and
+      subsequently incorporated within the Work.
+
+   2. Grant of Copyright License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      copyright license to reproduce, prepare Derivative Works of,
+      publicly display, publicly perform, sublicense, and distribute the
+      Work and such Derivative Works in Source or Object form.
+
+   3. Grant of Patent License. Subject to the terms and conditions of
+      this License, each Contributor hereby grants to You a perpetual,
+      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+      (except as stated in this section) patent license to make, have made,
+      use, offer to sell, sell, import, and otherwise transfer the Work,
+      where such license applies only to those patent claims licensable
+      by such Contributor that are necessarily infringed by their
+      Contribution(s) alone or by combination of their Contribution(s)
+      with the Work to which such Contribution(s) was submitted. If You
+      institute patent litigation against any entity (including a
+      cross-claim or counterclaim in a lawsuit) alleging that the Work
+      or a Contribution incorporated within the Work constitutes direct
+      or contributory patent infringement, then any patent licenses
+      granted to You under this License for that Work shall terminate
+      as of the date such litigation is filed.
+
+   4. Redistribution. You may reproduce and distribute copies of the
+      Work or Derivative Works thereof in any medium, with or without
+      modifications, and in Source or Object form, provided that You
+      meet the following conditions:
+
+      (a) You must give any other recipients of the Work or
+          Derivative Works a copy of this License; and
+
+      (b) You must cause any modified files to carry prominent notices
+          stating that You changed the files; and
+
+      (c) You must retain, in the Source form of any Derivative Works
+          that You distribute, all copyright, patent, trademark, and
+          attribution notices from the Source form of the Work,
+          excluding those notices that do not pertain to any part of
+          the Derivative Works; and
+
+      (d) If the Work includes a "NOTICE" text file as part of its
+          distribution, then any Derivative Works that You distribute must
+          include a readable copy of the attribution notices contained
+          within such NOTICE file, excluding those notices that do not
+          pertain to any part of the Derivative Works, in at least one
+          of the following places: within a NOTICE text file distributed
+          as part of the Derivative Works; within the Source form or
+          documentation, if provided along with the Derivative Works; or,
+          within a display generated by the Derivative Works, if and
+          wherever such third-party notices normally appear. The contents
+          of the NOTICE file are for informational purposes only and
+          do not modify the License. You may add Your own attribution
+          notices within Derivative Works that You distribute, alongside
+          or as an addendum to the NOTICE text from the Work, provided
+          that such additional attribution notices cannot be construed
+          as modifying the License.
+
+      You may add Your own copyright statement to Your modifications and
+      may provide additional or different license terms and conditions
+      for use, reproduction, or distribution of Your modifications, or
+      for any such Derivative Works as a whole, provided Your use,
+      reproduction, and distribution of the Work otherwise complies with
+      the conditions stated in this License.
+
+   5. Submission of Contributions. Unless You explicitly state otherwise,
+      any Contribution intentionally submitted for inclusion in the Work
+      by You to the Licensor shall be under the terms and conditions of
+      this License, without any additional terms or conditions.
+      Notwithstanding the above, nothing herein shall supersede or modify
+      the terms of any separate license agreement you may have executed
+      with Licensor regarding such Contributions.
+
+   6. Trademarks. This License does not grant permission to use the trade
+      names, trademarks, service marks, or product names of the Licensor,
+      except as required for reasonable and customary use in describing the
+      origin of the Work and reproducing the content of the NOTICE file.
+
+   7. Disclaimer of Warranty. Unless required by applicable law or
+      agreed to in writing, Licensor provides the Work (and each
+      Contributor provides its Contributions) on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+      implied, including, without limitation, any warranties or conditions
+      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+      PARTICULAR PURPOSE. You are solely responsible for determining the
+      appropriateness of using or redistributing the Work and assume any
+      risks associated with Your exercise of permissions under this License.
+
+   8. Limitation of Liability. In no event and under no legal theory,
+      whether in tort (including negligence), contract, or otherwise,
+      unless required by applicable law (such as deliberate and grossly
+      negligent acts) or agreed to in writing, shall any Contributor be
+      liable to You for damages, including any direct, indirect, special,
+      incidental, or consequential damages of any character arising as a
+      result of this License or out of the use or inability to use the
+      Work (including but not limited to damages for loss of goodwill,
+      work stoppage, computer failure or malfunction, or any and all
+      other commercial damages or losses), even if such Contributor
+      has been advised of the possibility of such damages.
+
+   9. Accepting Warranty or Additional Liability. While redistributing
+      the Work or Derivative Works thereof, You may choose to offer,
+      and charge a fee for, acceptance of support, warranty, indemnity,
+      or other liability obligations and/or rights consistent with this
+      License. However, in accepting such obligations, You may act only
+      on Your own behalf and on Your sole responsibility, not on behalf
+      of any other Contributor, and only if You agree to indemnify,
+      defend, and hold each Contributor harmless for any liability
+      incurred by, or claims asserted against, such Contributor by reason
+      of your accepting any such warranty or additional liability.
+
+   END OF TERMS AND CONDITIONS
+
+   APPENDIX: How to apply the Apache License to your work.
+
+      To apply the Apache License to your work, attach the following
+      boilerplate notice, with the fields enclosed by brackets "{}"
+      replaced with your own identifying information. (Don't include
+      the brackets!)  The text should be enclosed in the appropriate
+      comment syntax for the file format. We also recommend that a
+      file or class name and description of purpose be included on the
+      same "printed page" as the copyright notice for easier
+      identification within third-party archives.
+
+   Copyright {yyyy} {name of copyright owner}
+
+   Licensed under the Apache License, Version 2.0 (the "License");
+   you may not use this file except in compliance with the License.
+   You may obtain a copy of the License at
+
+       http://www.apache.org/licenses/LICENSE-2.0
+
+   Unless required by applicable law or agreed to in writing, software
+   distributed under the License is distributed on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+   See the License for the specific language governing permissions and
+   limitations under the License.
 ```
 
 Used by: unicode-ident 1.0.27, unicode-normalization 0.1.26, unicode-properties 0.1.5
@@ -6700,32 +7256,32 @@ standard text is above; the copyright is its authors'.
 
 | Crate | Version | License | Copyright |
 |---|---|---|---|
-| accesskit | 0.17.1 | MIT OR Apache-2.0 | The AccessKit contributors |
-| accesskit_atspi_common | 0.10.1 | MIT OR Apache-2.0 | The AccessKit contributors |
-| accesskit_consumer | 0.26.0 | MIT OR Apache-2.0 | The AccessKit contributors |
-| accesskit_macos | 0.18.1 | MIT OR Apache-2.0 | The AccessKit contributors |
-| accesskit_unix | 0.13.1 | MIT OR Apache-2.0 | The AccessKit contributors |
-| accesskit_windows | 0.24.1 | MIT OR Apache-2.0 | The AccessKit contributors |
-| accesskit_winit | 0.23.1 | Apache-2.0 | The AccessKit contributors |
+| accesskit | 0.25.2 | MIT OR Apache-2.0 | The AccessKit contributors |
+| accesskit_atspi_common | 0.21.1 | MIT OR Apache-2.0 | The AccessKit contributors |
+| accesskit_consumer | 0.39.2 | MIT OR Apache-2.0 | The AccessKit contributors |
+| accesskit_ios | 0.2.2 | MIT OR Apache-2.0 | The AccessKit contributors |
+| accesskit_macos | 0.27.2 | MIT OR Apache-2.0 | The AccessKit contributors |
+| accesskit_unix | 0.24.1 | MIT OR Apache-2.0 | The AccessKit contributors |
+| accesskit_windows | 0.35.2 | MIT OR Apache-2.0 | The AccessKit contributors |
+| accesskit_winit | 0.34.2 | Apache-2.0 | The AccessKit contributors |
 | alloc-stdlib | 0.2.4 | BSD-3-Clause | Daniel Reiter Horn |
 | asn1-rs-impl | 0.2.0 | MIT/Apache-2.0 | Pierre Chifflier |
-| atspi-proxies | 0.6.0 | Apache-2.0 OR MIT | its authors |
 | block2 | 0.5.1 | MIT | Steven Sheldon, Mads Marquart |
 | block2 | 0.6.2 | MIT | Mads Marquart |
 | clipboard-win | 5.4.3 | BSL-1.0 | Douman |
 | dispatch | 0.2.0 | MIT | Steven Sheldon |
 | dispatch2 | 0.3.1 | Zlib OR Apache-2.0 OR MIT | Mads Marquart, Mary |
-| ecolor | 0.31.1 | MIT OR Apache-2.0 | Emil Ernerfeldt, Andreas Reich |
-| eframe | 0.31.1 | MIT OR Apache-2.0 | Emil Ernerfeldt |
-| egui | 0.31.1 | MIT OR Apache-2.0 | Emil Ernerfeldt |
-| egui-winit | 0.31.1 | MIT OR Apache-2.0 | Emil Ernerfeldt |
-| egui_extras | 0.31.1 | MIT OR Apache-2.0 | Dominik Rössler, Emil Ernerfeldt, René Rössler |
-| egui_glow | 0.31.1 | MIT OR Apache-2.0 | Emil Ernerfeldt |
-| emath | 0.31.1 | MIT OR Apache-2.0 | Emil Ernerfeldt |
-| enum-map | 2.7.3 | MIT OR Apache-2.0 | Kamila Borowska |
-| enum-map-derive | 0.17.0 | MIT OR Apache-2.0 | Kamila Borowska |
-| epaint | 0.31.1 | MIT OR Apache-2.0 | Emil Ernerfeldt |
-| epaint_default_fonts | 0.31.1 | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 | Emil Ernerfeldt |
+| ecolor | 0.37.0 | MIT OR Apache-2.0 | Emil Ernerfeldt, Andreas Reich |
+| eframe | 0.37.0 | MIT OR Apache-2.0 | Emil Ernerfeldt |
+| egui | 0.37.0 | MIT OR Apache-2.0 | Emil Ernerfeldt |
+| egui-winit | 0.37.0 | MIT OR Apache-2.0 | Emil Ernerfeldt |
+| egui_extras | 0.37.0 | MIT OR Apache-2.0 | Dominik Rössler, Emil Ernerfeldt, René Rössler |
+| egui_glow | 0.37.0 | MIT OR Apache-2.0 | Emil Ernerfeldt |
+| emath | 0.37.0 | MIT OR Apache-2.0 | Emil Ernerfeldt |
+| enum-map | 3.1.0 | MIT OR Apache-2.0 | Luna Borowska |
+| enum-map-derive | 1.0.1 | MIT OR Apache-2.0 | Luna Borowska |
+| epaint | 0.37.0 | MIT OR Apache-2.0 | Emil Ernerfeldt |
+| epaint_default_fonts | 0.37.0 | (MIT OR Apache-2.0) AND OFL-1.1 AND Ubuntu-font-1.0 | Emil Ernerfeldt |
 | flatbuffers | 25.12.19 | Apache-2.0 | Robert Winslow, FlatBuffers Maintainers |
 | jni | 0.22.4 | MIT OR Apache-2.0 | jni team |
 | jni-macros | 0.22.4 | MIT OR Apache-2.0 | its authors |
@@ -6747,6 +7303,7 @@ standard text is above; the copyright is its authors'.
 | objc2-foundation | 0.2.2 | MIT | its authors |
 | objc2-foundation | 0.3.2 | MIT | its authors |
 | objc2-ui-kit | 0.2.2 | MIT | its authors |
+| objc2-ui-kit | 0.3.2 | Zlib OR Apache-2.0 OR MIT | its authors |
 | ogg_pager | 0.7.2 | MIT OR Apache-2.0 | Serial |
 | profiling | 1.0.18 | MIT OR Apache-2.0 | Philip Degarmo |
 | quad-rand | 0.2.3 | MIT | not-fl3 |
@@ -6758,7 +7315,6 @@ standard text is above; the copyright is its authors'.
 | winapi-i686-pc-windows-gnu | 0.4.0 | MIT/Apache-2.0 | Peter Atashian |
 | winapi-x86_64-pc-windows-gnu | 0.4.0 | MIT/Apache-2.0 | Peter Atashian |
 | wuff | 0.2.10 | MIT | Nico Burns |
-| zbus_xml | 4.0.0 | MIT | Zeeshan Ali Khan |
 | zune-core | 0.4.12 | MIT OR Apache-2.0 OR Zlib | its authors |
 | zune-inflate | 0.2.54 | MIT OR Apache-2.0 OR Zlib | its authors |
 | zune-jpeg | 0.4.21 | MIT OR Apache-2.0 OR Zlib | caleb |

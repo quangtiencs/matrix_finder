@@ -1199,8 +1199,10 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
 
     // Pin egui's own light/dark preference so OS changes don't swap in egui's default style.
     ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.visuals = v;
+    // Round slider handles, as egui drew them until 0.35.
+    style.visuals.handle_shape = egui::style::HandleShape::Circle;
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 4.0);
     style.spacing.interact_size = egui::vec2(24.0, 26.0);
@@ -1210,6 +1212,12 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
     style.spacing.combo_width = 120.0;
     style.spacing.scroll.bar_width = 6.0;
     style.spacing.scroll.floating = true;
+    // No fading at the edges of scrolled lists: the file lists paint their own background.
+    style.spacing.scroll.fade.strength = 0.0;
+    // Snappy, as egui was until 0.35 (it now takes 0.2 s); a test harness turns it off.
+    if style.animation_time > 0.0 {
+        style.animation_time = 1.0 / 12.0;
+    }
     style.text_styles = [
         // Default text size: 14 px (Settings → UI scale zooms everything).
         (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
@@ -1219,7 +1227,10 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
         (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
     ]
     .into();
-    ctx.set_style(style);
+    // The same style whichever light/dark mode egui is in (the OS, or a test harness, may
+    // switch it): popups and menus would otherwise get egui's own.
+    ctx.set_style_of(egui::Theme::Light, style.clone());
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 #[cfg(test)]

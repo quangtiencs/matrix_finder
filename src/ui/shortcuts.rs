@@ -854,7 +854,7 @@ mod tests {
             &ctx,
             &crate::style::fonts::FontPrefs { ui_font: String::new(), ui_size: crate::style::fonts::DEFAULT_UI_SIZE, term_font: String::new() },
         );
-        let _ = ctx.run(Default::default(), |_| {});
+        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
         let bold = egui::FontFamily::Name("bold".into());
         let mut texts: Vec<String> = vec![];
         for os in OSES {
@@ -868,10 +868,15 @@ mod tests {
                 texts.push(Chord { cmd: true, ..all }.display(os));
             }
         }
-        ctx.fonts(|f| {
+        ctx.fonts_mut(|f| {
+            let mut drawn = |family: &egui::FontFamily, c: char| f.has_glyph(&egui::FontId::new(14.0, family.clone()), c);
+            // The check finds a character no font has.
+            assert!(!drawn(&egui::FontFamily::Proportional, '\u{10FFFD}'));
             for text in &texts {
                 for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace, bold.clone()] {
-                    assert!(f.has_glyphs(&egui::FontId::new(14.0, family.clone()), text), "{text} in {family:?}");
+                    for c in text.chars().filter(|c| !c.is_whitespace()) {
+                        assert!(drawn(&family, c), "{c:?} of {text} in {family:?}");
+                    }
                 }
             }
         });

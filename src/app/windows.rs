@@ -255,7 +255,7 @@ impl App {
     /// rows under it must not move.
     pub(super) fn poll_dir_watch(&mut self, ctx: &egui::Context) {
         let changed = self.dir_watch.take_changed();
-        let busy = ctx.memory(|m| m.any_popup_open()) || crate::ui::pane::drag_payload(ctx).is_some();
+        let busy = egui::Popup::is_any_open(ctx) || crate::ui::pane::drag_payload(ctx).is_some();
         let c = lc!(self);
         for p in &mut self.panes {
             let tab = p.tab_mut();
@@ -682,7 +682,7 @@ impl App {
         // Ghost label for a dragged window.
         if let Some(s) = src {
             let title = self.panes[s].tab().title();
-            egui::Area::new(egui::Id::new("window-drag-ghost"))
+            egui::Area::new(egui::Id::unique("window-drag-ghost"))
                 .order(egui::Order::Tooltip)
                 .fixed_pos(pointer + egui::vec2(12.0, 8.0))
                 .interactable(false)

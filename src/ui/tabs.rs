@@ -7,6 +7,7 @@ use crate::i18n::t;
 use crate::style::icons;
 use crate::ui::layout::Layout;
 use crate::ui::pane::Pane;
+use crate::ui::KeptContextMenu as _;
 use egui::{pos2, vec2, Align2, Color32, FontId, Rect, Sense, Stroke};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -516,7 +517,7 @@ pub fn layout_cells(layout: &Layout, focused: usize) -> Vec<(Rect, bool)> {
 fn truncate(ui: &egui::Ui, text: &str, font: FontId, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(4.0));
-    ui.fonts(|f| f.layout_job(job))
+    ui.fonts_mut(|f| f.layout_job(job))
 }
 
 /// The tab bar. `info[i]` describes `strip.tabs[i]`.
@@ -604,12 +605,12 @@ pub fn tab_bar(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], c: &BarCt
         if tr.clicked() {
             ev.push(TabEvent::NewTerminal { at, group, profile: None });
         }
-        tr.context_menu(|ui| {
+        tr.kept_context_menu(|ui| {
             ui.label(egui::RichText::new(t("New terminal tab with profile")).color(th.weak).size(11.5));
             for (i, name) in c.terminal_profiles.iter().enumerate() {
                 if ui.button(name).clicked() {
                     ev.push(TabEvent::NewTerminal { at, group, profile: Some(i) });
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             }
         });
@@ -618,7 +619,7 @@ pub fn tab_bar(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], c: &BarCt
     let bar = Rect::from_min_max(row.response.rect.min, pos2(ui.max_rect().right(), row.response.rect.bottom()));
 
     // Scroll the active tab into view when it changes.
-    let key = egui::Id::new("tab-strip-active");
+    let key = egui::Id::unique("tab-strip-active");
     let uid = strip.tabs[strip.active].uid;
     if ctx.data(|d| d.get_temp::<u64>(key)) != Some(uid) {
         ctx.data_mut(|d| d.insert_temp(key, uid));
@@ -707,11 +708,14 @@ pub fn tab_bar(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], c: &BarCt
     if let (Some(d), Some(p)) = (tab_drag, pointer) {
         if let Some(i) = strip.index_of(d.uid) {
             let title = info[i].title.clone();
-            egui::Area::new(egui::Id::new("tab-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(&ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label(title);
-                });
-            });
+            egui::Area::new(egui::Id::unique("tab-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
+                &ctx,
+                |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label(title);
+                    });
+                },
+            );
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
     }
@@ -739,7 +743,7 @@ fn chip_width(ui: &egui::Ui, g: &TabGroup, count: usize) -> f32 {
     if label.is_empty() {
         return 16.0;
     }
-    ui.fonts(|f| f.layout_no_wrap(label, FontId::proportional(12.0), Color32::WHITE).size().x) + 18.0
+    ui.fonts_mut(|f| f.layout_no_wrap(label, FontId::proportional(12.0), Color32::WHITE).size().x) + 18.0
 }
 
 fn chip_label(g: &TabGroup, count: usize) -> String {
@@ -774,13 +778,13 @@ fn group_chip(ui: &mut egui::Ui, strip: &mut Strip, gid: u32, c: &BarCtx, ev: &m
     if resp.clicked() {
         local.push(Local::Collapse(gid));
     }
-    let focus_key = egui::Id::new(("group-name-focus", gid));
+    let focus_key = egui::Id::unique(("group-name-focus", gid));
     if resp.secondary_clicked() {
         ui.ctx().data_mut(|d| d.insert_temp(focus_key, true));
     }
     let tip = if g.collapsed { t("Expand group") } else { t("Collapse group") };
     let resp = resp.on_hover_text(format!("{} ({count})\n{tip}", if g.name.is_empty() { t("Unnamed group") } else { g.name.clone() }));
-    resp.context_menu(|ui| {
+    resp.kept_context_menu(|ui| {
         ui.set_min_width(220.0);
         if let Some(gm) = strip.group_mut(gid) {
             let r = ui.add(egui::TextEdit::singleline(&mut gm.name).hint_text(t("Name this group")).desired_width(200.0));
@@ -789,7 +793,7 @@ fn group_chip(ui: &mut egui::Ui, strip: &mut Strip, gid: u32, c: &BarCtx, ev: &m
                 r.request_focus();
             }
             if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
@@ -810,25 +814,25 @@ fn group_chip(ui: &mut egui::Ui, strip: &mut Strip, gid: u32, c: &BarCtx, ev: &m
         let end = strip.group_range(gid).map(|(_, l)| l + 1).unwrap_or(strip.tabs.len());
         if ui.button(t("New tab in group")).clicked() {
             ev.push(TabEvent::NewFiles { at: end, group: Some(gid) });
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("New terminal in group")).clicked() {
             ev.push(TabEvent::NewTerminal { at: end, group: Some(gid), profile: None });
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(if g.collapsed { t("Expand group") } else { t("Collapse group") }).clicked() {
             local.push(Local::Collapse(gid));
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         ui.separator();
         if ui.button(t("Ungroup")).clicked() {
             local.push(Local::Ungroup(gid));
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Close group")).clicked() {
             let uids = strip.tabs.iter().filter(|t| t.group == Some(gid)).map(|t| t.uid).collect();
             ev.push(TabEvent::Close(uids));
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     });
     Some(rect)
@@ -851,7 +855,7 @@ fn tab_item(
     let (rect, _) = ui.allocate_exact_size(vec2(w, TAB_H), Sense::hover());
     let tab = &strip.tabs[i];
     let inf = &info[i];
-    let id = egui::Id::new(("tab", tab.uid));
+    let id = egui::Id::unique(("tab", tab.uid));
     let resp = ui.interact(rect, id, Sense::click_and_drag());
     let p = ui.painter().clone();
     let being_dragged = egui::DragAndDrop::payload::<TabDrag>(ui.ctx()).is_some_and(|d| d.uid == tab.uid);
@@ -947,7 +951,7 @@ fn tab_item(
         egui::DragAndDrop::set_payload(ui.ctx(), TabDrag { uid });
     }
     let resp = if egui::DragAndDrop::has_any_payload(ui.ctx()) { resp } else { resp.on_hover_text(inf.tooltip.clone()) };
-    resp.context_menu(|ui| tab_menu(ui, strip, info, i, c, ev, local));
+    resp.kept_context_menu(|ui| tab_menu(ui, strip, info, i, c, ev, local));
     rect
 }
 
@@ -961,11 +965,11 @@ fn tab_menu(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, c:
     let new_key = key_of(crate::ui::shortcuts::Action::NewTab);
     if ui.add(egui::Button::new(t("New tab to the right")).shortcut_text(new_key)).clicked() {
         ev.push(TabEvent::NewFiles { at: i + 1, group });
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if ui.add(egui::Button::new(t("New terminal to the right")).shortcut_text(key_of(crate::ui::shortcuts::Action::NewTerminalTab))).clicked() {
         ev.push(TabEvent::NewTerminal { at: i + 1, group, profile: None });
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     ui.separator();
     // Rename (live).
@@ -981,7 +985,7 @@ fn tab_menu(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, c:
     if !strip.tabs[i].pinned {
         if ui.button(t("Add tab to new group")).clicked() {
             local.push(Local::NewGroup(i));
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         let others: Vec<(u32, String, u8)> = strip
             .groups
@@ -999,47 +1003,47 @@ fn tab_menu(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], i: usize, c:
                     });
                     if resp.inner.clicked() {
                         local.push(Local::SetGroup(i, Some(gid)));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 }
             });
         }
         if group.is_some() && ui.button(t("Remove from group")).clicked() {
             local.push(Local::SetGroup(i, None));
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     }
     if ui.button(if strip.tabs[i].pinned { t("Unpin") } else { t("Pin") }).clicked() {
         local.push(Local::Pin(i));
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if ui.button(t("Duplicate")).clicked() {
         ev.push(TabEvent::Duplicate(uid));
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if i != strip.active && ui.button(t("Show beside the current tab")).clicked() {
         ev.push(TabEvent::MergeIntoShown(uid));
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     ui.separator();
     let close_key = key_of(crate::ui::shortcuts::Action::CloseTab);
     if ui.add(egui::Button::new(t("Close tab")).shortcut_text(close_key)).clicked() {
         ev.push(TabEvent::Close(vec![uid]));
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if strip.tabs.len() > 1 && ui.button(t("Close other tabs")).clicked() {
         let uids = strip.tabs.iter().filter(|t| t.uid != uid && !t.pinned).map(|t| t.uid).collect();
         ev.push(TabEvent::Close(uids));
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if i + 1 < strip.tabs.len() && ui.button(t("Close tabs to the right")).clicked() {
         let uids = strip.tabs[i + 1..].iter().map(|t| t.uid).collect();
         ev.push(TabEvent::Close(uids));
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if c.can_reopen && ui.add(egui::Button::new(t("Reopen closed tab")).shortcut_text(key_of(crate::ui::shortcuts::Action::ReopenTab))).clicked() {
         ev.push(TabEvent::ReopenClosed);
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
 }
 

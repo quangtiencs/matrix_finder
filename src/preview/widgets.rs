@@ -39,7 +39,7 @@ pub fn upload_texture(ctx: &egui::Context, name: impl Into<String>, image: egui:
                 pixels.push(image.pixels[(y * h / nh) * w + x * w / nw]);
             }
         }
-        egui::ColorImage { size: [nw, nh], pixels }
+        egui::ColorImage::new([nw, nh], pixels)
     } else {
         image
     };
@@ -55,7 +55,7 @@ const NAME_ROOM: f32 = 220.0;
 /// leave too little for the name, it goes on a line of its own above them.
 pub fn header_row(ui: &mut egui::Ui, theme: &Theme, name: &str, facts: &[(String, Color32)], buttons: impl FnOnce(&mut egui::Ui)) {
     // How wide the buttons were last time: they are drawn before the name.
-    let id = ui.id().with("preview-header-buttons");
+    let id = ui.scope_id().with("preview-header-buttons");
     let buttons_w: f32 = ui.data(|d| d.get_temp(id)).unwrap_or(0.0);
     let own_line = ui.available_width() - buttons_w < NAME_ROOM;
     let name_label = || egui::Label::new(egui::RichText::new(name).strong().color(theme.accent)).truncate();
@@ -76,7 +76,7 @@ pub fn header_row(ui: &mut egui::Ui, theme: &Theme, name: &str, facts: &[(String
                 let gap = ui.spacing().item_spacing.x;
                 let room = ui.available_width();
                 let text: Vec<&str> = facts.iter().map(|(s, _)| s.as_str()).collect();
-                let facts_w = if facts.is_empty() { 0.0 } else { ui.fonts(|f| f.layout_no_wrap(text.join(" "), font.clone(), theme.weak).size().x) + gap };
+                let facts_w = if facts.is_empty() { 0.0 } else { ui.fonts_mut(|f| f.layout_no_wrap(text.join(" "), font.clone(), theme.weak).size().x) + gap };
                 if !own_line {
                     // The name gets what the facts leave, and at least half the row.
                     let name_room = (room - facts_w).max(room * 0.5).max(24.0);

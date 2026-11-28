@@ -5,6 +5,7 @@
 use super::settings_ui::{bold, drag_feedback, grip_dots};
 use super::*;
 use crate::config::{default_quick_filters, unused_quick_filter_name, QuickFilter};
+use crate::ui::KeptContextMenu as _;
 use egui::{pos2, vec2, Align2, FontId, Rect, Sense, Stroke};
 
 /// What the Quick filters page has open: kept between frames.
@@ -36,7 +37,7 @@ const NAME_W: f32 = 150.0;
 
 /// The extensions as ".jpg .png …" in at most `w` points, with how many did not fit.
 fn ext_summary(ui: &egui::Ui, exts: &[String], w: f32, font: &FontId) -> String {
-    let width = |s: &str| ui.fonts(|f| f.layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE).size().x);
+    let width = |s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE).size().x);
     let mut shown = String::new();
     for (i, e) in exts.iter().enumerate() {
         let next = if shown.is_empty() { format!(".{e}") } else { format!("{shown}  .{e}") };
@@ -220,10 +221,10 @@ impl App {
         let exts = q.ext_list();
         let open = self.qf.open == Some(i);
         let asking = self.qf.delete == Some(i);
-        let id = egui::Id::new(("qf-row", i));
+        let id = egui::Id::unique(("qf-row", i));
         let (row, resp) = ui.allocate_exact_size(vec2(w, ROW_H), Sense::click());
         let label = q.display_name();
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, &label));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, open, &label));
         let mut edit = None;
 
         // The handle, and the buttons on the right: drawn over the row, so they take its clicks.
@@ -252,7 +253,7 @@ impl App {
         } else {
             let tr = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(26.0, 26.0));
             let trash = ui.interact(tr, id.with("remove"), Sense::click());
-            trash.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Remove")));
+            trash.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Remove")));
             if trash.hovered() {
                 ui.painter().rect_filled(tr, 6.0, th.hover());
             }
@@ -269,7 +270,7 @@ impl App {
         let name_font = bold(13.5);
         let mut job = egui::text::LayoutJob::simple_singleline(label.clone(), name_font, if q.name.trim().is_empty() { th.weak } else { th.strong() });
         job.wrap = egui::text::TextWrapping::truncate_at_width(NAME_W - 8.0);
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.painter().galley(pos2(row.left() + NAME_X, row.center().y - g.size().y / 2.0), g, th.strong());
         // The extensions, as many as fit; or why the filter shows nothing.
         let ex = row.left() + NAME_X + NAME_W;
@@ -283,7 +284,7 @@ impl App {
             let msg = t("Remove “{name}”?").replace("{name}", &label);
             let mut job = egui::text::LayoutJob::simple_singleline(msg, FontId::proportional(12.5), th.danger);
             job.wrap = egui::text::TextWrapping::truncate_at_width((text_end - 8.0 - ex).max(20.0));
-            let g = ui.fonts(|f| f.layout_job(job));
+            let g = ui.fonts_mut(|f| f.layout_job(job));
             ui.painter().galley(pos2(ex, row.center().y - g.size().y / 2.0), g, th.danger);
         } else {
             // Open or closed: a chevron by the trash can.
@@ -297,23 +298,23 @@ impl App {
             self.qf.add.clear();
             self.qf.delete = None;
         }
-        resp.context_menu(|ui| {
+        resp.kept_context_menu(|ui| {
             if ui.add_enabled(i > 0, egui::Button::new(t("Move up"))).clicked() {
                 edit = Some(QfEdit::Move(i, i - 1));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.add_enabled(i + 1 < n, egui::Button::new(t("Move down"))).clicked() {
                 edit = Some(QfEdit::Move(i, i + 2));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button(t("Duplicate")).clicked() {
                 edit = Some(QfEdit::Duplicate(i));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             ui.separator();
             if ui.button(RichText::new(t("Remove…")).color(th.danger)).clicked() {
                 self.qf.delete = Some(i);
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
         (grip, edit)
@@ -368,7 +369,7 @@ impl App {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                         for (k, e) in exts.iter().enumerate() {
-                            if ext_chip(ui, th, e, egui::Id::new(("qf-chip", i, k))) {
+                            if ext_chip(ui, th, e, egui::Id::unique(("qf-chip", i, k))) {
                                 remove = Some(k);
                             }
                         }
@@ -437,12 +438,12 @@ fn rename_in_windows(app: &mut App, old: &str, new: &str) {
 /// An extension as a chip: ".jpg ×". True when its × is clicked.
 fn ext_chip(ui: &mut egui::Ui, th: &Theme, ext: &str, id: egui::Id) -> bool {
     let font = FontId::monospace(11.5);
-    let g = ui.fonts(|f| f.layout_no_wrap(format!(".{ext}"), font, th.text));
+    let g = ui.fonts_mut(|f| f.layout_no_wrap(format!(".{ext}"), font, th.text));
     let size = vec2(g.size().x + 32.0, 22.0);
     let (r, _) = ui.allocate_exact_size(size, Sense::hover());
     let xr = Rect::from_center_size(pos2(r.right() - 11.0, r.center().y), vec2(16.0, 16.0));
     let x = ui.interact(xr, id, Sense::click());
-    x.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} .{ext}", t("Remove"))));
+    x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{} .{ext}", t("Remove"))));
     let fill = if x.hovered() { th.danger.gamma_multiply(0.15) } else { th.surface };
     ui.painter().rect(r, 11.0, fill, Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
     ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, th.text);

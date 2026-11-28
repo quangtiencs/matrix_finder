@@ -444,7 +444,15 @@ impl App {
         cc.egui_ctx.set_zoom_factor(cfg.ui_scale.clamp(0.6, 2.5));
         // Zooming by keys is the app's own (saved, and rebindable): egui's would not be
         // saved, and its Ctrl+− would reach the terminals too.
-        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        cc.egui_ctx.options_mut(|o| {
+            o.zoom_with_keyboard = false;
+            // A field gives up the keyboard when the mouse is pressed elsewhere (egui 0.32's
+            // way): a click on a suggestion is taken on the press, and the field keeps it.
+            o.input_options.surrender_focus_on = egui::SurrenderFocusOn::Presses;
+            // No Ctrl+Q that closes the window at once: terminal programs use it, and
+            // quitting asks first about running programs and jobs (the app's own Quit key).
+            o.quit_shortcuts.clear();
+        });
         let to_locs = |v: &Vec<String>| -> Vec<Location> { v.iter().map(PathBuf::from).filter(|p| p.is_dir()).map(Location::Local).collect() };
         // Start with a single pane; splits are created on demand. By default it
         // shows the user's home folder, and no terminal is opened at start.
@@ -1178,7 +1186,7 @@ impl App {
         self.layout.arrange(rect, 10.0, &mut rects, &mut handles);
         // Dividers between panes.
         for (i, h) in handles.iter().enumerate() {
-            let hr = ui.interact(h.rect, egui::Id::new(("splitter", i, h.path.clone())), egui::Sense::click_and_drag());
+            let hr = ui.interact(h.rect, egui::Id::unique(("splitter", i, h.path.clone())), egui::Sense::click_and_drag());
             if hr.hovered() || hr.dragged() {
                 ui.ctx().set_cursor_icon(if h.horizontal { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
                 let line = if h.horizontal {
@@ -1350,7 +1358,37 @@ impl eframe::App for App {
         egui::Rgba::from(self.theme.panel).to_array()
     }
 
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    /// Work that goes on while the window is hidden or minimized too (eframe then runs no
+    /// `ui`): terminals, jobs, connections, a launch handing over a folder, saving, and a
+    /// quit asked from the Dock, which may need to show the window to ask first.
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        crate::ui::chrome::install_quit_guard(frame);
+        self.sync_tab();
+        self.active = self.active.min(self.panes.len() - 1);
+        self.quit_step(ctx);
+        self.poll_terminals(ctx);
+        self.poll_agents();
+        self.poll_instance(ctx);
+        self.poll_jobs(ctx);
+        self.poll_connect();
+        self.poll_drives(ctx);
+        self.poll_update(ctx);
+        self.poll_temp_copies(ctx);
+        self.save_cfg_pending(ctx);
+        self.poll_dir_watch(ctx);
+        let mut busy = self.connecting.is_some();
+        for side in 0..self.panes.len() {
+            let tab = self.panes[side].tab_mut();
+            tab.poll(&lc!(self));
+            busy |= self.panes[side].tab().is_loading() || self.panes[side].tab().is_scanning() || self.panes[side].tab().dir_sizes.is_some();
+        }
+        if busy {
+            ctx.request_repaint_after(Duration::from_millis(60));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let ctx = &ui.ctx().clone();
         self.chrome.setup_native(frame);
         // Startup tokens, once the window has been drawn: from the third frame on (a pass
         // may be redone within one frame, so frames are counted here, not passes). An
@@ -1370,7 +1408,6 @@ impl eframe::App for App {
         }
         self.max_texture = ctx.input(|i| i.max_texture_side).max(1024);
         // Follow the OS (theme "System") and keep the icon set in sync.
-        crate::ui::chrome::install_quit_guard(frame);
         let wanted = self.resolve_theme(ctx);
         if !std::ptr::eq(wanted, self.theme) {
             self.theme = wanted;
@@ -1391,7 +1428,7 @@ impl eframe::App for App {
             self.prev_active = self.last_active;
             self.last_active = self.active;
         }
-        self.quit_step(ctx);
+
         self.track_windows(ctx);
         if let Some(tab) = self.panes.get(self.active).map(|p| p.tab()).filter(|t| t.is_files()) {
             if self.last_files_loc.as_ref() != Some(&tab.loc) {
@@ -1399,26 +1436,7 @@ impl eframe::App for App {
             }
         }
         self.handle_keys(ctx);
-        self.poll_terminals(ctx);
-        self.poll_agents();
-        self.poll_instance(ctx);
-        self.poll_jobs(ctx);
-        self.poll_connect();
         self.handle_dropped_files(ctx);
-        self.poll_drives(ctx);
-        self.poll_update(ctx);
-        self.poll_temp_copies(ctx);
-        self.save_cfg_pending(ctx);
-        self.poll_dir_watch(ctx);
-        let mut busy = self.connecting.is_some();
-        for side in 0..self.panes.len() {
-            let tab = self.panes[side].tab_mut();
-            tab.poll(&lc!(self));
-            busy |= self.panes[side].tab().is_loading() || self.panes[side].tab().is_scanning() || self.panes[side].tab().dir_sizes.is_some();
-        }
-        if busy {
-            ctx.request_repaint_after(Duration::from_millis(60));
-        }
 
         // Window title follows the active folder.
         let title = match &self.panes[self.active].tab().term {
@@ -1434,7 +1452,7 @@ impl eframe::App for App {
         // see-through, so its corners show the desktop (see `clear_color`).
         self.window_radius = self.chrome.window_radius(ctx);
         let panel = if self.window_radius > 0.0 {
-            ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.screen_rect(), self.window_radius, self.theme.panel);
+            ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.viewport_rect(), self.window_radius, self.theme.panel);
             egui::Color32::TRANSPARENT
         } else {
             self.theme.panel
@@ -1447,26 +1465,26 @@ impl eframe::App for App {
                 self.sidebar_min_for = (self.cfg.ui_font_size, self.cfg.ui_scale, self.cfg.language.clone());
                 self.sidebar_min = 0.0;
             }
-            egui::SidePanel::left("sidebar")
+            egui::Panel::left("sidebar")
                 .resizable(false)
                 // In a narrow window the sidebar gives up space (never more than ~26 %).
                 // Never narrower than its content, which would spill past the panel's
                 // edge and leave an unpainted band beside it.
-                .exact_width(self.cfg.sidebar_width.min((ctx.screen_rect().width() * 0.26).max(160.0)).max(self.sidebar_min).round())
+                .exact_size(self.cfg.sidebar_width.min((ctx.content_rect().width() * 0.26).max(160.0)).max(self.sidebar_min).round())
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: 8, right: 8, top: self.chrome.top_margin(), bottom: 6 }))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     // The gap on the right edge is the resize grip (no full-height line).
                     let inner = ui.max_rect();
                     let grip = egui::Rect::from_min_max(egui::pos2(inner.right() + 1.0, inner.top()), egui::pos2(inner.right() + 8.0, inner.bottom()));
-                    let g = ui.interact(grip, egui::Id::new("sidebar-grip"), egui::Sense::click_and_drag());
+                    let g = ui.interact(grip, egui::Id::unique("sidebar-grip"), egui::Sense::click_and_drag());
                     // Only the cursor changes: a coloured bar next to the panel border looked like two lines.
                     if g.hovered() || g.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
                     }
                     if g.dragged() {
                         if let Some(p) = g.interact_pointer_pos() {
-                            self.cfg.sidebar_width = (p.x - ctx.screen_rect().left()).clamp(160.0, 360.0);
+                            self.cfg.sidebar_width = (p.x - ctx.content_rect().left()).clamp(160.0, 360.0);
                         }
                     }
                     if g.drag_stopped() {
@@ -1485,7 +1503,7 @@ impl eframe::App for App {
                     }
                 });
         }
-        egui::TopBottomPanel::top("topbar")
+        egui::Panel::top("topbar")
             .show_separator_line(false)
             .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin {
                 left: if self.cfg.show_sidebar { 4 } else { 10 },
@@ -1493,11 +1511,11 @@ impl eframe::App for App {
                 top: self.chrome.top_margin(),
                 bottom: 4,
             }))
-            .show(ctx, |ui| self.top_bar(ui));
-        egui::TopBottomPanel::bottom("status")
+            .show(ui, |ui| self.top_bar(ui));
+        egui::Panel::bottom("status")
             .show_separator_line(false)
             .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: 6, right: 10, top: 2, bottom: 4 }))
-            .show(ctx, |ui| self.status_bar(ui));
+            .show(ui, |ui| self.status_bar(ui));
         // One Quick View for all panes, docked at the right under the top bar.
         // It is hidden while a terminal tab is active (the setting is kept).
         let shown = self.panes[self.active.min(self.panes.len() - 1)].tab();
@@ -1505,18 +1523,18 @@ impl eframe::App for App {
         if show_quick {
             // Width is a share of the window (1/3 by default) and only changes
             // when the user drags the gap on its left edge.
-            let screen = ctx.screen_rect();
+            let screen = ctx.content_rect();
             let w = (screen.width() * self.cfg.quick_view_frac).clamp(240.0, (screen.width() * 0.7).max(240.0)).round();
-            egui::SidePanel::right("quickview")
+            egui::Panel::right("quickview")
                 .resizable(false)
-                .exact_width(w)
+                .exact_size(w)
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: 10, right: 10, top: 4, bottom: 2 }))
-                .show(ctx, |ui| {
+                .show(ui, |ui| {
                     // The 10 px gap on the left edge is the resize grip.
                     let inner = ui.max_rect();
                     let grip = egui::Rect::from_min_max(egui::pos2(inner.left() - 10.0, inner.top()), egui::pos2(inner.left(), inner.bottom()));
-                    let g = ui.interact(grip, egui::Id::new("quickview-grip"), egui::Sense::click_and_drag());
+                    let g = ui.interact(grip, egui::Id::unique("quickview-grip"), egui::Sense::click_and_drag());
                     // Only the cursor changes: a coloured bar next to the panel border looked like two lines.
                     if g.hovered() || g.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -1539,14 +1557,14 @@ impl eframe::App for App {
         let left = if self.cfg.show_sidebar { 0 } else { 10 };
         egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left, right: if show_quick { 0 } else { 10 }, top: 4, bottom: 2 }))
-            .show(ctx, |ui| self.panes_area(ui));
+            .show(ui, |ui| self.panes_area(ui));
 
         // Viewer window (Shift+F3)
         if self.viewer.is_some() {
             let mut open = true;
             let name = self.viewer.as_ref().map(|v| v.name.clone()).unwrap_or_default();
             let chrome = self.chrome.clone();
-            chrome.dialog_window(ctx, &name, egui::Id::new("viewer")).open(&mut open).default_size([820.0, 600.0]).show(ctx, |ui| {
+            chrome.dialog_window(ctx, &name, egui::Id::unique("viewer")).open(&mut open).default_size([820.0, 600.0]).show(ctx, |ui| {
                 if chrome.dialog_title(ui, self.theme, &name) {
                     self.viewer = None;
                 }
@@ -1695,7 +1713,7 @@ struct DstChoice {
 
 /// The egui id of one of the app's windows, by its name in `App::windows`.
 fn window_id(name: &str) -> egui::Id {
-    egui::Id::new(if name == "reset" { "settings-reset" } else { name })
+    egui::Id::unique(if name == "reset" { "settings-reset" } else { name })
 }
 
 /// The last part of a typed destination, for the dialog's button (cut past 18 characters,

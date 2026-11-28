@@ -1,5 +1,6 @@
 //! Bookmarks: the sidebar section, the bookmarks bar, their menus and Settings → Bookmarks.
 use super::*;
+use crate::ui::KeptContextMenu as _;
 
 impl App {
     pub(super) fn open_bookmark(&mut self, b: &Bookmark) {
@@ -33,22 +34,22 @@ impl App {
                 let (at, group) = self.next_slot();
                 self.new_files_tab(at, group, Some(loc));
             }
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Open in other panel")).clicked() {
             if let Some(loc) = self.parse_location_text(&bookmark_target(&b.path)) {
                 let o = self.other_or_split();
                 self.panes[o].tab_mut().navigate(loc, &lc!(self));
             }
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Remove bookmark")).clicked() {
             *remove = Some(b.path.clone());
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Manage bookmarks…")).clicked() {
             self.open_settings(SettingsPage::Bookmarks);
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     }
 
@@ -62,16 +63,16 @@ impl App {
                     self.new_files_tab(at, None, Some(loc));
                 }
             }
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Remove group (keep its bookmarks)")).clicked() {
             remove_bookmark_folder(&mut self.cfg.bookmarks, i);
             self.save_cfg();
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Manage bookmarks…")).clicked() {
             self.open_settings(SettingsPage::Bookmarks);
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     }
 
@@ -86,7 +87,7 @@ impl App {
         if resp.clicked() {
             self.open_bookmark(b);
         }
-        resp.context_menu(|ui| self.bookmark_menu(ui, b, remove));
+        resp.kept_context_menu(|ui| self.bookmark_menu(ui, b, remove));
     }
 
     /// The bookmarks section of the sidebar (vertical bar): folders open and close.
@@ -107,7 +108,7 @@ impl App {
                 toggle = Some(i);
             }
             let tip = format!("{} · {}", b.children.len(), if b.collapsed { t("Expand group") } else { t("Collapse group") });
-            resp.on_hover_text(tip).context_menu(|ui| self.bookmark_folder_menu(ui, i));
+            resp.on_hover_text(tip).kept_context_menu(|ui| self.bookmark_folder_menu(ui, i));
             if !b.collapsed {
                 for c in &b.children {
                     ui.horizontal(|ui| {
@@ -136,7 +137,7 @@ impl App {
 
     /// Width of a chip in the bookmarks bar.
     fn chip_width(&self, ui: &egui::Ui, b: &Bookmark) -> f32 {
-        let text = ui.fonts(|f| f.layout_no_wrap(b.name.clone(), egui::FontId::proportional(13.0), egui::Color32::WHITE).size().x).min(160.0);
+        let text = ui.fonts_mut(|f| f.layout_no_wrap(b.name.clone(), egui::FontId::proportional(13.0), egui::Color32::WHITE).size().x).min(160.0);
         text + if b.folder { 46.0 } else { 34.0 }
     }
 
@@ -145,8 +146,8 @@ impl App {
         let th = self.theme;
         let w = self.chip_width(ui, b);
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
-        let popup = egui::Id::new(("bookmark-folder", i));
-        let open = b.folder && ui.memory(|m| m.is_popup_open(popup));
+        let popup = egui::Id::unique(("bookmark-folder", i));
+        let open = b.folder && egui::Popup::is_id_open(ui.ctx(), popup);
         let p = ui.painter();
         if !b.folder && bookmark_target(&b.path) == active {
             p.rect_filled(rect, 7.0, th.selection);
@@ -157,15 +158,15 @@ impl App {
         let text_w = w - if b.folder { 46.0 } else { 34.0 };
         let mut job = egui::text::LayoutJob::simple_singleline(b.name.clone(), egui::FontId::proportional(13.0), th.text);
         job.wrap = egui::text::TextWrapping::truncate_at_width(text_w + 1.0);
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         p.galley(egui::pos2(rect.left() + 28.0, rect.center().y - g.size().y / 2.0), g, th.text);
         if b.folder {
             let c = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(12.0, 12.0));
             icons::chevron(p, c, 2, th.weak);
             if resp.clicked() {
-                ui.memory_mut(|m| m.toggle_popup(popup));
+                egui::Popup::toggle_id(ui.ctx(), popup);
             }
-            egui::popup::popup_below_widget(ui, popup, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+            crate::ui::popup_below(popup, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                 ui.set_min_width(200.0);
                 for c in &b.children {
                     self.bar_menu_item(ui, c, remove);
@@ -174,7 +175,7 @@ impl App {
                     ui.label(RichText::new(t("Empty folder")).color(th.weak));
                 }
             });
-            resp.context_menu(|ui| self.bookmark_folder_menu(ui, i));
+            resp.kept_context_menu(|ui| self.bookmark_folder_menu(ui, i));
         } else {
             let target = bookmark_target(&b.path);
             if std::path::Path::new(&target).is_dir() {
@@ -184,7 +185,7 @@ impl App {
                 self.open_bookmark(b);
             }
             let resp = if egui::DragAndDrop::has_any_payload(ui.ctx()) { resp } else { resp.on_hover_text(&b.path) };
-            resp.context_menu(|ui| self.bookmark_menu(ui, b, remove));
+            resp.kept_context_menu(|ui| self.bookmark_menu(ui, b, remove));
         }
     }
 
@@ -200,7 +201,7 @@ impl App {
         if resp.clicked() {
             self.open_bookmark(b);
         }
-        resp.on_hover_text(&b.path).context_menu(|ui| self.bookmark_menu(ui, b, remove));
+        resp.on_hover_text(&b.path).kept_context_menu(|ui| self.bookmark_menu(ui, b, remove));
     }
 
     /// The horizontal bookmarks bar above the tab bar. What does not fit goes into "»".
@@ -229,11 +230,11 @@ impl App {
                     icons::chevron(p, r.translate(egui::vec2(2.5, 0.0)), 1, c);
                 })
                 .on_hover_text(t("More bookmarks"));
-                let id = egui::Id::new("bookmarks-more");
+                let id = egui::Id::unique("bookmarks-more");
                 if more.clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(id));
+                    egui::Popup::toggle_id(ui.ctx(), id);
                 }
-                egui::popup::popup_below_widget(ui, id, &more, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                crate::ui::popup_below(id, &more, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                     ui.set_min_width(220.0);
                     for i in overflow {
                         let b = &list[i];
@@ -268,46 +269,48 @@ impl App {
             let add = egui::Button::new(RichText::new(format!("+ {}", t("Add bookmark"))).color(th.on_accent()).strong())
                 .fill(th.accent)
                 .min_size(egui::vec2(0.0, 28.0));
-            egui::menu::menu_custom_button(ui, add, |ui| {
-                ui.set_min_width(280.0);
-                // The folder of the file window the user was in (Settings is a tab of its own).
-                if let Some(loc) = self.last_files_loc.clone() {
-                    let path = loc.display(|id| self.remote_label(id));
-                    let name = loc.short_name();
-                    let label = t("The folder you were in: {name}").replace("{name}", &name);
-                    let r = ui
-                        .add_enabled(!have(&self.cfg.bookmarks, &path), egui::Button::new(label))
-                        .on_hover_text(&path)
-                        .on_disabled_hover_text(t("Already a bookmark"));
-                    if r.clicked() {
-                        changed |= self.add_bookmark(name, path);
-                        ui.close_menu();
+            egui::containers::menu::MenuButton::from_button(add)
+                .config(crate::ui::kept_menu_config())
+                .ui(ui, |ui| {
+                    ui.set_min_width(280.0);
+                    // The folder of the file window the user was in (Settings is a tab of its own).
+                    if let Some(loc) = self.last_files_loc.clone() {
+                        let path = loc.display(|id| self.remote_label(id));
+                        let name = loc.short_name();
+                        let label = t("The folder you were in: {name}").replace("{name}", &name);
+                        let r = ui
+                            .add_enabled(!have(&self.cfg.bookmarks, &path), egui::Button::new(label))
+                            .on_hover_text(&path)
+                            .on_disabled_hover_text(t("Already a bookmark"));
+                        if r.clicked() {
+                            changed |= self.add_bookmark(name, path);
+                            ui.close_kind(egui::UiKind::Menu);
+                        }
                     }
-                }
-                if ui.button(t("Choose a folder…")).clicked() {
-                    ui.close_menu();
-                    if let Some(p) = rfd::FileDialog::new().pick_folder() {
-                        let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-                        changed |= self.add_bookmark(name, p.display().to_string());
+                    if ui.button(t("Choose a folder…")).clicked() {
+                        ui.close_kind(egui::UiKind::Menu);
+                        if let Some(p) = rfd::FileDialog::new().pick_folder() {
+                            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
+                            changed |= self.add_bookmark(name, p.display().to_string());
+                        }
                     }
-                }
-                ui.separator();
-                // Home, Desktop, Documents…: the ones not bookmarked yet, named.
-                let missing: Vec<Bookmark> = crate::config::system_bookmarks().into_iter().filter(|b| !have(&self.cfg.bookmarks, &b.path)).collect();
-                let label = if missing.is_empty() {
-                    t("Standard folders: all bookmarked")
-                } else {
-                    t("Standard folders: {names}").replace("{names}", &missing.iter().map(|b| b.name.as_str()).collect::<Vec<_>>().join(", "))
-                };
-                if ui.add_enabled(!missing.is_empty(), egui::Button::new(label)).clicked() {
-                    self.toast(t("Added {n} bookmarks").replace("{n}", &missing.len().to_string()), false);
-                    self.cfg.bookmarks.extend(missing);
-                    changed = true;
-                    ui.close_menu();
-                }
-            })
-            .response
-            .on_hover_text(t("Add a folder you use often"));
+                    ui.separator();
+                    // Home, Desktop, Documents…: the ones not bookmarked yet, named.
+                    let missing: Vec<Bookmark> = crate::config::system_bookmarks().into_iter().filter(|b| !have(&self.cfg.bookmarks, &b.path)).collect();
+                    let label = if missing.is_empty() {
+                        t("Standard folders: all bookmarked")
+                    } else {
+                        t("Standard folders: {names}").replace("{names}", &missing.iter().map(|b| b.name.as_str()).collect::<Vec<_>>().join(", "))
+                    };
+                    if ui.add_enabled(!missing.is_empty(), egui::Button::new(label)).clicked() {
+                        self.toast(t("Added {n} bookmarks").replace("{n}", &missing.len().to_string()), false);
+                        self.cfg.bookmarks.extend(missing);
+                        changed = true;
+                        ui.close_kind(egui::UiKind::Menu);
+                    }
+                })
+                .0
+                .on_hover_text(t("Add a folder you use often"));
             if ui
                 .add(egui::Button::new(format!("+ {}", t("New group"))).min_size(egui::vec2(0.0, 28.0)))
                 .on_hover_text(t("A group keeps bookmarks together: pick it in a bookmark's Group list"))
@@ -438,7 +441,7 @@ impl App {
                         ui.add_space(22.0);
                     }
                     let (gr, _) = ui.allocate_exact_size(egui::vec2(14.0, 26.0), egui::Sense::hover());
-                    let grip = ui.interact(gr, egui::Id::new(("bm-grip", at)), egui::Sense::drag());
+                    let grip = ui.interact(gr, egui::Id::unique(("bm-grip", at)), egui::Sense::drag());
                     let c = if grip.hovered() || grip.dragged() { th.text } else { th.weak };
                     super::settings_ui::grip_dots(ui.painter(), gr.center(), c);
                     let grip = if grip.dragged() { grip } else { grip.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(t("Drag to reorder")) };
@@ -451,9 +454,9 @@ impl App {
                         let resp = icons::icon_button(ui, 26.0, true, th, |p, r, _| icons::bookmark_icon(p, r.shrink(1.0), shown, th)).on_hover_text(t("Icon"));
                         let id = resp.id.with("icon-pick");
                         if resp.clicked() {
-                            ui.memory_mut(|m| m.toggle_popup(id));
+                            egui::Popup::toggle_id(ui.ctx(), id);
                         }
-                        egui::popup::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                        crate::ui::popup_below(id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                             ui.set_min_width(170.0);
                             for choice in BookmarkIcon::CHOICES {
                                 let (r, resp) = ui.allocate_exact_size(egui::vec2(170.0, 24.0), egui::Sense::click());
@@ -488,7 +491,7 @@ impl App {
                     *changed |= name.changed();
                     if !b.folder {
                         let o = crate::ui::pathfield::Opts { base: home.as_deref(), show_hidden, drives, width: path_w, hint: Some(t("Location")) };
-                        *changed |= paths.show(ui, &mut b.path, egui::Id::new(("bm-path", at)), o, th).changed();
+                        *changed |= paths.show(ui, &mut b.path, egui::Id::unique(("bm-path", at)), o, th).changed();
                         // Folder to keep it in.
                         let cur = at.1.and_then(|_| folders.iter().find(|(i, _)| *i == at.0)).map(|(_, n)| n.clone()).unwrap_or_else(|| "—".into());
                         egui::ComboBox::from_id_salt(("bm-folder", at.0, at.1))

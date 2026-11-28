@@ -167,7 +167,7 @@ impl App {
         }
         let th = self.theme;
         let mut act: Option<(u64, u8)> = None;
-        egui::Area::new(egui::Id::new("copy-prompts")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-18.0, 64.0)).order(egui::Order::Foreground).show(
+        egui::Area::new(egui::Id::unique("copy-prompts")).anchor(egui::Align2::RIGHT_TOP, egui::vec2(-18.0, 64.0)).order(egui::Order::Foreground).show(
             ctx,
             |ui| {
                 for c in self.temp_copies.list.iter().filter(|c| self.copy_prompts.contains(&c.id)) {

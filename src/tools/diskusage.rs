@@ -2,6 +2,7 @@
 //! folder (folders kept to a chosen depth, sizes always complete), drawn as a
 //! squarified treemap or a sortable table, and exportable as CSV.
 use crate::style::theme::Theme;
+use crate::ui::KeptContextMenu as _;
 use crate::util::human_size;
 use egui::{pos2, vec2, Color32, Rect, Sense, Stroke};
 use std::collections::HashSet;
@@ -490,20 +491,20 @@ fn entry_menu(ui: &mut egui::Ui, n: &Node, p: &Path, t: &dyn Fn(&str) -> String,
     let folder = if n.is_dir { p.to_path_buf() } else { p.parent().map(Path::to_path_buf).unwrap_or_default() };
     if ui.button(t("Show in a file tab")).clicked() {
         *act = Act::Folder(folder);
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if ui.button(t("Show in system file manager")).clicked() {
         *act = Act::Reveal(p.to_path_buf());
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
     if ui.button(t("Copy path")).clicked() {
         ui.ctx().copy_text(p.to_string_lossy().to_string());
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
     }
 }
 
 fn treemap(ui: &mut egui::Ui, rect: Rect, node: &Node, path: &Path, theme: &Theme, t: &dyn Fn(&str) -> String, act: &mut Act) {
-    let resp = ui.interact(rect, ui.id().with("du-treemap"), Sense::click());
+    let resp = ui.interact(rect, ui.scope_id().with("du-treemap"), Sense::click());
     let painter = ui.painter_at(rect);
     let kids: Vec<(usize, &Node)> = node.children.iter().enumerate().filter(|(_, c)| c.size > 0).take(400).collect();
     if kids.is_empty() {
@@ -547,7 +548,7 @@ fn treemap(ui: &mut egui::Ui, rect: Rect, node: &Node, path: &Path, theme: &Them
             *act = Act::Open(i);
         }
         let p = path.join(&k.name);
-        resp.context_menu(|ui| entry_menu(ui, k, &p, t, act));
+        resp.kept_context_menu(|ui| entry_menu(ui, k, &p, t, act));
     }
 }
 
@@ -618,7 +619,7 @@ fn table(ui: &mut egui::Ui, node: &Node, rows: &[(usize, &Node, PathBuf)], sort:
                 };
             }
             let resp = resp.on_hover_text(p.to_string_lossy());
-            resp.context_menu(|ui| entry_menu(ui, n, p, t, act));
+            resp.kept_context_menu(|ui| entry_menu(ui, n, p, t, act));
         }
     });
     if rows.len() >= MAX_TABLE_ROWS {

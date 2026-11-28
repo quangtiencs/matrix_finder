@@ -74,7 +74,7 @@ fn colour_edit(ui: &mut egui::Ui, th: &Theme, value: &mut String, fallback: egui
 /// A card that adds something to a gallery: a dashed outline with a plus and a label.
 fn add_card(ui: &mut egui::Ui, th: &Theme, label: &str, width: f32, height: f32) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
     let p = ui.painter();
     if resp.hovered() {
         p.rect_filled(rect, 9.0, th.hover());

@@ -146,7 +146,7 @@ impl BackupUi {
         let mut action = None;
         let mut open = self.open;
         let title = t("Backup");
-        chrome.dialog_window(ctx, &title, egui::Id::new("backup")).open(&mut open).default_size([860.0, 560.0]).max_height(720.0).show(ctx, |ui| {
+        chrome.dialog_window(ctx, &title, egui::Id::unique("backup")).open(&mut open).default_size([860.0, 560.0]).max_height(720.0).show(ctx, |ui| {
             if chrome.dialog_title(ui, theme, &title) {
                 self.open = false;
             }
@@ -232,7 +232,7 @@ impl BackupUi {
                                     let r = self.paths.show(
                                         ui,
                                         &mut self.new_source,
-                                        egui::Id::new("bk-source"),
+                                        egui::Id::unique("bk-source"),
                                         opts(272.0, Some(t("Folder or file path"))),
                                         theme,
                                     );
@@ -288,7 +288,7 @@ impl BackupUi {
 
                             ui.label(t("Destination"));
                             ui.horizontal(|ui| {
-                                self.paths.show(ui, &mut p.destination, egui::Id::new("bk-destination"), opts(332.0, None), theme);
+                                self.paths.show(ui, &mut p.destination, egui::Id::unique("bk-destination"), opts(332.0, None), theme);
                                 if ui.button(t("Browse…")).clicked() {
                                     if let Some(d) = rfd::FileDialog::new().pick_folder() {
                                         p.destination = d.to_string_lossy().to_string();
@@ -351,7 +351,7 @@ impl BackupUi {
             });
             ui.horizontal(|ui| {
                 ui.label(t("Restore to"));
-                self.paths.show(ui, &mut self.restore_dest, egui::Id::new("bk-restore-to"), opts(312.0, None), theme);
+                self.paths.show(ui, &mut self.restore_dest, egui::Id::unique("bk-restore-to"), opts(312.0, None), theme);
                 if ui.button("…").clicked() {
                     if let Some(f) = rfd::FileDialog::new().pick_folder() {
                         self.restore_dest = f.to_string_lossy().to_string();

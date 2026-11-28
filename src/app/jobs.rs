@@ -375,34 +375,43 @@ impl App {
             Some(tgt) => (format!("{} → {}", if self.shift_down { t("Move") } else { t("Copy") }, tgt.short_name()), th.accent),
             None => (t("Drop on a folder or the other panel"), th.weak),
         };
-        egui::Area::new(egui::Id::new("drag-ghost")).order(egui::Order::Tooltip).fixed_pos(pos + egui::vec2(16.0, 12.0)).interactable(false).show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).fill(th.panel).corner_radius(9).inner_margin(egui::Margin::symmetric(10, 7)).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
-                    if let Some(first) = pl.items.first() {
-                        icons::entry_icon(ui.painter(), r, first, th);
-                    }
-                    if pl.items.len() > 1 {
-                        let c = r.right_top() + egui::vec2(-1.0, 2.0);
-                        ui.painter().circle_filled(c, 7.0, th.accent);
-                        ui.painter().text(c, egui::Align2::CENTER_CENTER, pl.items.len().min(99).to_string(), egui::FontId::proportional(9.5), th.on_accent());
-                    }
-                    ui.vertical(|ui| {
-                        ui.spacing_mut().item_spacing.y = 1.0;
-                        ui.label(RichText::new(what).color(th.strong()));
-                        ui.label(RichText::new(line).size(11.5).color(color));
-                        if !self.shift_down && self.drag_target.is_some() {
-                            ui.label(RichText::new(t("Hold Shift to move")).size(10.5).color(th.weak));
+        egui::Area::new(egui::Id::unique("drag-ghost")).order(egui::Order::Tooltip).fixed_pos(pos + egui::vec2(16.0, 12.0)).interactable(false).show(
+            ctx,
+            |ui| {
+                egui::Frame::popup(ui.style()).fill(th.panel).corner_radius(9).inner_margin(egui::Margin::symmetric(10, 7)).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let (r, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                        if let Some(first) = pl.items.first() {
+                            icons::entry_icon(ui.painter(), r, first, th);
                         }
+                        if pl.items.len() > 1 {
+                            let c = r.right_top() + egui::vec2(-1.0, 2.0);
+                            ui.painter().circle_filled(c, 7.0, th.accent);
+                            ui.painter().text(
+                                c,
+                                egui::Align2::CENTER_CENTER,
+                                pl.items.len().min(99).to_string(),
+                                egui::FontId::proportional(9.5),
+                                th.on_accent(),
+                            );
+                        }
+                        ui.vertical(|ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            ui.label(RichText::new(what).color(th.strong()));
+                            ui.label(RichText::new(line).size(11.5).color(color));
+                            if !self.shift_down && self.drag_target.is_some() {
+                                ui.label(RichText::new(t("Hold Shift to move")).size(10.5).color(th.weak));
+                            }
+                        });
                     });
                 });
-            });
-        });
+            },
+        );
         ctx.set_cursor_icon(if self.drag_target.is_some() { egui::CursorIcon::Grabbing } else { egui::CursorIcon::NoDrop });
     }
 
     pub(super) fn handle_dropped_files(&mut self, ctx: &egui::Context) {
-        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
+        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).filter(|p| !p.as_os_str().is_empty()).collect());
         if dropped.is_empty() {
             return;
         }

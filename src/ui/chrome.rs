@@ -237,10 +237,10 @@ impl Chrome {
         if !self.integrated || self.style != Style::Windows {
             return;
         }
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let n = self.right.len() as f32;
-        egui::Area::new(egui::Id::new("caption-buttons")).order(egui::Order::Foreground).fixed_pos(pos2(screen.right() - WIN_BTN_W * n, screen.top())).show(
+        egui::Area::new(egui::Id::unique("caption-buttons")).order(egui::Order::Foreground).fixed_pos(pos2(screen.right() - WIN_BTN_W * n, screen.top())).show(
             ctx,
             |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -282,7 +282,7 @@ impl Chrome {
         if !self.integrated {
             return;
         }
-        let resp = ui.interact(rect, egui::Id::new(("window-drag", id)), Sense::click_and_drag());
+        let resp = ui.interact(rect, egui::Id::unique(("window-drag", id)), Sense::click_and_drag());
         if resp.drag_started_by(egui::PointerButton::Primary) {
             ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
         }
@@ -302,7 +302,7 @@ impl Chrome {
         if maximized {
             return;
         }
-        let r = ctx.screen_rect();
+        let r = ctx.content_rect();
         let m = 5.0;
         let corner = 14.0;
         let (l, rt, t, b) = (p.x - r.left() < m, r.right() - p.x < m, p.y - r.top() < m, r.bottom() - p.y < m);
@@ -339,7 +339,8 @@ impl Chrome {
     /// An in-app window (About, Keyboard shortcuts…) dressed as a dialog of the platform:
     /// instead of egui's title bar, [`Self::dialog_title`] draws the platform's.
     pub fn dialog_window<'a>(&self, ctx: &egui::Context, title: &str, id: egui::Id) -> egui::Window<'a> {
-        let frame = egui::Frame::window(&ctx.style()).inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 14 }).corner_radius(self.radius() as u8);
+        let frame =
+            egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 14 }).corner_radius(self.radius() as u8);
         egui::Window::new(title.to_string()).id(id).title_bar(false).collapsible(false).frame(frame)
     }
 
@@ -353,7 +354,7 @@ impl Chrome {
         // clicked in a child that may reach into them (egui clips content short of them).
         let bar = rect.expand2(vec2(14.0, 0.0));
         let mut child = ui.new_child(egui::UiBuilder::new().max_rect(bar));
-        child.set_clip_rect(bar.intersect(ui.ctx().screen_rect()));
+        child.set_clip_rect(bar.intersect(ui.ctx().content_rect()));
         let ui = &mut child;
         let close_left = match self.style {
             Style::Mac => true,
@@ -366,7 +367,7 @@ impl Chrome {
             _ if close_left => Rect::from_center_size(pos2(bar.left() + 26.0, bar.center().y), vec2(26.0, 26.0)),
             _ => Rect::from_center_size(pos2(bar.right() - 26.0, bar.center().y), vec2(26.0, 26.0)),
         };
-        let resp = ui.interact(btn, ui.id().with("dialog-close"), Sense::click());
+        let resp = ui.interact(btn, ui.scope_id().with("dialog-close"), Sense::click());
         let (hovered, pressed) = (resp.hovered(), resp.is_pointer_button_down_on());
         let p = ui.painter();
         let mut glyph = th.text;
@@ -419,12 +420,12 @@ impl Chrome {
         };
         let mut job = egui::text::LayoutJob::simple_singleline(title.to_string(), font, th.strong());
         job.wrap = egui::text::TextWrapping::truncate_at_width(room.max(20.0));
-        let galley = ui.fonts(|f| f.layout_job(job));
+        let galley = ui.fonts_mut(|f| f.layout_job(job));
         let x = if self.style == Style::Windows { bar.left() + 14.0 } else { bar.center().x - galley.size().x / 2.0 };
         ui.painter().galley(pos2(x, bar.center().y - galley.size().y / 2.0), galley, th.strong());
         ui.painter().line_segment([pos2(bar.left(), bar.bottom()), pos2(bar.right(), bar.bottom())], Stroke::new(1.0_f32, th.border));
         ui.add_space(8.0);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, crate::i18n::t("Close")));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::i18n::t("Close")));
         resp.on_hover_text(crate::i18n::t("Close")).clicked()
     }
 
@@ -433,8 +434,8 @@ impl Chrome {
         if !self.integrated || self.style == Style::Mac || ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
             return;
         }
-        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("window-outline")));
-        p.rect_stroke(ctx.screen_rect(), self.window_radius(ctx), Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("window-outline")));
+        p.rect_stroke(ctx.viewport_rect(), self.window_radius(ctx), Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
     }
 }
 

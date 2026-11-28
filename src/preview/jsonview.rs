@@ -3,6 +3,7 @@
 use crate::i18n::t;
 use crate::preview::code::Styled;
 use crate::style::theme::Theme;
+use crate::ui::KeptContextMenu as _;
 use crate::util::ext_of;
 use egui::{Color32, FontId, Sense};
 use std::collections::{HashMap, HashSet};
@@ -553,7 +554,7 @@ impl JsonView {
                 }
                 let (text, color) = summary(node, &colors, open);
                 job.append(&text, 0.0, fmt(color));
-                let galley = ui.fonts(|f| f.layout_job(job));
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
                 p.galley(egui::pos2(indent + 16.0, rect.center().y - galley.size().y / 2.0), galley, th.text);
                 let at = row.at.clone();
                 let on_chevron = resp.interact_pointer_pos().is_some_and(|q| q.x < chevron.right() + 2.0);
@@ -568,27 +569,27 @@ impl JsonView {
                         resp.clone().on_hover_text(s);
                     }
                 }
-                resp.context_menu(|ui| {
+                resp.kept_context_menu(|ui| {
                     let st = style();
                     if ui.button(format!("{} ({})", t("Copy path"), st.label())).clicked() {
                         ui.ctx().copy_text(self.path(&at, st));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t("Copy value")).clicked() {
                         ui.ctx().copy_text(value_text(node));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if let Some(Seg::Key(k)) = self.segs(&at).last() {
                         if ui.button(t("Copy key")).clicked() {
                             ui.ctx().copy_text(k.to_string());
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                     if node.is_container() {
                         ui.separator();
                         if ui.button(t("Expand all")).clicked() {
                             action = Some(Action::ExpandAll(at.clone()));
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });

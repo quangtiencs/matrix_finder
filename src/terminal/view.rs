@@ -181,6 +181,9 @@ pub struct TermSession {
     report_dragging: bool,
     last_report_cell: Option<(usize, usize)>,
     skip_text: bool,
+    /// Ctrl+Shift+V asked eframe for the clipboard: the paste that comes is the terminal's,
+    /// in a full-screen program too.
+    paste_asked: bool,
     /// Text an input method is composing (Telex, pinyin, kana…): drawn at the cursor,
     /// sent only once it is committed.
     preedit: String,
@@ -210,6 +213,25 @@ pub struct TermSession {
 impl Drop for TermSession {
     fn drop(&mut self) {
         let _ = self.sender.send(Msg::Shutdown);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Clip {
+    Copy,
+    Paste,
+}
+
+/// Ctrl+Shift+C and Ctrl+Shift+V, the terminal's copy and paste on Linux and Windows
+/// (egui only turns plain Ctrl+C / Ctrl+V into Copy and Paste).
+fn shift_clipboard(key: Key, m: egui::Modifiers, mac: bool) -> Option<Clip> {
+    if mac || !(m.ctrl && m.shift) || m.alt {
+        return None;
+    }
+    match key {
+        Key::C => Some(Clip::Copy),
+        Key::V => Some(Clip::Paste),
+        _ => None,
     }
 }
 
@@ -264,7 +286,7 @@ impl TermSession {
             sender,
             rx,
             dirty,
-            id: egui::Id::new(("terminal", next_id())),
+            id: egui::Id::unique(("terminal", next_id())),
             title: String::new(),
             cwd: dir.to_path_buf(),
             cwd_at: Instant::now(),
@@ -294,6 +316,7 @@ impl TermSession {
             report_dragging: false,
             last_report_cell: None,
             skip_text: false,
+            paste_asked: false,
             reported_focus: None,
             menu_link: None,
             link_press: None,
@@ -641,7 +664,7 @@ impl TermSession {
         self.bold_font = FontId::new(size, egui::FontFamily::Name("term-bold".into()));
         // Measure the advance the way runs are laid out (glyph positions are
         // pixel-rounded), so long runs stay aligned with the cell grid.
-        let (cw, ch) = ui.fonts(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), Color32::WHITE).size().x / 100.0, f.row_height(&font)));
+        let (cw, ch) = ui.fonts_mut(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), Color32::WHITE).size().x / 100.0, f.row_height(&font)));
         self.cell = vec2(cw.max(1.0), ch.ceil().max(1.0));
         let origin = rect.min + vec2(PAD, PAD / 2.0);
         let cols = (((rect.width() - 2.0 * PAD) / self.cell.x).floor() as usize).max(2);
@@ -777,7 +800,7 @@ impl TermSession {
         if !others.is_empty() {
             let bold = self.bold_font.clone();
             let missing: Vec<char> =
-                ui.fonts(|f| others.into_iter().filter(|&c| !c.is_whitespace() && (!f.has_glyph(&font, c) || !f.has_glyph(&bold, c))).collect());
+                ui.fonts_mut(|f| others.into_iter().filter(|&c| !c.is_whitespace() && (!f.has_glyph(&font, c) || !f.has_glyph(&bold, c))).collect());
             if !missing.is_empty() {
                 crate::style::fontfallback::request(ui.ctx(), missing);
             }
@@ -839,14 +862,21 @@ impl TermSession {
             };
             let mut ime_rect = Rect::from_min_size(at, vec2(cw, chh));
             if !self.preedit.is_empty() {
-                let width = ui.fonts(|f| f.layout_no_wrap(self.preedit.clone(), font.clone(), pal.fg).size().x).max(cw);
+                let width = ui.fonts_mut(|f| f.layout_no_wrap(self.preedit.clone(), font.clone(), pal.fg).size().x).max(cw);
                 ime_rect = Rect::from_min_size(at, vec2(width, chh));
                 painter.rect_filled(ime_rect, 0.0, pal.bg);
                 self.paint_text(&painter, at, &self.preedit, &font, pal.fg, Flags::UNDERLINE, width);
                 painter.rect_filled(Rect::from_min_size(pos2(ime_rect.right(), at.y), vec2(2.0, chh)), 0.0, pal.cursor);
             }
             let to_global = ui.ctx().layer_transform_to_global(ui.layer_id()).unwrap_or_default();
-            ui.ctx().output_mut(|out| out.ime = Some(egui::output::IMEOutput { rect: to_global * ime_rect, cursor_rect: to_global * ime_rect }));
+            ui.ctx().output_mut(|out| {
+                out.ime = Some(egui::output::IMEOutput {
+                    purpose: egui::IMEPurpose::Terminal,
+                    rect: to_global * ime_rect,
+                    cursor_rect: to_global * ime_rect,
+                    should_interrupt_composition: false,
+                })
+            });
         }
 
         // Scrollback position indicator.
@@ -1053,8 +1083,9 @@ impl TermSession {
                     self.write(t.into_bytes());
                     typed = true;
                 }
-                egui::Event::Ime(egui::ImeEvent::Preedit(t)) => {
-                    self.preedit = t;
+                // An empty one: the input method was dismissed.
+                egui::Event::Ime(egui::ImeEvent::Preedit { text, .. }) => {
+                    self.preedit = text;
                     typed = true;
                 }
                 egui::Event::Ime(egui::ImeEvent::Commit(t)) => {
@@ -1065,13 +1096,12 @@ impl TermSession {
                         typed = true;
                     }
                 }
-                egui::Event::Ime(egui::ImeEvent::Disabled) => self.preedit.clear(),
                 // Keys the input method also handles while it composes (like egui's text edit).
                 egui::Event::Key { repeat: true, .. }
                 | egui::Event::Key { key: Key::Backspace | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, .. }
                     if !self.preedit.is_empty() => {}
                 egui::Event::Copy => {
-                    // Cmd+C / Ctrl+Shift+C copy. Plain Ctrl+C copies too while text is
+                    // Cmd+C copies. Plain Ctrl+C copies too while text is
                     // selected (and clears the selection), otherwise it interrupts.
                     // (Shift is not reliable here: a quick chord can be released
                     // before the frame that sees the event.)
@@ -1100,7 +1130,7 @@ impl TermSession {
                 egui::Event::Paste(s) => {
                     // Ctrl+V pastes too, except in full-screen programs (vim's
                     // block mode) where plain Ctrl+V is passed through.
-                    if mac || mods.shift || !mode.contains(TermMode::ALT_SCREEN) {
+                    if mac || std::mem::take(&mut self.paste_asked) || mods.shift || !mode.contains(TermMode::ALT_SCREEN) {
                         self.paste(&s);
                     } else {
                         self.write(ctrl(b'v', 0x16));
@@ -1113,6 +1143,20 @@ impl TermSession {
                         if let Some((bytes, _)) = kitty_key_bytes(key, m, mode, mac, KeyEvent::Release) {
                             self.write(bytes);
                         }
+                    }
+                }
+                // Ctrl+Shift+C / Ctrl+Shift+V copy and paste (egui sends Copy and Paste for
+                // plain Ctrl+C / Ctrl+V only). Without a selection nothing is copied, and
+                // nothing interrupts the program either.
+                egui::Event::Key { key, pressed: true, modifiers: m, .. } if shift_clipboard(key, m, mac).is_some() => {
+                    if shift_clipboard(key, m, mac) == Some(Clip::Copy) {
+                        if let Some(s) = self.selection_text() {
+                            ui.ctx().copy_text(s);
+                            self.term.lock().selection = None;
+                        }
+                    } else {
+                        self.paste_asked = true;
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                     }
                 }
                 egui::Event::Key { key, pressed: true, repeat, modifiers: m, .. } => {
@@ -1164,7 +1208,7 @@ impl TermSession {
         let scroll: f32 = events
             .iter()
             .map(|e| match e {
-                egui::Event::MouseWheel { unit, delta, modifiers } => {
+                egui::Event::MouseWheel { unit, delta, modifiers, .. } => {
                     let d = if delta.y == 0.0 && modifiers.shift { delta.x } else { delta.y };
                     match unit {
                         egui::MouseWheelUnit::Point => d / self.cell.y.max(1.0) * o.scroll[0],
@@ -1401,11 +1445,11 @@ impl TermSession {
         if let Some(url) = self.menu_link.clone() {
             if ui.button(t("Open link")).clicked() {
                 open_link(&url, out);
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button(t("Copy link")).clicked() {
                 ui.ctx().copy_text(url.to_string());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             ui.separator();
         }
@@ -1414,26 +1458,26 @@ impl TermSession {
             if let Some(s) = self.selection_text() {
                 ui.ctx().copy_text(s);
             }
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.add(egui::Button::new(t("Paste")).shortcut_text(k("Ctrl+Shift+V", "⌘V"))).clicked() {
             if let Some(s) = clipboard_get(false) {
                 self.paste(&s);
             }
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Select all")).clicked() {
             self.select_all();
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         ui.separator();
         if ui.button(t("Clear")).clicked() {
             self.clear();
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Open folder in a file tab")).clicked() {
             out.open_dir = Some(self.cwd.clone());
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         ui.separator();
         ui.horizontal(|ui| {
@@ -1461,24 +1505,24 @@ impl TermSession {
                 {
                     if o.can_split[k] && ui.add(egui::Button::new(label).shortcut_text(terminal_hint(key))).clicked() {
                         out.split = Some((d, true));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 }
                 ui.separator();
                 if o.can_split[0] && ui.button(t("Files to the right")).clicked() {
                     out.split = Some((D::Right, false));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if o.can_split[2] && ui.button(t("Files below")).clicked() {
                     out.split = Some((D::Down, false));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
         }
         let close = if o.in_split { t("Close window") } else { t("Close tab") };
         if ui.add(egui::Button::new(close).shortcut_text(crate::ui::shortcuts::terminal_hint(crate::ui::shortcuts::Action::CloseWindow))).clicked() {
             out.close = true;
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     }
 }
@@ -1961,7 +2005,7 @@ pub fn preview(ui: &mut egui::Ui, th: &Theme, font_size: f32, width: f32) -> egu
         ],
         &[("~/projects ", ansi(BLUE), true), ("$ ", ansi(GREEN), true)],
     ];
-    let (cell_w, row_h) = ui.fonts(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), pal.fg).size().x / 100.0, f.row_height(&font).ceil()));
+    let (cell_w, row_h) = ui.fonts_mut(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), pal.fg).size().x / 100.0, f.row_height(&font).ceil()));
     let swatch = (font_size * 0.9).max(10.0);
     let height = row_h * lines.len() as f32 + swatch * 2.0 + 30.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());
@@ -2024,6 +2068,18 @@ fn clipboard_set_primary(_text: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ctrl_shift_c_and_v_copy_and_paste_off_macos() {
+        let cs = egui::Modifiers { ctrl: true, shift: true, ..Default::default() };
+        assert_eq!(shift_clipboard(Key::C, cs, false), Some(Clip::Copy));
+        assert_eq!(shift_clipboard(Key::V, cs, false), Some(Clip::Paste));
+        assert_eq!(shift_clipboard(Key::C, egui::Modifiers::CTRL, false), None, "plain Ctrl+C interrupts");
+        assert_eq!(shift_clipboard(Key::C, cs, true), None, "macOS uses ⌘C");
+        assert_eq!(shift_clipboard(Key::C, egui::Modifiers { alt: true, ..cs }, false), None);
+        assert_eq!(shift_clipboard(Key::X, cs, false), None);
+    }
+
     use super::*;
 
     #[test]
