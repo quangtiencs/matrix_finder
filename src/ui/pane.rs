@@ -238,10 +238,18 @@ impl QuickActive {
 
     /// "Images", "Images, Videos", or the first two and how many more.
     pub fn label(&self) -> String {
-        let shown: Vec<String> = self.names.iter().take(2).map(|n| t(n)).collect();
+        let shown: Vec<String> = self.names.iter().take(2).map(|n| crate::config::quick_filter_name(n)).collect();
         match self.names.len() {
             0..=2 => shown.join(", "),
             n => format!("{} +{}", shown.join(", "), n - 2),
+        }
+    }
+
+    /// The first category and how many more ("Images +2"): for a narrow chip.
+    pub fn short_label(&self) -> String {
+        match self.names.len() {
+            0 | 1 => self.names.first().map(|n| crate::config::quick_filter_name(n)).unwrap_or_default(),
+            n => format!("{} +{}", crate::config::quick_filter_name(&self.names[0]), n - 1),
         }
     }
 
@@ -1247,7 +1255,7 @@ impl Pane {
 pub const ROW_H: f32 = 28.0;
 /// A cell of the icon view: its least width and its height.
 pub const CELL_W: f32 = 104.0;
-pub const CELL_H: f32 = 100.0;
+pub const CELL_H: f32 = 104.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Cmd {
@@ -1665,7 +1673,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
 
         let extra = if c.pane_count > 1 { 56.0 } else { 0.0 };
         // Filter / search mode: a chip at the end of the address bar; click it to turn it off.
-        let chip = match &tab.search {
+        let mut chip = match &tab.search {
             Some(s) => Some((
                 format!(
                     "{}: {} · {}{}",
@@ -1693,12 +1701,19 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
             }
         };
         let room = ui.available_width() - 54.0 - extra - SIDE_PAD - 8.0;
-        let chip_w = chip
-            .as_ref()
-            .map(|(text, _)| {
-                (ui.fonts(|f| f.layout_no_wrap(text.clone(), FontId::proportional(12.5), th.text).size().x) + 46.0).min(300.0).min((room - 80.0).max(60.0))
-            })
-            .unwrap_or(0.0);
+        let cap = 300.0_f32.min((room - 80.0).max(60.0));
+        let chip_width = |text: &str| ui.fonts(|f| f.layout_no_wrap(text.to_string(), FontId::proportional(12.5), th.text).size().x) + 46.0;
+        // Categories that do not fit: the first one and how many more, or only how many
+        // (the tooltip names them), rather than "Spr…".
+        if let (Some((text, false)), Some(q)) = (chip.as_mut(), tab.quick.as_ref()) {
+            if tab.filter_text.is_empty() && chip_width(text) > cap {
+                *text = q.short_label();
+                if q.names.len() > 1 && chip_width(text) > cap {
+                    *text = q.names.len().to_string();
+                }
+            }
+        }
+        let chip_w = chip.as_ref().map(|(text, _)| chip_width(text).min(cap)).unwrap_or(0.0);
         let crumb_w = (room - chip_w).max(30.0);
         ui.allocate_ui(vec2(crumb_w, 28.0), |ui| breadcrumb(ui, tab, side, c, ev));
         if let Some((text, recursive)) = chip {
@@ -1726,7 +1741,15 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
             ui.painter().line_segment([x.right_top(), x.left_bottom()], s);
             let tip = match &tab.filter {
                 Err(e) if bad => format!("{e}\n\n{}", filter_help()),
-                _ => t("Click to turn off the filter (Esc)"),
+                _ => match tab.quick.as_ref().filter(|_| !recursive) {
+                    Some(q) => format!(
+                        "{}: {}\n{}",
+                        t("Quick filter"),
+                        q.names.iter().map(|n| t(n)).collect::<Vec<_>>().join(", "),
+                        t("Click to turn off the filter (Esc)")
+                    ),
+                    None => t("Click to turn off the filter (Esc)"),
+                },
             };
             if resp.on_hover_text(tip).clicked() {
                 ev.push(PaneEvent::ClearFilter);
@@ -1783,7 +1806,6 @@ fn folder_tree_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut 
 /// click, and the panel stays open so that several can be chosen.
 fn quick_filter_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
     const FIND_W: f32 = 340.0;
-    const KINDS_W: f32 = 240.0;
     let th = c.theme;
     let finding = matches!(tab.filter, Ok(Filter::Find(_))) || tab.search.as_ref().is_some_and(|s| matches!(s.filter, Filter::Find(_)));
     let on = tab.quick.is_some() || finding;
@@ -1806,26 +1828,14 @@ fn quick_filter_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut
     }
     egui::popup::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         menu_style(ui);
-        // Side by side when the window has the room: Find, then the kinds of files.
-        if ui.ctx().screen_rect().width() >= FIND_W + KINDS_W + 80.0 {
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(FIND_W);
-                    find_column(ui, tab, c, ev, focus, finding, FIND_W);
-                });
-                ui.add_space(6.0);
-                ui.add(egui::Separator::default().vertical().spacing(10.0));
-                ui.vertical(|ui| {
-                    ui.set_width(KINDS_W);
-                    kinds_column(ui, tab, c, ev, KINDS_W);
-                });
-            });
-        } else {
-            ui.set_width(FIND_W);
+        ui.set_width(FIND_W);
+        // One column: Find, then the kinds of files; it scrolls in a short window.
+        let room = (ui.ctx().screen_rect().bottom() - r.rect.bottom() - 40.0).max(160.0);
+        egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).auto_shrink([false, true]).show(ui, |ui| {
             find_column(ui, tab, c, ev, focus, finding, FIND_W);
             ui.separator();
             kinds_column(ui, tab, c, ev, FIND_W);
-        }
+        });
     });
 }
 
@@ -1863,19 +1873,12 @@ fn find_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pan
     ui.label(weak(explain));
     ui.add_space(2.0);
     ui.horizontal(|ui| {
-        ui.label(t("Show"));
-        ui.checkbox(&mut d.files, t("Files"));
-        ui.add_enabled_ui(d.mode != FindMode::Content, |ui| {
-            ui.checkbox(&mut d.folders, t("Folders")).on_disabled_hover_text(t("Text is looked for in files only"));
-        });
-    });
-    ui.checkbox(&mut d.loose, t("Ignore case, - _ and spaces")).on_hover_text(t("my-file also finds My_File and my file"));
-    ui.horizontal(|ui| {
         ui.radio_value(&mut d.subfolders, false, t("This folder"));
         ui.add_enabled_ui(local, |ui| {
             ui.radio_value(&mut d.subfolders, true, t("Subfolders too")).on_disabled_hover_text(t("Works on folders of this computer"));
         });
     });
+    find_options(ui, &mut d, th, w);
     if !local {
         d.subfolders = false;
         if d.mode == FindMode::Content {
@@ -1921,20 +1924,92 @@ fn find_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pan
     }
 }
 
+/// The Find panel's options, folded under one row that says which ones are changed:
+/// files and folders shown, and how names compare (case, `-` `_` and spaces).
+fn find_options(ui: &mut egui::Ui, d: &mut Find, th: &Theme, w: f32) {
+    let id = egui::Id::new("find-options-open");
+    let mut open = ui.data(|m| m.get_temp::<bool>(id)).unwrap_or(false);
+    let (row, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, t("Options")));
+    if resp.hovered() {
+        ui.painter().rect_filled(row, 5.0, th.hover());
+    }
+    icons::chevron(ui.painter(), Rect::from_center_size(pos2(row.left() + 9.0, row.center().y), vec2(14.0, 14.0)), if open { 2 } else { 1 }, th.weak);
+    let label = ui.painter().text(pos2(row.left() + 20.0, row.center().y), Align2::LEFT_CENTER, t("Options"), FontId::proportional(13.0), th.text);
+    // Closed: what is not as usual, so a changed option is never forgotten.
+    let mut changed: Vec<String> = Vec::new();
+    // Text in files looks in files only, whatever is ticked: nothing to say then.
+    match (d.files, d.folders) {
+        _ if d.mode == FindMode::Content => {}
+        (true, false) => changed.push(t("Files only")),
+        (false, true) => changed.push(t("Folders only")),
+        (false, false) => changed.push(t("Nothing shown")),
+        _ => {}
+    }
+    if !d.ignore_case {
+        changed.push(t("Match case"));
+    }
+    if !d.ignore_separators {
+        changed.push(t("Exact - _ and spaces"));
+    }
+    if !changed.is_empty() {
+        let mut job = egui::text::LayoutJob::simple_singleline(changed.join(" · "), FontId::proportional(11.5), th.accent);
+        job.wrap = egui::text::TextWrapping::truncate_at_width((row.right() - label.right() - 16.0).max(10.0));
+        let g = ui.fonts(|f| f.layout_job(job));
+        ui.painter().galley(pos2(label.right() + 10.0, row.center().y - g.size().y / 2.0), g, th.accent);
+    }
+    if resp.on_hover_text(t("Files and folders shown, and how names compare")).clicked() {
+        open = !open;
+        ui.data_mut(|m| m.insert_temp(id, open));
+    }
+    if open {
+        ui.indent("find-options", |ui| {
+            ui.horizontal(|ui| {
+                ui.label(t("Show"));
+                ui.add_enabled_ui(d.mode != FindMode::Content, |ui| {
+                    ui.checkbox(&mut d.files, t("Files")).on_disabled_hover_text(t("Text is looked for in files only"));
+                    ui.checkbox(&mut d.folders, t("Folders")).on_disabled_hover_text(t("Text is looked for in files only"));
+                });
+            });
+            ui.checkbox(&mut d.ignore_case, t("Ignore case")).on_hover_text(t("report also finds Report and REPORT"));
+            ui.checkbox(&mut d.ignore_separators, t("Treat - _ and spaces as the same")).on_hover_text(t("my-file also finds my_file and my file"));
+        });
+    }
+}
+
 /// The quick filter column: kinds of files to show, ticked or unticked by a click (the
 /// panel stays open, so that several can be chosen).
 fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>, w: f32) {
     let th = c.theme;
-    ui.label(egui::RichText::new(t("Show only")).size(11.5).color(th.weak));
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(t("Show only")).size(11.5).color(th.weak));
+        // Several ticked: one click unticks them all (the Find text stays).
+        if tab.quick.as_ref().is_some_and(|q| q.names.len() > 1) {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let b = egui::Button::new(egui::RichText::new(t("Untick all")).size(11.5).color(th.accent)).frame(false);
+                if ui.add(b).on_hover_text(t("Show every kind of file again; the Find text stays")).clicked() {
+                    ev.push(PaneEvent::QuickFilter(None));
+                }
+            });
+        }
+    });
     // Files of the listing by extension, to count each category.
     let mut by_ext: HashMap<&str, usize> = HashMap::new();
     for e in tab.entries.iter().filter(|e| !e.is_dir && (c.list.show_hidden || !e.hidden)) {
         *by_ext.entry(e.ext.as_str()).or_default() += 1;
     }
+    // Two columns, so the list stays short under the Find options.
+    let gap = 4.0;
+    let col_w = ((w - gap) / 2.0).floor();
+    let top = ui.cursor().top();
+    let left = ui.cursor().left();
+    let n = c.quick_filters.len();
     for (i, q) in c.quick_filters.iter().enumerate() {
         let exts = q.ext_list();
         let count: usize = exts.iter().map(|x| by_ext.get(x.as_str()).copied().unwrap_or(0)).sum();
-        let (row, resp) = ui.allocate_exact_size(vec2(w, 28.0), Sense::click());
+        let at = pos2(left + (i % 2) as f32 * (col_w + gap), top + (i / 2) as f32 * 28.0);
+        let row = Rect::from_min_size(at, vec2(col_w, 28.0));
+        let resp = ui.interact(row, egui::Id::new(("quick-kind", i)), Sense::click());
         let sel = tab.quick.as_ref().is_some_and(|a| a.has(&q.name));
         resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, sel, t(&q.name)));
         menu_row_fill(ui, row, th, sel, resp.hovered());
@@ -1949,11 +2024,17 @@ fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pa
             ui.painter().rect_stroke(bx, 3.5, egui::Stroke::new(1.2_f32, th.weak), egui::StrokeKind::Inside);
         }
         quick_filter_icon(ui.painter(), Rect::from_center_size(pos2(row.left() + 36.0, row.center().y), vec2(16.0, 16.0)), &exts, th);
-        ui.painter().text(pos2(row.left() + 52.0, row.center().y), Align2::LEFT_CENTER, t(&q.name), FontId::proportional(13.5), th.text);
         // How many files here are of this kind (none: no number).
-        if count > 0 {
-            ui.painter().text(pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, count.to_string(), FontId::proportional(11.5), th.weak);
-        }
+        let count_w = if count > 0 {
+            let r = ui.painter().text(pos2(row.right() - 8.0, row.center().y), Align2::RIGHT_CENTER, count.to_string(), FontId::proportional(11.5), th.weak);
+            r.width() + 6.0
+        } else {
+            0.0
+        };
+        let mut job = egui::text::LayoutJob::simple_singleline(q.display_name(), FontId::proportional(13.5), th.text);
+        job.wrap = egui::text::TextWrapping::truncate_at_width((row.width() - 52.0 - 8.0 - count_w).max(10.0));
+        let g = ui.fonts(|f| f.layout_job(job));
+        ui.painter().galley(pos2(row.left() + 52.0, row.center().y - g.size().y / 2.0), g, th.text);
         let shown: Vec<String> = exts.iter().take(14).map(|e| format!(".{e}")).collect();
         let more = if exts.len() > 14 { " …" } else { "" };
         let tip = format!("{}{more}\n{count} {}", shown.join(" "), t("files here"));
@@ -1961,14 +2042,12 @@ fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pa
             ev.push(PaneEvent::QuickFilter(Some(i)));
         }
     }
+    ui.allocate_space(vec2(w, n.div_ceil(2) as f32 * 28.0));
     if c.quick_filters.is_empty() {
         ui.label(egui::RichText::new(t("No quick filters yet")).color(th.weak));
     }
     ui.separator();
-    if tab.quick.is_some() && ui.button(t("Show all files")).clicked() {
-        ev.push(PaneEvent::QuickFilter(None));
-        ui.memory_mut(|m| m.close_popup());
-    }
+    // Unticking turns a kind off; the chip's × in the title row turns them all off.
     if ui.button(t("Edit quick filters…")).clicked() {
         ev.push(PaneEvent::EditQuickFilters);
         ui.memory_mut(|m| m.close_popup());
@@ -2815,7 +2894,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
             if grid {
                 // A large icon (or the picture's thumbnail) with the whole name under it,
                 // on two lines at most.
-                let icon_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 33.0), vec2(46.0, 46.0));
+                let icon_rect = Rect::from_center_size(pos2(rect.center().x, rect.top() + 36.0), vec2(58.0, 58.0));
                 let thumb = match (&tab.loc, c.thumbs) {
                     (Location::Local(dir), Some(thumbs)) if !e.is_dir && crate::preview::thumbs::has_thumbnail(&e.name) => {
                         thumbs.get(&dir.join(&e.name), e.modified, e.size)
@@ -2824,7 +2903,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 };
                 match thumb {
                     Some(tex) => {
-                        let area = Rect::from_center_size(icon_rect.center() - vec2(0.0, 1.0), vec2(cell_w - 22.0, 52.0));
+                        let area = Rect::from_center_size(icon_rect.center() - vec2(0.0, 1.0), vec2(cell_w - 20.0, 58.0));
                         let [w, h] = tex.size().map(|v| v.max(1) as f32);
                         let scale = (area.width() / w).min(area.height() / h);
                         let r = Rect::from_center_size(area.center(), vec2(w * scale, h * scale));
@@ -2847,7 +2926,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 job.wrap = egui::text::TextWrapping { max_width: cell_w - 14.0, max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
                 job.halign = egui::Align::Center;
                 let galley = ui.fonts(|f| f.layout_job(job));
-                p.galley(pos2(rect.center().x, rect.top() + 62.0), galley, name_color);
+                p.galley(pos2(rect.center().x, rect.top() + 68.0), galley, name_color);
                 if !e.is_parent && ui.rect_contains_pointer(rect) && payload.is_none() {
                     resp.clone().on_hover_text(format!("{}\n{} · {}", e.name, size_txt, format_time(e.modified)));
                 }
@@ -3313,36 +3392,72 @@ fn layout_items(ui: &mut egui::Ui, c: &PaneUiCtx, dirs: &[String], out: &mut Opt
     msub(ui, th, icons::mi_split, &t("Layout"), |ui| split_items(ui, false, c, out));
 }
 
+/// One entry of a split menu: what it draws, says and does.
+pub struct SplitEntry {
+    pub icon: MenuIcon,
+    pub label: String,
+    pub key: String,
+    pub cmd: Cmd,
+    /// A line goes above it.
+    pub group: bool,
+}
+
+/// The split menu of a window (`terminal`: a terminal window), as entries: a window of
+/// the same kind on each side, the other kind to the right or below, and closing it.
+/// `can_split` is right, left, down, up; `panes` the windows of the tab.
+pub fn split_entries(terminal: bool, can_split: [bool; 4], panes: usize) -> Vec<SplitEntry> {
+    use crate::ui::shortcuts::{hint, Action};
+    use icons::Side;
+    let e = |icon: fn(&egui::Painter, Rect, egui::Color32), label: String, key: String, cmd: Cmd, group: bool| SplitEntry { icon, label, key, cmd, group };
+    let mut v = Vec::new();
+    let same: [(fn(&egui::Painter, Rect, egui::Color32), String, Action, SplitDir); 4] = [
+        (|p, r, c| icons::split_half(p, r, c, Side::Right, false), t("Split right"), Action::SplitRight, SplitDir::Right),
+        (|p, r, c| icons::split_half(p, r, c, Side::Left, false), t("Split left"), Action::SplitLeft, SplitDir::Left),
+        (|p, r, c| icons::split_half(p, r, c, Side::Bottom, false), t("Split down"), Action::SplitDown, SplitDir::Down),
+        (|p, r, c| icons::split_half(p, r, c, Side::Top, false), t("Split up"), Action::SplitUp, SplitDir::Up),
+    ];
+    for (k, (icon, label, action, dir)) in same.into_iter().enumerate() {
+        if can_split[k] {
+            v.push(e(icon, label, hint(action).to_string(), Cmd::Split(dir, terminal), false));
+        }
+    }
+    // The other kind: a terminal beside files, or files beside a terminal.
+    let (right, below) = if terminal { (t("Files to the right"), t("Files below")) } else { (t("Terminal to the right"), t("Terminal below")) };
+    let (ri, bi): (fn(&egui::Painter, Rect, egui::Color32), fn(&egui::Painter, Rect, egui::Color32)) = if terminal {
+        (|p, r, c| icons::split_half(p, r, c, Side::Right, false), |p, r, c| icons::split_half(p, r, c, Side::Bottom, false))
+    } else {
+        (|p, r, c| icons::split_half(p, r, c, Side::Right, true), |p, r, c| icons::split_half(p, r, c, Side::Bottom, true))
+    };
+    let mut group = !v.is_empty();
+    if can_split[0] {
+        v.push(e(ri, right, String::new(), Cmd::Split(SplitDir::Right, !terminal), group));
+        group = false;
+    }
+    if can_split[2] {
+        v.push(e(bi, below, String::new(), Cmd::Split(SplitDir::Down, !terminal), group));
+    }
+    if panes > 1 {
+        v.push(e(close_glyph, t("Close window"), hint(Action::CloseWindow).to_string(), Cmd::ClosePane, !v.is_empty()));
+    }
+    v
+}
+
 /// Split this window (same kind, or the other kind beside it) and close it.
 pub fn split_items(ui: &mut egui::Ui, terminal: bool, c: &PaneUiCtx, out: &mut Option<Cmd>) {
-    let th = c.theme;
-    let dirs = [SplitDir::Right, SplitDir::Left, SplitDir::Down, SplitDir::Up];
-    use crate::ui::shortcuts::{hint, Action};
-    let splits =
-        [(t("Split right"), Action::SplitRight), (t("Split left"), Action::SplitLeft), (t("Split down"), Action::SplitDown), (t("Split up"), Action::SplitUp)];
-    for (k, (label, action)) in splits.into_iter().enumerate() {
-        if c.can_split[k] && mitem(ui, th, icons::mi_split, &label, hint(action), false) {
-            *out = Some(Cmd::Split(dirs[k], terminal));
-        }
-    }
-    if c.can_split[0] || c.can_split[2] {
-        ui.separator();
-        let (right, below) = if terminal { (t("Files to the right"), t("Files below")) } else { (t("Terminal to the right"), t("Terminal below")) };
-        let glyph: MenuIcon = if terminal { icons::mi_split } else { crate::ui::tabs::terminal_glyph };
-        if c.can_split[0] && mitem(ui, th, glyph, &right, "", false) {
-            *out = Some(Cmd::Split(SplitDir::Right, !terminal));
-        }
-        if c.can_split[2] && mitem(ui, th, glyph, &below, "", false) {
-            *out = Some(Cmd::Split(SplitDir::Down, !terminal));
-        }
-    }
-    if !c.can_split.iter().any(|&b| b) {
+    split_menu(ui, c.theme, &split_entries(terminal, c.can_split, c.pane_count), out);
+}
+
+/// The entries of a split menu, with "at most 2 × 2" when no split is left.
+pub fn split_menu(ui: &mut egui::Ui, th: &Theme, entries: &[SplitEntry], out: &mut Option<Cmd>) {
+    if !entries.iter().any(|e| matches!(e.cmd, Cmd::Split(..))) {
         ui.label(egui::RichText::new(t("At most 2 columns and 2 rows of panes")).size(11.5).color(th.weak));
     }
-    if c.pane_count > 1 {
-        ui.separator();
-        if mitem(ui, th, close_glyph, &t("Close window"), hint(Action::CloseWindow), false) {
-            *out = Some(Cmd::ClosePane);
+    for e in entries {
+        if e.group {
+            ui.separator();
+        }
+        if mitem(ui, th, e.icon, &e.label, &e.key, false) {
+            *out = Some(e.cmd);
         }
     }
 }
@@ -3574,6 +3689,7 @@ mod quick_filter_tests {
         assert_eq!(on.label(), format!("{}, {}", t("Images"), t("Videos")));
         let three = QuickActive::toggle(q.as_ref(), "Music", &all).unwrap();
         assert_eq!(three.label(), format!("{}, {} +1", t("Images"), t("Music")));
+        assert_eq!(three.short_label(), format!("{} +2", t("Images")));
         // Unticking the last one turns the filter off.
         let q = QuickActive::toggle(q.as_ref(), "Images", &all);
         assert_eq!(names(&q), ["Videos"]);

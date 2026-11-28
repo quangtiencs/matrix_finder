@@ -787,8 +787,10 @@ fn wait_until(h: &mut Harness<'static, App>, secs: f32, mut done: impl FnMut(&Ap
     settle(h, 4);
 }
 
+/// Where screenshots go: docs/, or `MATRIX_FINDER_SHOTS_DIR` (to look at a change
+/// without overwriting the README's pictures).
 fn out_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("docs")
+    std::env::var_os("MATRIX_FINDER_SHOTS_DIR").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("docs"))
 }
 
 fn save(img: &RgbaImage, name: &str) {
@@ -994,7 +996,7 @@ fn view_uids(app: &App) -> Vec<u64> {
 #[ignore]
 fn window_drag_and_drop() {
     let d = demo_env();
-    let mut h = app_harness(&settings("Elegant Dark", &d), "gnome");
+    let mut h = app_harness(&settings("Breeze Dark", &d), "gnome");
     let app = h.state_mut();
     app.shot_pane(0, &d.demo, None);
     app.shot_pane(1, &d.demo.join("docs"), None); // [demo | docs]
@@ -1250,7 +1252,7 @@ fn terminal_ai_button() {
     // picked; Automatic goes back to the first one installed.
     h.state_mut().open_settings(SettingsPage::Terminal);
     settle(&mut h, 4);
-    scroll_settings(&mut h, 2000.0);
+    scroll_settings(&mut h, 1250.0);
     h.get_by_role_and_label(Role::RadioButton, "Gemini CLI").click();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.term_agent, "gemini");
@@ -1684,6 +1686,9 @@ fn export_screenshots() {
         MODE_DIR.set(mode.dir);
         // A fresh demo tree, so both modes show exactly the same files.
         render_scenes(&demo_env(), mode, &want);
+        if want("dev") {
+            dev_crops();
+        }
     }
     if want("showcase") {
         compose_showcase();
@@ -2134,6 +2139,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             settle(&mut h, 3);
             let uid = h.state().panes[0].tab().uid;
             h.ctx.memory_mut(|m| m.open_popup(egui::Id::new(("quick-filter", uid))));
+            h.ctx.data_mut(|m| m.insert_temp(egui::Id::new("find-options-open"), true));
             shot(&mut h, "quick-filter");
         }
         if want("settings-quick-filters") {
@@ -2141,6 +2147,8 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             let app = h.state_mut();
             app.shot_pane(0, &d.demo, None);
             app.open_settings(SettingsPage::QuickFilters);
+            // The editor of the first filter open.
+            app.qf.open = Some(0);
             shot(&mut h, "settings-quick-filters");
         }
     }
@@ -2156,6 +2164,53 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         // The system's answers arrive in the background.
         wait_until(&mut h, 2.0, |_| false);
         shot(&mut h, "settings-default-apps");
+    }
+
+    if want("settings-links") {
+        // Links of the terminal: a browser and profile for some websites.
+        let mut cfg = settings(mode.theme, d);
+        cfg.link_rules = vec![
+            crate::config::LinkRule { domain: "github.com".into(), browser: "/Applications/Google Chrome.app".into(), profile: "Profile 1".into() },
+            crate::config::LinkRule { domain: "localhost".into(), browser: "/Applications/Firefox.app".into(), profile: "dev".into() },
+        ];
+        let mut h = app_harness(&cfg, gnome);
+        // The browsers' own lists of profiles, in the demo home.
+        let support = d.home.join("Library/Application Support");
+        let chrome = support.join("Google/Chrome");
+        let firefox = support.join("Firefox");
+        std::fs::create_dir_all(&chrome).unwrap();
+        std::fs::create_dir_all(&firefox).unwrap();
+        std::fs::write(chrome.join("Local State"), r#"{"profile":{"info_cache":{"Default":{"name":"Personal"},"Profile 1":{"name":"Work"}}}}"#).unwrap();
+        std::fs::write(firefox.join("profiles.ini"), "[Profile0]\nName=default-release\nPath=a\n\n[Profile1]\nName=dev\nPath=b\n").unwrap();
+        let app = h.state_mut();
+        app.shot_pane(0, &d.demo, None);
+        app.open_settings(SettingsPage::Terminal);
+        settle(&mut h, 4);
+        // With rules, "Advanced" is open: down until Links is at the top.
+        for _ in 0..60 {
+            let top = h.query_by_label(&t("Web browser")).and_then(|n| n.bounding_box()).map(|b| b.y0);
+            if top.is_some_and(|y| y < 200.0) {
+                break;
+            }
+            scroll_settings(&mut h, 120.0);
+        }
+        shot(&mut h, "settings-links");
+    }
+
+    if want("theme-editor") {
+        // A theme of one's own, made from the one shown, in its editor.
+        let mut cfg = settings(mode.theme, d);
+        let mut mine = crate::style::theme::to_custom(crate::style::theme::by_name(mode.theme), "My theme");
+        mine.accent = if mode.dir == "dark" { "#c792ea".into() } else { "#7c4dbe".into() };
+        cfg.custom_themes = vec![mine];
+        cfg.theme = "My theme".into();
+        let mut h = app_harness(&cfg, gnome);
+        let app = h.state_mut();
+        app.shot_pane(0, &d.demo, None);
+        app.open_settings(SettingsPage::Appearance);
+        settle(&mut h, 4);
+        scroll_settings(&mut h, 1180.0);
+        shot(&mut h, "theme-editor");
     }
 
     if want("open-with") {
@@ -2300,6 +2355,29 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         let input = "ls -lgo; shasum -a 256 -c SHA256SUMS; for c in {31..36}; do printf \"\\e[${c}m## \\e[0m\"; done; echo\n";
         term_type(&mut h, 0, term, input);
         shot(&mut h, "terminal");
+    }
+}
+
+// ------------------------------------------------------------------ README's settings
+
+/// The settings the README shows developers, cut from their scenes to the page's content
+/// (smaller files): (scene, top of the cut, name).
+const DEV_CROPS: [(&str, u32, &str); 6] = [
+    ("terminal-profiles", 170, "dev-terminal-profiles"),
+    ("settings-links", 125, "dev-links"),
+    ("theme-editor", 195, "dev-theme-editor"),
+    ("settings-default-apps", 125, "dev-default-apps"),
+    ("settings-shortcuts", 125, "dev-shortcuts"),
+    ("settings-quick-filters", 125, "dev-quick-filters"),
+];
+
+/// Cut `DEV_CROPS` out of this mode's scenes (which must be rendered already).
+fn dev_crops() {
+    let dir = out_dir().join(MODE_DIR.get());
+    for (scene, top, name) in DEV_CROPS {
+        let Ok(img) = image::open(dir.join(format!("{scene}.png"))) else { continue };
+        let cut = img.crop_imm(428, top, 672, 440).to_rgba8();
+        save(&cut, name);
     }
 }
 
@@ -4750,6 +4828,15 @@ fn quick_filter_ticks_several_kinds() {
     if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
         h.render().unwrap().save(Path::new(&out).join("quick-filter-menu.png")).unwrap();
     }
+    // Several ticked: Untick all shows every kind again and keeps the menu open.
+    assert!(h.query_by_label(&t("Untick all")).is_some());
+    h.get_by_label(&t("Untick all")).click();
+    settle(&mut h, 2);
+    assert!(h.state().panes[0].tab().quick.is_none());
+    assert!(menu_open(&h));
+    assert!(h.query_by_label(&t("Untick all")).is_none(), "only with something ticked");
+    tick(&mut h, "Images");
+    tick(&mut h, "Videos");
     // Unticking one leaves the other.
     tick(&mut h, "Images");
     assert_eq!(shown(&h), ["sub", "b.mp4"]);
@@ -4762,12 +4849,10 @@ fn quick_filter_ticks_several_kinds() {
     h.state_mut().set_quick_filter(Some(i));
     settle(&mut h, 2);
     assert_eq!(shown(&h), ["sub", "b.mp4", "c.mp3"]);
-    // Show all files turns it off and closes the menu.
-    funnel(&mut h);
-    h.get_by_label(&t("Show all files")).click();
+    // The chip's × turns it off.
+    h.get_by_label(&format!("{}, {}", t("Music"), t("Videos"))).click();
     settle(&mut h, 2);
     assert!(h.state().panes[0].tab().quick.is_none());
-    assert!(!menu_open(&h));
     assert_eq!(shown(&h), ["sub", "a.jpg", "b.mp4", "c.mp3", "d.txt"]);
 }
 
@@ -5624,4 +5709,376 @@ fn empty_icon_cells_take_the_folder_menu() {
     settle(&mut h, 2);
     assert!(h.state().panes[0].tab().menu_open, "the folder's menu");
     assert!(h.query_by_label_contains(&t("Select all")).is_some());
+}
+
+/// Settings → Bookmarks: rows dragged by their handle reorder the list and move a
+/// bookmark into a group; let go away from the list, nothing moves.
+#[test]
+#[ignore]
+fn bookmarks_reorder_by_dragging_in_settings() {
+    let d = demo_env();
+    let mut cfg = settings("Breeze Light", &d);
+    let mut group = Bookmark::new_folder("Work");
+    group.children = vec![Bookmark::new("x", "/tmp/x")];
+    cfg.bookmarks = vec![Bookmark::new("a", "/tmp/a"), Bookmark::new("b", "/tmp/b"), group, Bookmark::new("c", "/tmp/c")];
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().open_settings(SettingsPage::Bookmarks);
+    settle(&mut h, 4);
+    scroll_settings(&mut h, 300.0);
+    let grip = |h: &Harness<'static, App>, at: (usize, Option<usize>)| h.ctx.read_response(egui::Id::new(("bm-grip", at))).expect("a drag handle").rect;
+    let order =
+        |h: &Harness<'static, App>| {
+            h.state()
+                .cfg
+                .bookmarks
+                .iter()
+                .map(|b| {
+                    if b.folder {
+                        format!("[{}: {}]", b.name, b.children.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(" "))
+                    } else {
+                        b.name.clone()
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+    // "a" onto the lower half of "b": after it.
+    let (from, to) = (grip(&h, (0, None)).center(), grip(&h, (1, None)));
+    drag(&mut h, from, pos2(from.x, to.bottom() - 2.0));
+    assert_eq!(order(&h), ["b", "a", "[Work: x]", "c"]);
+    // "c" onto the lower half of the group's row: the start of the group.
+    let (from, to) = (grip(&h, (3, None)).center(), grip(&h, (2, None)));
+    drag(&mut h, from, pos2(from.x, to.bottom() - 2.0));
+    assert_eq!(order(&h), ["b", "a", "[Work: c x]"]);
+    // The group onto the upper half of "b": first, with its bookmarks.
+    let (from, to) = (grip(&h, (2, None)).center(), grip(&h, (0, None)));
+    drag(&mut h, from, pos2(from.x, to.top() + 2.0));
+    assert_eq!(order(&h), ["[Work: c x]", "b", "a"]);
+    // Let go far from the list: it stays.
+    let from = grip(&h, (1, None)).center();
+    drag(&mut h, from, pos2(from.x + 900.0, from.y));
+    assert_eq!(order(&h), ["[Work: c x]", "b", "a"]);
+    assert_eq!(crate::config::Settings::load().bookmarks.len(), 3, "saved");
+}
+
+/// Settings → Appearance and Terminal: a theme of the user's own is made from the one
+/// shown, edits apply to the app at once, and it is deleted after a confirmation.
+#[test]
+#[ignore]
+fn the_users_themes_are_made_edited_and_deleted() {
+    use crate::style::theme;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Nord", &d), "gnome");
+    h.state_mut().open_settings(SettingsPage::Appearance);
+    settle(&mut h, 4);
+    h.get_by_label(&t("New theme")).click();
+    settle(&mut h, 4);
+    let name = format!("Nord ({})", t("custom"));
+    assert_eq!(h.state().cfg.custom_themes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), [name.as_str()]);
+    assert_eq!((h.state().cfg.theme.as_str(), h.state().theme.name), (name.as_str(), name.as_str()), "the new theme is shown");
+    assert_eq!(h.state().theme.bg, theme::by_name("Nord").bg, "a copy of the theme shown");
+    // An edited colour applies to the app.
+    h.state_mut().cfg.custom_themes[0].bg = "#123456".into();
+    let ctx = h.ctx.clone();
+    h.state_mut().sync_custom_themes(&ctx);
+    settle(&mut h, 3);
+    assert_eq!(h.state().theme.bg, egui::Color32::from_rgb(0x12, 0x34, 0x56));
+    assert_eq!(h.ctx.style().visuals.extreme_bg_color, h.state().theme.surface, "and to egui's colours");
+    // Delete asks first; then the app is back on a built-in theme.
+    h.get_by_label(&t("Delete")).click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.custom_themes.len(), 1, "not yet: asked first");
+    h.query_all_by_label(&t("Delete")).last().unwrap().click();
+    settle(&mut h, 3);
+    assert!(h.state().cfg.custom_themes.is_empty());
+    assert!(!h.state().cfg.theme.contains("custom") && theme::is_builtin(&h.state().cfg.theme));
+    assert!(Settings::load().custom_themes.is_empty(), "saved");
+
+    // A terminal profile's colours.
+    let p = h.state().cfg.terminal_profiles.iter().position(|p| p.terminal == crate::terminal::TerminalKind::BuiltIn).unwrap();
+    h.state_mut().profile_sel = p;
+    h.state_mut().cfg.terminal_profiles[p].theme = "Dracula".into();
+    h.state_mut().open_settings(SettingsPage::Terminal);
+    settle(&mut h, 4);
+    h.get_by_label(&t("New colour theme")).click();
+    settle(&mut h, 4);
+    let name = format!("Dracula ({})", t("custom"));
+    assert_eq!(h.state().cfg.custom_terminal_themes.len(), 1);
+    assert_eq!(h.state().cfg.terminal_profiles[p].theme, name, "the profile uses it");
+    assert_eq!(theme::term_by_name(&name).ansi, theme::term_by_name("Dracula").ansi);
+    h.get_by_label(&t("Delete")).click();
+    settle(&mut h, 3);
+    h.query_all_by_label(&t("Delete")).last().unwrap().click();
+    settle(&mut h, 3);
+    assert!(h.state().cfg.custom_terminal_themes.is_empty());
+    assert_eq!(h.state().cfg.terminal_profiles[p].theme, "", "back to the app's colours");
+}
+
+/// Settings → Appearance → Icons offers the bundled sets; picked, the icon view draws a
+/// file's own icon (Material: by extension and by folder name; Fluent: tinted shapes).
+#[test]
+#[ignore]
+fn bundled_icon_sets_draw_in_the_icon_view() {
+    use crate::style::iconsets::{drawn, Set};
+    let d = demo_env();
+    let dir = d.demo.join("out").join("icon-sets");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    for n in ["main.rs", "report.pdf", "notes.txt"] {
+        std::fs::write(dir.join(n), "x").unwrap();
+    }
+    let mut cfg = settings("Breeze Dark", &d);
+    cfg.thumbnails = false;
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().open_settings(SettingsPage::Appearance);
+    settle(&mut h, 4);
+    h.get_by_label("Material Icon Theme").click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.icon_pack, "material");
+    h.state_mut().shot_pane(0, &dir, None);
+    h.state_mut().shot_focus(0);
+    h.state_mut().set_view_mode(crate::config::ViewMode::Icons);
+    settle(&mut h, 4);
+    let got = drawn(&h.ctx, Set::Material);
+    for icon in ["rust", "pdf", "document", "folder-src"] {
+        assert!(got.contains(&icon), "{icon} in {got:?}");
+    }
+    h.state_mut().cfg.icon_pack = "fluent".into();
+    settle(&mut h, 4);
+    let got = drawn(&h.ctx, Set::Fluent);
+    for icon in ["code", "pdf", "text", "folder"] {
+        assert!(got.contains(&icon), "{icon} in {got:?}");
+    }
+}
+
+/// Settings → Terminal → Links → Advanced: a website gets its own browser and profile;
+/// its subdomains follow it, other links keep the default, mail links the mail app.
+#[test]
+#[ignore]
+fn links_open_in_a_browser_chosen_by_website() {
+    let d = demo_env();
+    let mut cfg = settings("Breeze Light", &d);
+    cfg.browser = "firefox".into();
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().open_settings(SettingsPage::Terminal);
+    settle(&mut h, 4);
+    h.get_by_label(&t("Advanced: a browser for each website")).click();
+    settle(&mut h, 3);
+    h.get_by_label(&format!("+ {}", t("Add website"))).click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.link_rules.len(), 1);
+    assert_eq!(h.state().cfg.link_rules[0].browser, "firefox", "starts with the default browser");
+    let r = &mut h.state_mut().cfg.link_rules[0];
+    r.domain = " https://GitHub.com/ ".into();
+    r.browser = "google-chrome".into();
+    r.profile = "Profile 1".into();
+    let app = h.state();
+    let pair = |a: &App, url: &str| a.link_browser(url);
+    assert_eq!(pair(app, "https://gist.github.com/x"), ("google-chrome".to_string(), "Profile 1".to_string()));
+    assert_eq!(pair(app, "https://example.com/"), ("firefox".to_string(), String::new()));
+    assert_eq!(pair(app, "mailto:me@github.com"), (String::new(), String::new()), "mail: the system's mail app");
+    h.state_mut().save_cfg();
+    assert_eq!(Settings::load().link_rules[0].domain, "github.com", "saved, as a website");
+}
+
+/// Settings → Quick filters: a click opens a filter's editor; extensions are removed by
+/// their chip and added as typed; a built-in filter goes back to its own list; removing
+/// asks first; a row is dragged by its handle; a new filter opens with its name selected.
+#[test]
+#[ignore]
+fn quick_filters_are_edited_in_settings() {
+    use crate::config::{default_quick_filters, QuickFilter};
+    let d = demo_env();
+    let mut cfg = settings("Breeze Light", &d);
+    let builtin = default_quick_filters();
+    cfg.quick_filters = vec![builtin[0].clone(), builtin[1].clone(), QuickFilter::new("Mine", "abc")];
+    let mut h = app_harness(&cfg, "gnome");
+    h.state_mut().open_settings(SettingsPage::QuickFilters);
+    settle(&mut h, 4);
+    let names = |h: &Harness<'static, App>| h.state().cfg.quick_filters.iter().map(|q| q.name.clone()).collect::<Vec<_>>();
+    let exts = |h: &Harness<'static, App>, i: usize| h.state().cfg.quick_filters[i].ext_list();
+    let centre = |b: egui::accesskit::Rect| pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
+
+    // Open, then close, by clicking the row.
+    h.get_by_label(&t("Images")).click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().qf.open, Some(0));
+    // A chip's × removes its extension.
+    h.get_by_label(&format!("{} .jpg", t("Remove"))).click();
+    settle(&mut h, 3);
+    assert!(!exts(&h, 0).contains(&"jpg".to_string()));
+    // Typed ones are added (once each, without dots, in lower case) with Enter.
+    let add = h.get_by_label(&t("Add")).bounding_box().unwrap();
+    let field = egui::Rect::from_min_max(pos2(add.x0 as f32 - 300.0, add.y0 as f32), pos2(add.x0 as f32, add.y1 as f32));
+    assert!(type_into(&mut h, field, "HEIC, .foo jpg"), "the add field");
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    let got = exts(&h, 0);
+    assert_eq!(&got[got.len() - 2..], ["foo", "jpg"]);
+    assert_eq!(got.iter().filter(|e| *e == "heic").count(), 1);
+    // A built-in filter goes back to its own extensions.
+    h.get_by_label(&t("Reset to built-in")).click();
+    settle(&mut h, 3);
+    assert_eq!(exts(&h, 0), builtin[0].ext_list());
+    h.get_by_label(&t("Images")).click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().qf.open, None);
+
+    // Removing asks first: Cancel keeps it, Remove removes it.
+    let trash_of = |h: &Harness<'static, App>, name: &str| {
+        let row = centre(h.get_by_label(&t(name)).bounding_box().unwrap());
+        h.query_all_by_label(&t("Remove")).filter_map(|n| n.bounding_box()).map(centre).find(|p| (p.y - row.y).abs() < 4.0).expect("its trash can")
+    };
+    let at = trash_of(&h, "Music");
+    click_at(&mut h, at);
+    h.get_by_label(&t("Cancel")).click();
+    settle(&mut h, 3);
+    assert_eq!(names(&h), ["Images", "Music", "Mine"]);
+    let at = trash_of(&h, "Music");
+    click_at(&mut h, at);
+    let at = trash_of(&h, "Music"); // now the confirmation's Remove
+    click_at(&mut h, at);
+    assert_eq!(names(&h), ["Images", "Mine"]);
+
+    // Dragged by its handle above the first one.
+    let grip = |h: &Harness<'static, App>, i: usize| h.ctx.read_response(egui::Id::new(("qf-row", i)).with("grip")).expect("a drag handle").rect;
+    let (from, to) = (grip(&h, 1).center(), grip(&h, 0));
+    drag(&mut h, from, pos2(from.x, to.top() + 2.0));
+    assert_eq!(names(&h), ["Mine", "Images"]);
+
+    // Renamed while a window has it on: the window keeps it on, under the new name.
+    let uid = {
+        let app = h.state_mut();
+        let all = app.cfg.quick_filters.clone();
+        let mut uid = None;
+        for p in all_panes!(app) {
+            if p.tab().is_files() {
+                p.tab_mut().quick = crate::ui::pane::QuickActive::from_names(&["Mine".to_string()], &all);
+                uid = Some(p.tab().uid);
+                break;
+            }
+        }
+        uid.expect("a file window")
+    };
+    h.get_by_label("Mine").click();
+    settle(&mut h, 3);
+    let name_field = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .filter_map(|n| n.bounding_box())
+        .min_by(|a, b| a.y0.total_cmp(&b.y0))
+        .map(centre)
+        .expect("the name field");
+    click_at(&mut h, name_field);
+    key_press(&mut h, Key::A, None, Modifiers::COMMAND);
+    push(&mut h, Event::Text("Mine too".into()));
+    settle(&mut h, 3);
+    assert_eq!(names(&h)[0], "Mine too");
+    let on = |a: &App| {
+        let mut v = None;
+        for p in a.panes.iter().chain(a.strip.tabs.iter().flat_map(|w| w.panes.iter())) {
+            if p.tab().uid == uid {
+                v = p.tab().quick.as_ref().map(|q| q.names.clone());
+            }
+        }
+        v
+    };
+    assert_eq!(on(h.state()), Some(vec!["Mine too".to_string()]), "still on, renamed");
+    h.get_by_label("Mine too").click();
+    settle(&mut h, 3);
+
+    // A new one: its editor opens with the name selected, so typing renames it.
+    h.get_by_label(&format!("+ {}", t("New quick filter"))).click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().qf.open, Some(2));
+    push(&mut h, Event::Text("Raw".into()));
+    settle(&mut h, 3);
+    assert_eq!(names(&h), ["Mine too", "Images", "Raw"]);
+    assert!(h.query_by_label(&t("No extensions yet")).is_none(), "the open one shows its editor");
+    // Saved once the typing pauses.
+    wait_until(&mut h, 3.0, |a| a.cfg_dirty.is_none());
+    let saved: Vec<String> = crate::config::Settings::load().quick_filters.into_iter().map(|q| q.name).collect();
+    assert_eq!(saved, ["Mine too", "Images", "Raw"], "saved");
+}
+
+/// View options: "Set as default view" makes the window's view Settings' default, so the
+/// other windows that were not switched show it too; it is saved.
+#[test]
+#[ignore]
+fn view_options_set_the_default_view() {
+    use crate::config::ViewMode;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, None);
+    h.state_mut().shot_pane(1, &d.demo.join("data"), None);
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.default_view, ViewMode::List);
+    let open_menu = |h: &mut Harness<'static, App>| {
+        h.query_by_label("View options").expect("the button").click();
+        settle(h, 2);
+    };
+    // The default: nothing to set.
+    open_menu(&mut h);
+    assert!(h.query_by_label_contains(&t("This is the default view")).is_some());
+    assert!(h.query_by_label(&t("Set as default view")).is_none());
+    // Icons in this window, then made the default.
+    h.query_by_label_contains(&t("Icons")).expect("in the menu").click();
+    settle(&mut h, 2);
+    assert!(h.state().panes[1].tab().grid_cols.is_none(), "the other window: still a list");
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("view-options-menu.png")).unwrap();
+    }
+    h.get_by_label(&t("Set as default view")).click();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.default_view, ViewMode::Icons);
+    assert_eq!(h.state().panes[0].tab().view_mode, None, "this window follows the default now");
+    assert!(h.state().panes[1].tab().grid_cols.is_some(), "the other window shows icons too");
+    assert!(h.query_by_label_contains(&t("This is the default view")).is_some());
+    assert_eq!(crate::config::Settings::load().default_view, ViewMode::Icons, "saved");
+    // Choosing the default view in a window lets it follow the default, also later.
+    h.state_mut().set_view_mode(ViewMode::List);
+    assert_eq!(h.state().panes[0].tab().view_mode, Some(ViewMode::List));
+    h.state_mut().set_view_mode(ViewMode::Icons);
+    assert_eq!(h.state().panes[0].tab().view_mode, None, "the default: not pinned");
+}
+
+/// The toolbar's split view: splits the focused window on the side chosen (files or a
+/// terminal), offers only the sides left within 2 × 2, and closes the window.
+#[test]
+#[ignore]
+fn split_view_splits_the_focused_window() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, None);
+    settle(&mut h, 3);
+    while h.state().panes.len() > 1 {
+        let last = h.state().panes.len() - 1;
+        h.state_mut().close_pane(last);
+    }
+    h.state_mut().shot_focus(0);
+    settle(&mut h, 3);
+    let choose = |h: &mut Harness<'static, App>, label: &str| {
+        h.get_by_label(&t("Split view")).click();
+        settle(h, 2);
+        h.get_by_label_contains(label).click();
+        settle(h, 4);
+    };
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.get_by_label(&t("Split view")).click();
+        settle(&mut h, 3);
+        h.render().unwrap().save(Path::new(&out).join("split-view-menu.png")).unwrap();
+        key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    }
+    choose(&mut h, &t("Split right"));
+    assert_eq!((h.state().panes.len(), h.state().layout.dims()), (2, (2, 1)));
+    assert!(h.state().panes[h.state().active].tab().is_files(), "a file window");
+    choose(&mut h, &t("Terminal below"));
+    assert_eq!(h.state().panes.len(), 3);
+    assert!(h.state().panes[h.state().active].tab().is_terminal(), "a terminal below");
+    // Two columns already: no more sideways splits in the menu.
+    h.get_by_label(&t("Split view")).click();
+    settle(&mut h, 2);
+    assert!(h.query_by_label_contains(&t("Split right")).is_none());
+    assert!(h.query_by_label_contains(&t("Files to the right")).is_none(), "a terminal offers files beside it");
+    key_press(&mut h, Key::Escape, None, Modifiers::NONE);
+    choose(&mut h, &t("Close window"));
+    assert_eq!(h.state().panes.len(), 2);
 }

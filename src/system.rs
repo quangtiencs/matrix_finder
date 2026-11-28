@@ -2,6 +2,7 @@
 //! default apps, AI coding agents, the update check, and other installed copies.
 pub mod activation;
 pub mod agents;
+pub mod browsers;
 pub mod copies;
 pub mod defaultapps;
 pub mod instance;

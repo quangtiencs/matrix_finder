@@ -195,12 +195,26 @@ impl App {
         let c = lc!(self);
         let tab = self.panes[self.active].tab_mut();
         if tab.is_files() {
-            tab.view_mode = Some(mode);
+            // The default chosen: the window follows it (also when it changes later).
+            tab.view_mode = (mode != self.cfg.default_view).then_some(mode);
             // ".." comes and goes with the list.
             tab.rebuild_view(&c);
             tab.ensure_visible = true;
             self.save_cfg();
         }
+    }
+
+    /// The focused window's view becomes Settings' default view: every window that has
+    /// not been switched shows it, and this one follows the default from now on.
+    pub(super) fn set_default_view(&mut self, mode: crate::config::ViewMode) {
+        self.cfg.default_view = mode;
+        let tab = self.panes[self.active].tab_mut();
+        if tab.is_files() {
+            tab.view_mode = None;
+        }
+        self.rebuild_views();
+        self.save_cfg();
+        self.toast(format!("{}: {}", t("Default view"), t(if mode == crate::config::ViewMode::Icons { "Icons" } else { "List" })), false);
     }
 
     pub(super) fn calc_sizes(&mut self) {
@@ -441,7 +455,7 @@ impl App {
             let on = self.panes[self.active].tab().quick.clone();
             for (i, q) in self.cfg.quick_filters.iter().enumerate() {
                 let tick = if on.as_ref().is_some_and(|a| a.has(&q.name)) { " ✓" } else { "" };
-                v.push(E::new(format!("{}: {}{tick}", t("Quick filter"), t(&q.name)), "", PalItem::QuickFilter(Some(i))));
+                v.push(E::new(format!("{}: {}{tick}", t("Quick filter"), q.display_name()), "", PalItem::QuickFilter(Some(i))));
             }
             if self.panes[self.active].tab().quick.is_some() {
                 v.push(E::new(format!("{}: {}", t("Quick filter"), t("Show all files")), "", PalItem::QuickFilter(None)));
@@ -456,7 +470,7 @@ impl App {
         for c in &self.cfg.connections {
             v.push(E::new(format!("{}: {}", t("Connect"), c.name), "", PalItem::Connect(c.clone())));
         }
-        for th in theme::THEMES {
+        for th in theme::THEMES.iter().chain(theme::custom()) {
             v.push(E::new(format!("{}: {}", t("Theme"), th.name), "", PalItem::Theme(th.name)));
         }
         for (code, name) in &self.languages {

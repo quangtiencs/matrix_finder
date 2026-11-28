@@ -6,21 +6,22 @@ impl App {
     /// Open a web or mail link: web links in the browser chosen in the settings (or the
     /// system's default one), mail links in the system's mail app.
     pub(super) fn open_web(&mut self, url: &str) {
-        let browser = if is_web_link(url) { self.cfg.browser.trim() } else { "" };
-        if let Err(e) = terminal::open_url(browser, url) {
+        let (browser, profile) = self.link_browser(url);
+        let extra = crate::system::browsers::profile_args(&browser, &profile);
+        if let Err(e) = terminal::open_url(&browser, &extra, url) {
             self.toast(format!("{}: {e}", t("Cannot open the link")), true);
         }
     }
 
-    /// The browser that opens web links, named for the user.
-    pub(super) fn browser_label(&self, ctx: &egui::Context) -> String {
-        let b = self.cfg.browser.trim();
-        if !b.is_empty() {
-            return crate::system::defaultapps::program_name(b);
+    /// The browser and profile that open `url`: a web link's website rule, or the default
+    /// ones; a mail link opens in the system's mail app.
+    pub(super) fn link_browser(&self, url: &str) -> (String, String) {
+        if !is_web_link(url) {
+            return (String::new(), String::new());
         }
-        match crate::system::defaultapps::system_app(ctx, "html") {
-            Some(Some(app)) => format!("{app} ({})", t("system default")),
-            _ => t("System default"),
+        match crate::system::browsers::rule_for(&self.cfg.link_rules, url) {
+            Some(r) => (r.browser.trim().to_string(), r.profile.trim().to_string()),
+            None => (self.cfg.browser.trim().to_string(), self.cfg.browser_profile.trim().to_string()),
         }
     }
 
@@ -476,6 +477,26 @@ fn archive_summary(path: &Path, cancel: &crate::preview::media::Cancel) -> Strin
 }
 
 /// An http(s) link (others, like mailto, go to their own app).
+/// A browser and profile named for the user: "Google Chrome · Work", "Safari (system
+/// default)".
+pub(super) fn browser_name(ctx: &egui::Context, browser: &str, profile: &str) -> String {
+    let b = browser.trim();
+    if b.is_empty() {
+        return match crate::system::defaultapps::system_app(ctx, "html") {
+            Some(Some(app)) => format!("{app} ({})", t("system default")),
+            _ => t("System default"),
+        };
+    }
+    let name = crate::system::defaultapps::program_name(b);
+    let profile = profile.trim();
+    if profile.is_empty() {
+        return name;
+    }
+    // The name the user gave the profile in the browser.
+    let shown = crate::system::browsers::profiles(b).into_iter().find(|p| p.id == profile).map_or(profile.to_string(), |p| p.name);
+    format!("{name} · {shown}")
+}
+
 fn is_web_link(url: &str) -> bool {
     url.split_once(':').is_some_and(|(s, _)| s.eq_ignore_ascii_case("http") || s.eq_ignore_ascii_case("https"))
 }

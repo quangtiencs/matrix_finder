@@ -36,9 +36,20 @@ pub fn type_of(file_name: &str) -> Option<String> {
     extensions(file_name).last()
 }
 
+/// A chosen program as its command line: the program, then its arguments. A path with
+/// spaces and no quotes is one program, as the browser list keeps an app
+/// (`/Applications/Google Chrome.app`) and older settings saved it.
+pub fn program_parts(program: &str) -> Vec<String> {
+    let p = program.trim();
+    if p.contains(char::is_whitespace) && !p.starts_with(['"', '\'']) && (p.ends_with(".app") || Path::new(p).is_file()) {
+        return vec![p.to_string()];
+    }
+    shell_split(p)
+}
+
 /// Whether a chosen app certainly cannot start. `.app` names are left to macOS to find.
 pub fn program_missing(program: &str) -> bool {
-    let parts = shell_split(program);
+    let parts = program_parts(program);
     let Some(first) = parts.first() else { return false };
     let path = Path::new(first);
     if path.components().count() > 1 {
@@ -117,7 +128,7 @@ pub fn browsers() -> Vec<(String, String)> {
 /// A short name for a program chosen as in `default_apps`: "Firefox" for
 /// `/Applications/Firefox.app`, `firefox` for `firefox --new-window`.
 pub fn program_name(program: &str) -> String {
-    let parts = shell_split(program);
+    let parts = program_parts(program);
     let Some(first) = parts.first() else { return String::new() };
     let path = Path::new(first);
     let name = if first.ends_with(".app") || first.to_ascii_lowercase().ends_with(".exe") { path.file_stem() } else { path.file_name() };
@@ -304,6 +315,16 @@ fn desktop_name(file: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_paths_with_spaces_are_one_program() {
+        // As the browser list keeps them, and older settings saved them.
+        assert_eq!(program_parts("/Applications/Google Chrome.app"), ["/Applications/Google Chrome.app"]);
+        assert_eq!(program_name("/Applications/Google Chrome.app"), "Google Chrome");
+        assert_eq!(program_parts("\"/Applications/Brave Browser.app\""), ["/Applications/Brave Browser.app"]);
+        assert_eq!(program_parts(" firefox --new-window "), ["firefox", "--new-window"]);
+        assert_eq!(program_parts("code -n"), ["code", "-n"]);
+    }
 
     #[test]
     fn file_types() {

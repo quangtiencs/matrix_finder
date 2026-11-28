@@ -127,7 +127,7 @@ impl App {
                 }
                 ui.separator();
                 ui.menu_button(format!("🎨 {}", t("Theme")), |ui| {
-                    for th in theme::THEMES {
+                    for th in theme::THEMES.iter().chain(theme::custom()) {
                         if ui.selectable_label(self.cfg.theme == th.name, th.name).clicked() {
                             self.set_theme(ui.ctx(), th.name);
                         }
@@ -370,6 +370,7 @@ impl App {
                     self.open_settings(self.settings_page);
                 }
                 self.view_options_button(ui, th);
+                self.split_view_button(ui, th);
                 let n_jobs = self.jobs.len();
                 let tr_shown = self.panes[self.active].tab().transfers;
                 let gauge = self.transfers_gauge();
@@ -735,6 +736,45 @@ impl App {
             ui.radio_value(&mut chosen, ViewMode::Icons, t("Icons"));
             if chosen != mode {
                 self.set_view_mode(chosen);
+            }
+            // Make this window's view the default, without a trip to Settings.
+            ui.separator();
+            if mode == self.cfg.default_view {
+                ui.label(RichText::new(format!("✓ {}", t("This is the default view"))).size(12.0).color(th.weak))
+                    .on_hover_text(t("Windows that you have not switched show it. Settings → Files & layout"));
+            } else if ui
+                .button(t("Set as default view"))
+                .on_hover_text(t("Every window that you have not switched shows this view, and so do new ones"))
+                .clicked()
+            {
+                self.set_default_view(mode);
+            }
+        });
+    }
+}
+
+impl App {
+    /// The toolbar's split view: split the focused window (files or a terminal on any
+    /// side, within 2 × 2), or close it.
+    fn split_view_button(&mut self, ui: &mut egui::Ui, th: &Theme) {
+        let id = egui::Id::new("split-view");
+        let open = ui.memory(|m| m.is_popup_open(id));
+        let resp = tool_icon(ui, th, &t("Split view"), open, icons::mi_split);
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Split view")));
+        if resp.clicked() {
+            ui.memory_mut(|m| m.toggle_popup(id));
+        }
+        egui::popup::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+            crate::ui::pane::menu_style(ui);
+            ui.set_min_width(240.0);
+            let a = self.active;
+            let can = [SplitDir::Right, SplitDir::Left, SplitDir::Down, SplitDir::Up].map(|d| self.layout.can_split(a, d));
+            let entries = crate::ui::pane::split_entries(self.panes[a].tab().is_terminal(), can, self.panes.len());
+            let mut cmd = None;
+            crate::ui::pane::split_menu(ui, th, &entries, &mut cmd);
+            if let Some(c) = cmd {
+                self.run_cmd(c);
+                ui.memory_mut(|m| m.close_popup());
             }
         });
     }

@@ -84,6 +84,8 @@ ASSETS = [
     ("DejaVu Sans Mono", "Bitstream Vera and Arev fonts licenses, public domain changes", ["assets/fonts/LICENSE-DejaVu.txt"]),
     ("Symbols Nerd Font Mono", "MIT (Nerd Fonts); glyphs under their own licenses, see below", ["assets/fonts/LICENSE-NerdFontsSymbols.txt"]),
     ("AI tool logos (LobeHub Icons)", "MIT; the logos are trademarks of their owners", ["assets/agents/LICENSE.txt"]),
+    ("Material Icon Theme (file and folder icons)", "MIT; logos among them are trademarks of their owners", ["assets/icons/material/LICENSE"]),
+    ("Fluent UI System Icons (Microsoft)", "MIT", ["assets/icons/fluent/LICENSE"]),
 ]
 NERD_FONT_GLYPHS = """The glyphs in Symbols Nerd Font come from these icon sets (from Nerd Fonts'
 license-audit.md, https://github.com/ryanoasis/nerd-fonts):

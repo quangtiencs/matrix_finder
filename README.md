@@ -18,6 +18,7 @@ model checkpoint holds without opening Python. A terminal sits next to your file
 
 [**Data**](#working-with-data) ·
 [**Code**](#working-with-code) ·
+[**Settings**](#settings-for-developers) ·
 [**Formats**](#formats) ·
 [**Screenshots**](#screenshots) ·
 [**Install**](#install) ·
@@ -53,13 +54,53 @@ Press <kbd>F3</kbd> and the panel on the right shows the file under the cursor: 
 
 ## Working with code
 
-- **A terminal next to the files**, in the same tab: split a tab into up to four file and terminal windows. Full-screen programs work, including Claude Code (<kbd>Shift</kbd>+<kbd>Enter</kbd>, mouse clicks), Vim and htop. A button starts Claude Code, Codex, Gemini CLI or others in the current folder.
+- **A terminal next to the files**, in the same tab: split a tab into up to four file and terminal windows from the toolbar's split button or a key. Full-screen programs work, including Claude Code (<kbd>Shift</kbd>+<kbd>Enter</kbd>, mouse clicks), Vim and htop. A button starts Claude Code, Codex, Gemini CLI or others in the current folder.
 - **Git branches in the file list**: `api (git) [feature/login]`. Optionally green or orange by whether everything is committed.
-- **Search inside files** like grep: `source LIKE '%TODO%' AND ext = 'rs'`.
+- **Search inside files** like grep: *Text in files* in the Find panel, in this folder or every subfolder, or `source LIKE '%TODO%' AND ext = 'rs'`.
 - **Archives and servers as folders**: zip, 7z, rar and tar.* open like folders; so do SFTP and FTP servers (`sftp://user@host/path` in the path bar).
 - **Small things that save a trip to another tool**: syntax-highlighted code, certificates with their validity, checksums (SHA-256, BLAKE3…) with `SHA256SUMS` verification, batch rename with undo.
 
-The rest is what you would expect: two panels, tabs, drag & drop, a disk usage treemap, backups, themes that match macOS, Windows, GNOME or KDE, English and Vietnamese.
+The rest is what you would expect: two panels, tabs, drag & drop, a disk usage treemap, backups, 39 themes (macOS, Windows, GNOME, KDE, Catppuccin, Rosé Pine, …) and your own, Material and Fluent icons, English and Vietnamese.
+
+<a id="settings-for-developers"></a>
+
+## Settings for developers
+
+All of these are in *Settings*; none needs a config file.
+
+- **Terminal profiles**: a shell, a startup script (`source .venv/bin/activate`) and colours for each. A profile can open iTerm2, Ghostty, WezTerm, Kitty, Alacritty or another terminal instead of the built-in one.
+- **Links by website**: <kbd>Ctrl</kbd>/<kbd>⌘</kbd>+click on a link in a terminal opens it in the browser and profile chosen for that site, such as github.com in Chrome's work profile and localhost in Firefox.
+- **Your own theme**: start from any theme, change the colours of the app, of code and of the terminal, and share it as a JSON file.
+- **Default apps**: open `.md` in your editor or `.ipynb` in VS Code from Matrix Finder, without changing the system's own choices.
+- **Keyboard shortcuts**: change any key. While a terminal has the keyboard, only combinations that terminal programs never see are used, so Vim and Emacs keep theirs.
+- **Quick filters**: your own kinds of files for the funnel menu, such as *Rust* for `rs toml`.
+
+<table>
+<tr>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/dev-terminal-profiles.png"><img src="docs/light/dev-terminal-profiles.png" alt="Terminal profiles: shell, startup script and colours"></picture></td>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/dev-links.png"><img src="docs/light/dev-links.png" alt="Links: a browser and profile for each website"></picture></td>
+</tr>
+<tr>
+<td align="center"><sub>Terminal profiles</sub></td>
+<td align="center"><sub>A browser and profile for each website</sub></td>
+</tr>
+<tr>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/dev-theme-editor.png"><img src="docs/light/dev-theme-editor.png" alt="The editor of a theme of your own"></picture></td>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/dev-default-apps.png"><img src="docs/light/dev-default-apps.png" alt="Default apps for each file type"></picture></td>
+</tr>
+<tr>
+<td align="center"><sub>Your own theme</sub></td>
+<td align="center"><sub>Default apps for each file type</sub></td>
+</tr>
+<tr>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/dev-shortcuts.png"><img src="docs/light/dev-shortcuts.png" alt="Keyboard shortcuts, each one changeable"></picture></td>
+<td><picture><source media="(prefers-color-scheme: dark)" srcset="docs/dark/dev-quick-filters.png"><img src="docs/light/dev-quick-filters.png" alt="Quick filters and their extensions"></picture></td>
+</tr>
+<tr>
+<td align="center"><sub>Keyboard shortcuts</sub></td>
+<td align="center"><sub>Quick filters</sub></td>
+</tr>
+</table>
 
 <a id="formats"></a>
 
@@ -177,7 +218,7 @@ Previews read files as data and run no code from them. Files extracted from a do
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The program includes open source libraries, fonts and icons under their own licenses (MIT, Apache-2.0, BSD, SIL Open Font License and others), listed with their texts in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md). RAR archives are read with UnRAR, whose freeware license forbids using it to make a RAR-compatible archiver. The AI tool logos come from [LobeHub Icons](https://github.com/lobehub/lobe-icons) (MIT) and are trademarks of their owners.
+MIT, see [LICENSE](LICENSE). The program includes open source libraries, fonts and icons under their own licenses (MIT, Apache-2.0, BSD, SIL Open Font License and others), listed with their texts in [THIRD-PARTY-LICENSES.md](THIRD-PARTY-LICENSES.md). RAR archives are read with UnRAR, whose freeware license forbids using it to make a RAR-compatible archiver. The AI tool logos come from [LobeHub Icons](https://github.com/lobehub/lobe-icons) (MIT) and are trademarks of their owners; the file icons from [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) and [Fluent UI System Icons](https://github.com/microsoft/fluentui-system-icons) (MIT).
 
 <div align="center">
 <br>

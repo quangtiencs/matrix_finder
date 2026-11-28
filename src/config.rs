@@ -180,6 +180,22 @@ impl QuickFilter {
     }
 }
 
+/// A quick filter's name as shown: translated (a built-in one), or "Unnamed filter".
+pub fn quick_filter_name(name: &str) -> String {
+    if name.trim().is_empty() {
+        crate::i18n::t("Unnamed filter")
+    } else {
+        crate::i18n::t(name)
+    }
+}
+
+impl QuickFilter {
+    /// The name as shown (see `quick_filter_name`).
+    pub fn display_name(&self) -> String {
+        quick_filter_name(&self.name)
+    }
+}
+
 /// The built-in categories, with the common formats of each.
 pub fn default_quick_filters() -> Vec<QuickFilter> {
     vec![
@@ -386,6 +402,80 @@ pub enum ReadingFont {
     Serif,
 }
 
+/// A website whose links open in a browser and profile of their own (Settings → Terminal
+/// → Links). `domain` covers its subdomains too; the most particular rule wins
+/// (`system::browsers::rule_for`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LinkRule {
+    pub domain: String,
+    /// A program as in `default_apps`; empty: the system's default browser.
+    pub browser: String,
+    /// A profile of `browser`; empty: the browser's own choice.
+    pub profile: String,
+}
+
+/// A colour theme the user made (Settings → Appearance). Colours are `#rrggbb`; one that
+/// does not parse keeps the colour of a built-in theme (see `theme::from_custom`).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomTheme {
+    pub name: String,
+    pub dark: bool,
+    pub bg: String,
+    pub panel: String,
+    pub surface: String,
+    pub text: String,
+    pub weak: String,
+    pub accent: String,
+    pub selection: String,
+    pub marked: String,
+    pub dir: String,
+    pub archive: String,
+    pub border: String,
+    pub danger: String,
+    /// Corner radius of buttons and fields (0–12).
+    pub radius: u8,
+    /// Icon style when the icon setting is "Match theme" (`IconPack::key`).
+    pub icons: String,
+    /// Colours of code previews (`theme::SYNTAX_THEMES`).
+    pub syntax: String,
+    /// Terminal colours for "Same as the app": black … white, then the bright ones.
+    /// Empty: a general light or dark set.
+    pub ansi: Vec<String>,
+}
+
+/// A terminal colour scheme the user made (Settings → Terminal).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomTermTheme {
+    pub name: String,
+    pub background: String,
+    pub foreground: String,
+    /// The cursor and the window's accent.
+    pub cursor: String,
+    /// Black, red, green, yellow, blue, magenta, cyan, white, then the bright ones.
+    pub ansi: Vec<String>,
+}
+
+/// Give each of `names` a name of its own: not empty, not a built-in theme's, not one an
+/// earlier name has (a later one becomes "Name 2"). Returns the new names, in order.
+pub fn unique_theme_names(names: &[String], fallback: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::with_capacity(names.len());
+    for n in names {
+        let base = if n.trim().is_empty() { fallback.to_string() } else { n.trim().to_string() };
+        let taken = |c: &str, out: &[String]| crate::style::theme::is_builtin(c) || out.iter().any(|o| o.eq_ignore_ascii_case(c));
+        let mut name = base.clone();
+        let mut k = 2;
+        while taken(&name, &out) {
+            name = format!("{base} {k}");
+            k += 1;
+        }
+        out.push(name);
+    }
+    out
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -450,8 +540,14 @@ pub struct Settings {
     pub show_key_hints: bool,
     pub max_parallel: usize,
     pub confirm_dnd: bool,
-    /// "theme", "system", "matrix", "adwaita", "breeze", "macos", "windows" or "icons:<theme>".
+    /// "theme", "system", "matrix", "material", "fluent", "adwaita", "breeze", "macos", "windows"
+    /// or "icons:<theme>".
     pub icon_pack: String,
+    /// Themes the user made (Settings → Appearance), chosen by name in `theme`.
+    pub custom_themes: Vec<CustomTheme>,
+    /// Terminal colour schemes the user made (Settings → Terminal), chosen by name in a
+    /// terminal profile's `theme`.
+    pub custom_terminal_themes: Vec<CustomTermTheme>,
     pub show_disk_usage: bool,
     /// When the sidebar lists the drives.
     pub sidebar_drives: SidebarDrives,
@@ -473,6 +569,11 @@ pub struct Settings {
     /// The web browser that opens web links (from terminals, the update check): a program
     /// as in `default_apps`. Empty: the operating system's default browser.
     pub browser: String,
+    /// The profile of `browser` links open in (`system::browsers::Profile::id`); empty: the
+    /// browser's own choice.
+    pub browser_profile: String,
+    /// Websites that open in another browser or profile than the default one.
+    pub link_rules: Vec<LinkRule>,
     pub terminal_profiles: Vec<TerminalProfile>,
     /// Index into `terminal_profiles` used by the terminal shortcut and button.
     pub default_terminal: usize,
@@ -613,6 +714,8 @@ impl Default for Settings {
             max_parallel: 2,
             confirm_dnd: true,
             icon_pack: "theme".into(),
+            custom_themes: Vec::new(),
+            custom_terminal_themes: Vec::new(),
             show_disk_usage: false,
             sidebar_drives: SidebarDrives::default(),
             check_updates: false,
@@ -622,6 +725,8 @@ impl Default for Settings {
             shortcuts: Default::default(),
             default_apps: Default::default(),
             browser: String::new(),
+            browser_profile: String::new(),
+            link_rules: Vec::new(),
             terminal_profiles: vec![TerminalProfile::default()],
             default_terminal: 0,
             term_font: String::new(),
@@ -1047,11 +1152,31 @@ impl Settings {
             self.terminal_profiles.push(TerminalProfile { name: "Built-in".into(), terminal: TerminalKind::BuiltIn, ..Default::default() });
         }
         self.default_terminal = self.default_terminal.min(self.terminal_profiles.len() - 1);
+        // Themes that were renamed or removed: the one that took their place, so its card
+        // shows chosen.
+        for p in &mut self.terminal_profiles {
+            if let Some(now) = crate::style::theme::renamed(&p.theme) {
+                p.theme = now.to_string();
+            }
+        }
         if !(6.0..=40.0).contains(&self.term_font_size) {
             self.term_font_size = crate::style::fonts::DEFAULT_TERM_SIZE;
         }
         if !AUTO_REFRESH_SECS.contains(&self.auto_refresh_secs) {
             self.auto_refresh_secs = 2;
+        }
+        for r in &mut self.link_rules {
+            r.domain = crate::system::browsers::normalize_domain(&r.domain);
+        }
+        self.link_rules.retain(|r| !r.domain.is_empty());
+        // The user's themes are found by name: each needs one of its own.
+        let names: Vec<String> = self.custom_themes.iter().map(|c| c.name.clone()).collect();
+        for (c, n) in self.custom_themes.iter_mut().zip(unique_theme_names(&names, "Custom theme")) {
+            c.name = n;
+        }
+        let names: Vec<String> = self.custom_terminal_themes.iter().map(|c| c.name.clone()).collect();
+        for (c, n) in self.custom_terminal_themes.iter_mut().zip(unique_theme_names(&names, "Custom colours")) {
+            c.name = n;
         }
         for (v, default) in [(&mut self.term_scroll_trackpad, 1.0), (&mut self.term_scroll_wheel, 3.0)] {
             if !SCROLL_SPEEDS.contains(v) {
@@ -1117,6 +1242,11 @@ impl Settings {
             backups: keep.backups,
             terminal_profiles: keep.terminal_profiles,
             default_terminal: keep.default_terminal,
+            custom_themes: keep.custom_themes,
+            custom_terminal_themes: keep.custom_terminal_themes,
+            browser: keep.browser,
+            browser_profile: keep.browser_profile,
+            link_rules: keep.link_rules,
             left_paths: keep.left_paths,
             right_paths: keep.right_paths,
             session: keep.session,
@@ -1382,6 +1512,11 @@ mod tests {
         s.connections.push(ConnectionProfile { name: "srv".into(), host: "example.com".into(), ..Default::default() });
         s.terminal_profiles.push(TerminalProfile { name: "Fish".into(), shell: "fish".into(), ..Default::default() });
         s.default_terminal = 1;
+        s.custom_themes.push(CustomTheme { name: "Mine".into(), ..Default::default() });
+        s.custom_terminal_themes.push(CustomTermTheme { name: "Night".into(), ..Default::default() });
+        s.browser = "firefox".into();
+        s.browser_profile = "work".into();
+        s.link_rules.push(LinkRule { domain: "github.com".into(), browser: "google-chrome".into(), profile: "Profile 1".into() });
         s.reset_preferences();
         let d = Settings::default();
         assert_eq!(s.theme, d.theme);
@@ -1393,6 +1528,8 @@ mod tests {
         assert_eq!(s.connections.len(), 1);
         assert_eq!(s.terminal_profiles.len(), 2);
         assert_eq!(s.default_terminal, 1);
+        assert_eq!((s.custom_themes[0].name.as_str(), s.custom_terminal_themes[0].name.as_str()), ("Mine", "Night"), "the user's themes");
+        assert_eq!((s.browser.as_str(), s.browser_profile.as_str(), s.link_rules.len()), ("firefox", "work", 1), "the browser and website rules");
     }
 
     #[test]
@@ -1453,6 +1590,22 @@ mod tests {
         s.quick_filters = vec![QuickFilter::new("Raw", "cr2 nef")];
         s.reset_preferences();
         assert_eq!(s.quick_filters.len(), 1);
+    }
+
+    #[test]
+    fn removed_terminal_themes_become_the_ones_that_replaced_them() {
+        let mut s = Settings::default();
+        s.terminal_profiles[0].theme = "Elegant Light".into();
+        s.terminal_profiles.push(TerminalProfile { theme: "Nord".into(), ..Default::default() });
+        s.normalize();
+        assert_eq!(s.terminal_profiles[0].theme, "Breeze Light");
+        assert_eq!(s.terminal_profiles[1].theme, "Nord", "kept");
+    }
+
+    #[test]
+    fn quick_filters_are_named_as_shown() {
+        assert_eq!(quick_filter_name("  "), crate::i18n::t("Unnamed filter"));
+        assert_eq!(QuickFilter::new("Images", "jpg").display_name(), crate::i18n::t("Images"));
     }
 
     #[test]

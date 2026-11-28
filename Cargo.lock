@@ -3318,7 +3318,7 @@ dependencies = [
 
 [[package]]
 name = "matrix_finder"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "alacritty_terminal",
  "apache-avro",
@@ -3344,6 +3344,7 @@ dependencies = [
  "globset",
  "hayro",
  "hdf5-pure",
+ "idna",
  "image",
  "libc",
  "lofty",

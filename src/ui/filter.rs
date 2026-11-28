@@ -49,15 +49,17 @@ pub enum FindMode {
     Content,
 }
 
-/// A search set up in the Find panel. With `loose`, upper and lower case are the same,
-/// and so are `-`, `_` and spaces: `my-file` finds `My_File` and `my file`.
+/// A search set up in the Find panel. With `ignore_case`, upper and lower case are the
+/// same; with `ignore_separators`, so are `-`, `_` and spaces: with both, `my-file` finds
+/// `My_File` and `my file`.
 #[derive(Debug, Clone)]
 pub struct Find {
     pub text: String,
     pub mode: FindMode,
     pub files: bool,
     pub folders: bool,
-    pub loose: bool,
+    pub ignore_case: bool,
+    pub ignore_separators: bool,
     /// Look in every folder below too (a search), not just this one (a filter).
     pub subfolders: bool,
     /// `text` in the form compared, made once: the first match fills it, so a Find is
@@ -67,27 +69,37 @@ pub struct Find {
 
 impl PartialEq for Find {
     fn eq(&self, o: &Self) -> bool {
-        (&self.text, self.mode, self.files, self.folders, self.loose, self.subfolders) == (&o.text, o.mode, o.files, o.folders, o.loose, o.subfolders)
+        (&self.text, self.mode, self.files, self.folders, self.ignore_case, self.ignore_separators, self.subfolders)
+            == (&o.text, o.mode, o.files, o.folders, o.ignore_case, o.ignore_separators, o.subfolders)
     }
 }
 
 impl Default for Find {
     fn default() -> Self {
-        Self { text: String::new(), mode: FindMode::Contains, files: true, folders: true, loose: true, subfolders: false, needle: std::sync::OnceLock::new() }
+        Self {
+            text: String::new(),
+            mode: FindMode::Contains,
+            files: true,
+            folders: true,
+            ignore_case: true,
+            ignore_separators: true,
+            subfolders: false,
+            needle: std::sync::OnceLock::new(),
+        }
     }
 }
 
 impl Find {
-    /// Text in the form compared: folded (case, `-` `_` and spaces) when `loose`.
+    /// Text in the form compared: lower case with `ignore_case`, `_` and spaces made `-`
+    /// with `ignore_separators`.
     fn norm(&self, s: &str) -> String {
-        let sep = |c: char| if c == '_' || c == ' ' { '-' } else { c };
-        if !self.loose {
-            nfc(s).into_owned()
-        } else if s.is_ascii() {
+        let sep = |c: char| if self.ignore_separators && (c == '_' || c == ' ') { '-' } else { c };
+        match (self.ignore_case, self.ignore_separators) {
+            (false, false) => nfc(s).into_owned(),
             // One pass for the usual name: this runs for every entry of a big folder.
-            s.chars().map(|c| sep(c.to_ascii_lowercase())).collect()
-        } else {
-            fold(s).chars().map(sep).collect()
+            (true, _) if s.is_ascii() => s.chars().map(|c| sep(c.to_ascii_lowercase())).collect(),
+            (true, _) => fold(s).chars().map(sep).collect(),
+            (false, true) => nfc(s).chars().map(sep).collect(),
         }
     }
 
@@ -1013,7 +1025,7 @@ mod tests {
     }
 
     fn find(text: &str, mode: FindMode, loose: bool) -> Find {
-        Find { text: text.into(), mode, loose, ..Default::default() }
+        Find { text: text.into(), mode, ignore_case: loose, ignore_separators: loose, ..Default::default() }
     }
 
     /// Loose: case, `-`, `_` and spaces do not matter; strict: they do.
@@ -1034,6 +1046,19 @@ mod tests {
         let deep = file("my-file/inside/notes.txt", 1);
         assert!(!find("my-file", FindMode::Contains, true).matches(&deep));
         assert!(find("notes", FindMode::Contains, true).matches(&deep));
+    }
+
+    /// Case and separators are two options: each on its own.
+    #[test]
+    fn case_and_separators_are_ignored_apart() {
+        let names = ["My_File.txt", "my-file.md", "MY FILE.pdf", "my_file.rs"];
+        let hits = |f: &Find| names.iter().filter(|n| f.matches_at(&file(n, 1), None, &AtomicBool::new(false))).copied().collect::<Vec<_>>();
+        let case_only = Find { text: "my_file".into(), ignore_separators: false, ..Default::default() };
+        assert_eq!(hits(&case_only), ["My_File.txt", "my_file.rs"], "any case, the same separator");
+        let sep_only = Find { text: "my file".into(), ignore_case: false, ..Default::default() };
+        assert_eq!(hits(&sep_only), ["my-file.md", "my_file.rs"], "any separator, the same case");
+        let accents = Find { text: "Ảnh-Đẹp".into(), ignore_case: false, ..Default::default() };
+        assert!(accents.matches(&file("Ảnh Đẹp.jpg", 1)) && !accents.matches(&file("ảnh đẹp.jpg", 1)));
     }
 
     #[test]

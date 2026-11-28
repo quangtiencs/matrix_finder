@@ -305,6 +305,15 @@ pub struct App {
     last_files_loc: Option<Location>,
     /// Settings → Bookmarks: a group was just added; put its name in view, ready to type.
     bm_focus_last: bool,
+    /// Settings: a new name being typed for one of the user's themes, until it is one of
+    /// its own (list, index, text).
+    theme_name_draft: Option<(themes::ThemeList, usize, String)>,
+    /// Settings: one of the user's themes whose Delete asks to be confirmed.
+    theme_delete: Option<(themes::ThemeList, usize)>,
+    /// What Settings → Quick filters has open.
+    qf: quickfilters::QfUi,
+    /// Settings → Terminal → Links: a link typed to see where it would open.
+    link_try: String,
     /// The app's windows that are open, back to front (see `track_windows`), and whether
     /// the keyboard is theirs rather than the files' and terminals'.
     windows: Vec<&'static str>,
@@ -423,6 +432,7 @@ impl App {
         i18n::set_language(&cfg.language);
         // Previews' temporary folders left by a Matrix Finder that crashed.
         crate::util::clean_stale_temp_dirs(&[crate::util::TEMP_PREFIX]);
+        theme::set_custom(&cfg.custom_themes, &cfg.custom_terminal_themes);
         let theme = theme::by_name(&cfg.theme);
         if cfg.theme != theme::SYSTEM {
             cfg.theme = theme.name.to_string();
@@ -501,6 +511,10 @@ impl App {
             window_radius: 0.0,
             last_files_loc: None,
             bm_focus_last: false,
+            theme_name_draft: None,
+            theme_delete: None,
+            qf: Default::default(),
+            link_try: String::new(),
             activation: crate::system::activation::startup_token().into_iter().collect(),
             windows: Vec::new(),
             keys_to_window: false,
@@ -1082,6 +1096,8 @@ impl App {
             "breeze" => IconSet { pack: P::Breeze, system: breeze() },
             "macos" => IconSet { pack: P::MacOS, system: None },
             "windows" => IconSet { pack: P::Windows, system: None },
+            "material" => IconSet { pack: P::Material, system: None },
+            "fluent" => IconSet { pack: P::Fluent, system: None },
             "system" => {
                 if cfg!(target_os = "macos") {
                     IconSet { pack: P::MacOS, system: None }
@@ -1125,6 +1141,7 @@ impl App {
 
     fn apply_cfg(&mut self, ctx: &egui::Context) {
         i18n::set_language(&self.cfg.language);
+        theme::set_custom(&self.cfg.custom_themes, &self.cfg.custom_terminal_themes);
         self.theme = theme::by_name(&self.cfg.theme);
         theme::apply(ctx, self.theme);
         ctx.set_zoom_factor(self.cfg.ui_scale.clamp(0.6, 2.5));
@@ -1360,7 +1377,7 @@ impl eframe::App for App {
             theme::apply(ctx, wanted);
             self.quick = None;
         }
-        let icon_key = format!("{}|{}", self.cfg.icon_pack, self.theme.name);
+        let icon_key = format!("{}|{}|{}", self.cfg.icon_pack, self.theme.name, self.theme.icons.key());
         if icon_key != self.icon_key {
             icons::set_icons(self.make_icon_set(&self.cfg.icon_pack.clone()));
             self.icon_key = icon_key;
@@ -1815,8 +1832,10 @@ mod dialogs;
 mod jobs;
 mod keys;
 mod opening;
+mod quickfilters;
 mod settings_ui;
 mod terminals;
+mod themes;
 mod windows;
 use settings_ui::{card_frame, settings_section, toggle_row};
 

@@ -788,7 +788,9 @@ impl App {
                         ui.add(egui::Label::new(RichText::new(url.as_str()).monospace().size(12.0).color(th.weak)).wrap());
                     });
                     ui.add_space(4.0);
-                    ui.label(RichText::new(format!("{} {}", t("Opens in"), self.browser_label(ui.ctx()))).size(12.0).color(th.weak));
+                    let (browser, profile) = self.link_browser(url);
+                    let opens = super::opening::browser_name(ui.ctx(), &browser, &profile);
+                    ui.label(RichText::new(format!("{} {}", t("Opens in"), opens)).size(12.0).color(th.weak));
                     ui.add_space(6.0);
                     ui.checkbox(stop_asking, t("Don't ask again in this terminal"));
                 }
@@ -1127,7 +1129,8 @@ impl App {
                 }
                 ui.label(t("All settings go back to their defaults: Breeze Light theme, English, UI scale, panels, terminal and safety options."));
                 ui.label(
-                    RichText::new(t("Kept: bookmarks, saved connections, backup profiles, terminal profiles, default apps and open tabs.")).color(th.weak),
+                    RichText::new(t("Kept: bookmarks, saved connections, backup profiles, terminal profiles, your themes, default apps, the browser and its website rules, and open tabs."))
+                        .color(th.weak),
                 );
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
