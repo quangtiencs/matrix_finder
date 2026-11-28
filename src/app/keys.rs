@@ -464,7 +464,7 @@ impl App {
         let matches = tab.view.iter().filter(|&&i| !tab.entries[i].is_parent).count();
         let text = ts.text.clone();
         // As wide as the query needs (an SQL-like one can be long), within the window.
-        let text_w = ctx.fonts(|f| f.layout_no_wrap(format!("{text}▏"), egui::FontId::proportional(13.5), th.text).size().x);
+        let text_w = ctx.fonts_mut(|f| f.layout_no_wrap(format!("{text}▏"), egui::FontId::proportional(13.5), th.text).size().x);
         let width = (text_w + 130.0).clamp(260.0, (rect.width() - 28.0).max(260.0)).min(rect.width() - 24.0).max(120.0);
         let pos = egui::pos2(rect.right() - width - 14.0, rect.bottom() - 28.0 - 44.0);
         egui::Area::new(egui::Id::new("type-search")).order(egui::Order::Foreground).fixed_pos(pos).interactable(false).show(ctx, |ui| {
@@ -477,7 +477,7 @@ impl App {
                 .show(ui, |ui| {
                     ui.set_width(width - 20.0);
                     let count = if matches == 1 { t("1 match") } else { format!("{} {}", crate::util::fmt_count(matches as u64), t("matches")) };
-                    let count_w = ctx.fonts(|f| f.layout_no_wrap(count.clone(), egui::FontId::proportional(11.5), th.weak).size().x);
+                    let count_w = ctx.fonts_mut(|f| f.layout_no_wrap(count.clone(), egui::FontId::proportional(11.5), th.weak).size().x);
                     // The count only when the query fits beside it; the query is what matters.
                     let with_count = text_w + count_w + 40.0 <= width - 20.0;
                     ui.horizontal(|ui| {

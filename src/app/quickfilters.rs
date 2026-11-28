@@ -37,7 +37,7 @@ const NAME_W: f32 = 150.0;
 
 /// The extensions as ".jpg .png …" in at most `w` points, with how many did not fit.
 fn ext_summary(ui: &egui::Ui, exts: &[String], w: f32, font: &FontId) -> String {
-    let width = |s: &str| ui.fonts(|f| f.layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE).size().x);
+    let width = |s: &str| ui.fonts_mut(|f| f.layout_no_wrap(s.to_string(), font.clone(), egui::Color32::WHITE).size().x);
     let mut shown = String::new();
     for (i, e) in exts.iter().enumerate() {
         let next = if shown.is_empty() { format!(".{e}") } else { format!("{shown}  .{e}") };
@@ -270,7 +270,7 @@ impl App {
         let name_font = bold(13.5);
         let mut job = egui::text::LayoutJob::simple_singleline(label.clone(), name_font, if q.name.trim().is_empty() { th.weak } else { th.strong() });
         job.wrap = egui::text::TextWrapping::truncate_at_width(NAME_W - 8.0);
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.painter().galley(pos2(row.left() + NAME_X, row.center().y - g.size().y / 2.0), g, th.strong());
         // The extensions, as many as fit; or why the filter shows nothing.
         let ex = row.left() + NAME_X + NAME_W;
@@ -284,7 +284,7 @@ impl App {
             let msg = t("Remove “{name}”?").replace("{name}", &label);
             let mut job = egui::text::LayoutJob::simple_singleline(msg, FontId::proportional(12.5), th.danger);
             job.wrap = egui::text::TextWrapping::truncate_at_width((text_end - 8.0 - ex).max(20.0));
-            let g = ui.fonts(|f| f.layout_job(job));
+            let g = ui.fonts_mut(|f| f.layout_job(job));
             ui.painter().galley(pos2(ex, row.center().y - g.size().y / 2.0), g, th.danger);
         } else {
             // Open or closed: a chevron by the trash can.
@@ -438,7 +438,7 @@ fn rename_in_windows(app: &mut App, old: &str, new: &str) {
 /// An extension as a chip: ".jpg ×". True when its × is clicked.
 fn ext_chip(ui: &mut egui::Ui, th: &Theme, ext: &str, id: egui::Id) -> bool {
     let font = FontId::monospace(11.5);
-    let g = ui.fonts(|f| f.layout_no_wrap(format!(".{ext}"), font, th.text));
+    let g = ui.fonts_mut(|f| f.layout_no_wrap(format!(".{ext}"), font, th.text));
     let size = vec2(g.size().x + 32.0, 22.0);
     let (r, _) = ui.allocate_exact_size(size, Sense::hover());
     let xr = Rect::from_center_size(pos2(r.right() - 11.0, r.center().y), vec2(16.0, 16.0));

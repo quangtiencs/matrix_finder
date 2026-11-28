@@ -641,7 +641,7 @@ impl TermSession {
         self.bold_font = FontId::new(size, egui::FontFamily::Name("term-bold".into()));
         // Measure the advance the way runs are laid out (glyph positions are
         // pixel-rounded), so long runs stay aligned with the cell grid.
-        let (cw, ch) = ui.fonts(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), Color32::WHITE).size().x / 100.0, f.row_height(&font)));
+        let (cw, ch) = ui.fonts_mut(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), Color32::WHITE).size().x / 100.0, f.row_height(&font)));
         self.cell = vec2(cw.max(1.0), ch.ceil().max(1.0));
         let origin = rect.min + vec2(PAD, PAD / 2.0);
         let cols = (((rect.width() - 2.0 * PAD) / self.cell.x).floor() as usize).max(2);
@@ -777,7 +777,7 @@ impl TermSession {
         if !others.is_empty() {
             let bold = self.bold_font.clone();
             let missing: Vec<char> =
-                ui.fonts(|f| others.into_iter().filter(|&c| !c.is_whitespace() && (!f.has_glyph(&font, c) || !f.has_glyph(&bold, c))).collect());
+                ui.fonts_mut(|f| others.into_iter().filter(|&c| !c.is_whitespace() && (!f.has_glyph(&font, c) || !f.has_glyph(&bold, c))).collect());
             if !missing.is_empty() {
                 crate::style::fontfallback::request(ui.ctx(), missing);
             }
@@ -839,7 +839,7 @@ impl TermSession {
             };
             let mut ime_rect = Rect::from_min_size(at, vec2(cw, chh));
             if !self.preedit.is_empty() {
-                let width = ui.fonts(|f| f.layout_no_wrap(self.preedit.clone(), font.clone(), pal.fg).size().x).max(cw);
+                let width = ui.fonts_mut(|f| f.layout_no_wrap(self.preedit.clone(), font.clone(), pal.fg).size().x).max(cw);
                 ime_rect = Rect::from_min_size(at, vec2(width, chh));
                 painter.rect_filled(ime_rect, 0.0, pal.bg);
                 self.paint_text(&painter, at, &self.preedit, &font, pal.fg, Flags::UNDERLINE, width);
@@ -1961,7 +1961,7 @@ pub fn preview(ui: &mut egui::Ui, th: &Theme, font_size: f32, width: f32) -> egu
         ],
         &[("~/projects ", ansi(BLUE), true), ("$ ", ansi(GREEN), true)],
     ];
-    let (cell_w, row_h) = ui.fonts(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), pal.fg).size().x / 100.0, f.row_height(&font).ceil()));
+    let (cell_w, row_h) = ui.fonts_mut(|f| (f.layout_no_wrap("M".repeat(100), font.clone(), pal.fg).size().x / 100.0, f.row_height(&font).ceil()));
     let swatch = (font_size * 0.9).max(10.0);
     let height = row_h * lines.len() as f32 + swatch * 2.0 + 30.0;
     let (rect, resp) = ui.allocate_exact_size(vec2(width, height), egui::Sense::hover());

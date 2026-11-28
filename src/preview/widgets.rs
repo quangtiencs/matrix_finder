@@ -76,7 +76,7 @@ pub fn header_row(ui: &mut egui::Ui, theme: &Theme, name: &str, facts: &[(String
                 let gap = ui.spacing().item_spacing.x;
                 let room = ui.available_width();
                 let text: Vec<&str> = facts.iter().map(|(s, _)| s.as_str()).collect();
-                let facts_w = if facts.is_empty() { 0.0 } else { ui.fonts(|f| f.layout_no_wrap(text.join(" "), font.clone(), theme.weak).size().x) + gap };
+                let facts_w = if facts.is_empty() { 0.0 } else { ui.fonts_mut(|f| f.layout_no_wrap(text.join(" "), font.clone(), theme.weak).size().x) + gap };
                 if !own_line {
                     // The name gets what the facts leave, and at least half the row.
                     let name_room = (room - facts_w).max(room * 0.5).max(24.0);

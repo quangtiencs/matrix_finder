@@ -444,7 +444,12 @@ impl App {
         cc.egui_ctx.set_zoom_factor(cfg.ui_scale.clamp(0.6, 2.5));
         // Zooming by keys is the app's own (saved, and rebindable): egui's would not be
         // saved, and its Ctrl+− would reach the terminals too.
-        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        cc.egui_ctx.options_mut(|o| {
+            o.zoom_with_keyboard = false;
+            // A field gives up the keyboard when the mouse is pressed elsewhere (egui 0.32's
+            // way): a click on a suggestion is taken on the press, and the field keeps it.
+            o.input_options.surrender_focus_on = egui::SurrenderFocusOn::Presses;
+        });
         let to_locs = |v: &Vec<String>| -> Vec<Location> { v.iter().map(PathBuf::from).filter(|p| p.is_dir()).map(Location::Local).collect() };
         // Start with a single pane; splits are created on demand. By default it
         // shows the user's home folder, and no terminal is opened at start.
@@ -1434,7 +1439,7 @@ impl eframe::App for App {
         // see-through, so its corners show the desktop (see `clear_color`).
         self.window_radius = self.chrome.window_radius(ctx);
         let panel = if self.window_radius > 0.0 {
-            ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.screen_rect(), self.window_radius, self.theme.panel);
+            ctx.layer_painter(egui::LayerId::background()).rect_filled(ctx.viewport_rect(), self.window_radius, self.theme.panel);
             egui::Color32::TRANSPARENT
         } else {
             self.theme.panel
@@ -1452,7 +1457,7 @@ impl eframe::App for App {
                 // In a narrow window the sidebar gives up space (never more than ~26 %).
                 // Never narrower than its content, which would spill past the panel's
                 // edge and leave an unpainted band beside it.
-                .exact_width(self.cfg.sidebar_width.min((ctx.screen_rect().width() * 0.26).max(160.0)).max(self.sidebar_min).round())
+                .exact_width(self.cfg.sidebar_width.min((ctx.content_rect().width() * 0.26).max(160.0)).max(self.sidebar_min).round())
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(panel).inner_margin(egui::Margin { left: 8, right: 8, top: self.chrome.top_margin(), bottom: 6 }))
                 .show(ctx, |ui| {
@@ -1466,7 +1471,7 @@ impl eframe::App for App {
                     }
                     if g.dragged() {
                         if let Some(p) = g.interact_pointer_pos() {
-                            self.cfg.sidebar_width = (p.x - ctx.screen_rect().left()).clamp(160.0, 360.0);
+                            self.cfg.sidebar_width = (p.x - ctx.content_rect().left()).clamp(160.0, 360.0);
                         }
                     }
                     if g.drag_stopped() {
@@ -1505,7 +1510,7 @@ impl eframe::App for App {
         if show_quick {
             // Width is a share of the window (1/3 by default) and only changes
             // when the user drags the gap on its left edge.
-            let screen = ctx.screen_rect();
+            let screen = ctx.content_rect();
             let w = (screen.width() * self.cfg.quick_view_frac).clamp(240.0, (screen.width() * 0.7).max(240.0)).round();
             egui::SidePanel::right("quickview")
                 .resizable(false)

@@ -452,7 +452,7 @@ impl FolderTree {
                 let font = if is_current { FontId::new(13.0, egui::FontFamily::Name("bold".into())) } else { FontId::proportional(13.0) };
                 let mut job = egui::text::LayoutJob::simple_singleline(row.name.clone(), font, if is_sel || is_current { th.strong() } else { th.text });
                 job.wrap = egui::text::TextWrapping::truncate_at_width((rect.right() - text_x - 6.0).max(10.0));
-                let g = ui.fonts(|f| f.layout_job(job));
+                let g = ui.fonts_mut(|f| f.layout_job(job));
                 p.galley(pos2(text_x, rect.center().y - g.size().y / 2.0), g, th.text);
                 let resp = resp.on_hover_text(row.path.display().to_string());
                 self.rows.push((row.path.clone(), rect));
@@ -495,7 +495,7 @@ pub fn popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, tree: &mut FolderTre
         // Inside a dialog: keep the popup above it.
         ctx.set_sublayer(parent.layer_id(), layer);
     }
-    let screen = ctx.screen_rect();
+    let screen = ctx.content_rect();
     let x = anchor.left().min(screen.right() - WIDTH - 8.0).max(screen.left() + 4.0);
     // Under the button, or above it when the tallest it can be does not fit below (a tall
     // dialog in a small window). Above, its top stays put while folders open and close.

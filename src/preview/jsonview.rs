@@ -554,7 +554,7 @@ impl JsonView {
                 }
                 let (text, color) = summary(node, &colors, open);
                 job.append(&text, 0.0, fmt(color));
-                let galley = ui.fonts(|f| f.layout_job(job));
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
                 p.galley(egui::pos2(indent + 16.0, rect.center().y - galley.size().y / 2.0), galley, th.text);
                 let at = row.at.clone();
                 let on_chevron = resp.interact_pointer_pos().is_some_and(|q| q.x < chevron.right() + 2.0);

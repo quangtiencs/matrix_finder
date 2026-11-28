@@ -106,7 +106,7 @@ impl App {
         if self.window_radius <= 0.0 {
             return dim;
         }
-        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("rounded-backdrop"))).rect_filled(ctx.screen_rect(), self.window_radius, dim);
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("rounded-backdrop"))).rect_filled(ctx.viewport_rect(), self.window_radius, dim);
         egui::Color32::TRANSPARENT
     }
 
@@ -410,7 +410,7 @@ impl App {
                     ui.label(RichText::new(t("To:")).strong());
                     if !choices.is_empty() {
                         // Scrolls in a window too low for every choice, so the buttons stay in it.
-                        let max_h = (ctx.screen_rect().height() - 230.0).max(140.0);
+                        let max_h = (ctx.content_rect().height() - 230.0).max(140.0);
                         egui::ScrollArea::vertical().id_salt("transfer-choices").max_height(max_h).auto_shrink([false, true]).show(ui, |ui| {
                             // A split tab: one list where exactly one place is chosen, a window
                             // or "Another folder"; the address shows only for the latter.
@@ -447,7 +447,7 @@ impl App {
                                                 let o = crate::ui::pathfield::Opts { base: base.as_deref(), show_hidden: self.cfg.show_hidden, drives: &self.drives, width: ui.available_width(), hint: Some(t("Type a path, or pick one from the folder tree")) };
                                                 let r = self.dialog_path.show(ui, dst, dst_id, o, th);
                                                 // The tree in the choice, under its address: what a small window has room for.
-                                                let max_h = (ui.ctx().screen_rect().height() - 470.0).clamp(96.0, 220.0);
+                                                let max_h = (ui.ctx().content_rect().height() - 470.0).clamp(96.0, 220.0);
                                                 self.transfer_tree(ui, th, dst, base.as_deref(), home.as_deref(), r.changed(), dst_id, max_h);
                                                 r
                                             })
@@ -473,7 +473,7 @@ impl App {
                         let r = self.dialog_path.show(ui, dst, dst_id, o, th);
                         focus_edit(&r);
                         // One window: the folder tree right under the address, following it.
-                        let max_h = (ctx.screen_rect().height() - 300.0).clamp(120.0, 264.0);
+                        let max_h = (ctx.content_rect().height() - 300.0).clamp(120.0, 264.0);
                         self.transfer_tree(ui, th, dst, base.as_deref(), home.as_deref(), r.changed(), dst_id, max_h);
                     }
                     ui.horizontal(|ui| {
@@ -550,7 +550,7 @@ impl App {
                     ui.horizontal(|ui| {
                         row_label(ui, t("Name"));
                         let ext = format!(".{}", format.extension());
-                        let ext_w = ui.fonts(|f| f.layout_no_wrap(ext.clone(), egui::FontId::proportional(14.0), th.weak).size().x);
+                        let ext_w = ui.fonts_mut(|f| f.layout_no_wrap(ext.clone(), egui::FontId::proportional(14.0), th.weak).size().x);
                         let w = ui.available_width() - ext_w - ui.spacing().item_spacing.x - 8.0;
                         let r = ui.add(egui::TextEdit::singleline(name).id(egui::Id::new("pack-name")).margin(egui::Margin::symmetric(4, 2)).desired_width(w));
                         focus_edit(&r);
@@ -1252,8 +1252,9 @@ impl App {
             ui.vertical_centered(|ui| {
                 ui.horizontal(|ui| {
                     // Centre the credit line.
-                    let w =
-                        ui.fonts(|f| f.layout_no_wrap(format!("{} quangtiencs.com", t("Made by")), egui::FontId::proportional(14.0), self.theme.text).size().x);
+                    let w = ui.fonts_mut(|f| {
+                        f.layout_no_wrap(format!("{} quangtiencs.com", t("Made by")), egui::FontId::proportional(14.0), self.theme.text).size().x
+                    });
                     ui.add_space(((ui.available_width() - w) / 2.0 - 4.0).max(0.0));
                     ui.label(RichText::new(t("Made by")).color(self.theme.weak));
                     ui.hyperlink_to(RichText::new("quangtiencs.com").color(self.theme.accent), "https://quangtiencs.com");
@@ -1373,7 +1374,7 @@ fn dst_choice_row(ui: &mut egui::Ui, th: &Theme, c: &DstChoice, chosen: bool, th
         let font = if strong { egui::FontId::new(size, egui::FontFamily::Name("bold".into())) } else { egui::FontId::proportional(size) };
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
         job.wrap = egui::text::TextWrapping::truncate_at_width(w.max(10.0));
-        ui.fonts(|f| f.layout_job(job))
+        ui.fonts_mut(|f| f.layout_job(job))
     };
     let g1 = line(&title, 13.5, th.strong(), true);
     let g2 = line(&c.text, 11.5, th.weak, false);
@@ -1403,7 +1404,7 @@ fn pack_dest(dir: &str, name: &str, fmt: ArchiveFormat, home: Option<&Path>, bas
 /// A format to choose in the Compress dialog.
 fn format_chip(ui: &mut egui::Ui, th: &Theme, f: ArchiveFormat, on: bool, enabled: bool) -> egui::Response {
     let text = format!(".{}", f.extension());
-    let g = ui.fonts(|fo| fo.layout_no_wrap(text.clone(), egui::FontId::proportional(13.0), th.text));
+    let g = ui.fonts_mut(|fo| fo.layout_no_wrap(text.clone(), egui::FontId::proportional(13.0), th.text));
     let size = egui::vec2(g.size().x + 20.0, 26.0);
     let sense = if enabled { egui::Sense::click() } else { egui::Sense::hover() };
     let (r, resp) = ui.allocate_exact_size(size, sense);

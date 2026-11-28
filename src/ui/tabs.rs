@@ -517,7 +517,7 @@ pub fn layout_cells(layout: &Layout, focused: usize) -> Vec<(Rect, bool)> {
 fn truncate(ui: &egui::Ui, text: &str, font: FontId, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(4.0));
-    ui.fonts(|f| f.layout_job(job))
+    ui.fonts_mut(|f| f.layout_job(job))
 }
 
 /// The tab bar. `info[i]` describes `strip.tabs[i]`.
@@ -740,7 +740,7 @@ fn chip_width(ui: &egui::Ui, g: &TabGroup, count: usize) -> f32 {
     if label.is_empty() {
         return 16.0;
     }
-    ui.fonts(|f| f.layout_no_wrap(label, FontId::proportional(12.0), Color32::WHITE).size().x) + 18.0
+    ui.fonts_mut(|f| f.layout_no_wrap(label, FontId::proportional(12.0), Color32::WHITE).size().x) + 18.0
 }
 
 fn chip_label(g: &TabGroup, count: usize) -> String {

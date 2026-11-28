@@ -439,7 +439,7 @@ impl App {
             changed |= ui.add(h).on_hover_text(t("Height")).changed();
             ui.add_space(8.0);
             // The window as it is now, in the same pixels as the start size (before the UI scale).
-            let now = ui.ctx().screen_rect().size() * ui.ctx().zoom_factor();
+            let now = ui.ctx().content_rect().size() * ui.ctx().zoom_factor();
             // Maximized, the window is the screen's size: no size to start a window with.
             let filled = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false) || i.viewport().fullscreen.unwrap_or(false));
             let b =

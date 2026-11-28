@@ -868,7 +868,7 @@ mod tests {
                 texts.push(Chord { cmd: true, ..all }.display(os));
             }
         }
-        ctx.fonts(|f| {
+        ctx.fonts_mut(|f| {
             for text in &texts {
                 for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace, bold.clone()] {
                     assert!(f.has_glyphs(&egui::FontId::new(14.0, family.clone()), text), "{text} in {family:?}");

@@ -170,7 +170,7 @@ impl Palette {
         self.selected = self.selected.min(results.len().saturating_sub(1));
 
         let mut chosen: Option<PalItem> = None;
-        let screen = ctx.screen_rect();
+        let screen = ctx.content_rect();
         let width = (screen.width() - 48.0).min(600.0);
         let area = egui::Area::new(egui::Id::new("palette")).order(egui::Order::Foreground).anchor(Align2::CENTER_TOP, vec2(0.0, 64.0)).show(ctx, |ui| {
             egui::Frame::popup(ui.style())

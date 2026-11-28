@@ -137,7 +137,7 @@ impl App {
 
     /// Width of a chip in the bookmarks bar.
     fn chip_width(&self, ui: &egui::Ui, b: &Bookmark) -> f32 {
-        let text = ui.fonts(|f| f.layout_no_wrap(b.name.clone(), egui::FontId::proportional(13.0), egui::Color32::WHITE).size().x).min(160.0);
+        let text = ui.fonts_mut(|f| f.layout_no_wrap(b.name.clone(), egui::FontId::proportional(13.0), egui::Color32::WHITE).size().x).min(160.0);
         text + if b.folder { 46.0 } else { 34.0 }
     }
 
@@ -158,7 +158,7 @@ impl App {
         let text_w = w - if b.folder { 46.0 } else { 34.0 };
         let mut job = egui::text::LayoutJob::simple_singleline(b.name.clone(), egui::FontId::proportional(13.0), th.text);
         job.wrap = egui::text::TextWrapping::truncate_at_width(text_w + 1.0);
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         p.galley(egui::pos2(rect.left() + 28.0, rect.center().y - g.size().y / 2.0), g, th.text);
         if b.folder {
             let c = egui::Rect::from_center_size(egui::pos2(rect.right() - 12.0, rect.center().y), egui::vec2(12.0, 12.0));

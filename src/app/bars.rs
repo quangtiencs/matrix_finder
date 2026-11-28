@@ -321,7 +321,7 @@ impl App {
             // sidebar); in a narrow window it slides and shrinks to stay clear of the
             // buttons on both sides.
             let full = ui.max_rect();
-            let window = ui.ctx().screen_rect();
+            let window = ui.ctx().content_rect();
             let start = ui.cursor().min.x + 8.0;
             let limit = full.right() - self.toolbar_right_w - 12.0;
             let want = (window.width() * 0.36).clamp(240.0, 520.0);
@@ -355,7 +355,7 @@ impl App {
                 };
                 let mut job = egui::text::LayoutJob::simple_singleline(t("Search files, commands, settings…"), egui::FontId::proportional(13.5), th.weak);
                 job.wrap = egui::text::TextWrapping::truncate_at_width((text_right - rect.left() - 30.0).max(10.0));
-                let g = ui.fonts(|f| f.layout_job(job));
+                let g = ui.fonts_mut(|f| f.layout_job(job));
                 ui.painter().galley(egui::pos2(rect.left() + 30.0, rect.center().y - g.size().y / 2.0), g, th.weak);
             }
             let resp = resp.on_hover_text(format!("{} ({})", t("Search"), hint(Action::Palette)));
@@ -828,13 +828,13 @@ fn sidebar_icon(p: &egui::Painter, r: egui::Rect, c: egui::Color32) {
 
 /// Status-bar key hint: a keycap followed by a label, clickable.
 fn key_hint_width(ui: &egui::Ui, key: &str, label: &str) -> f32 {
-    let width = |text: &str| ui.fonts(|f| f.layout_no_wrap(text.to_string(), egui::FontId::proportional(11.5), egui::Color32::WHITE).size().x);
+    let width = |text: &str| ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), egui::FontId::proportional(11.5), egui::Color32::WHITE).size().x);
     width(key) + 12.0 + 6.0 + width(label) + 8.0
 }
 
 fn key_hint(ui: &mut egui::Ui, th: &Theme, key: &str, label: &str) -> egui::Response {
     let font = egui::FontId::proportional(11.5);
-    let kw = ui.fonts(|f| f.layout_no_wrap(key.to_string(), font.clone(), th.weak).size().x);
+    let kw = ui.fonts_mut(|f| f.layout_no_wrap(key.to_string(), font.clone(), th.weak).size().x);
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(key_hint_width(ui, key, label), 22.0), egui::Sense::click());
     let p = ui.painter();
     if resp.hovered() {

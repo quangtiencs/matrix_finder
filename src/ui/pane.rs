@@ -1703,7 +1703,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         };
         let room = ui.available_width() - 54.0 - extra - SIDE_PAD - 8.0;
         let cap = 300.0_f32.min((room - 80.0).max(60.0));
-        let chip_width = |text: &str| ui.fonts(|f| f.layout_no_wrap(text.to_string(), FontId::proportional(12.5), th.text).size().x) + 46.0;
+        let chip_width = |text: &str| ui.fonts_mut(|f| f.layout_no_wrap(text.to_string(), FontId::proportional(12.5), th.text).size().x) + 46.0;
         // Categories that do not fit: the first one and how many more, or only how many
         // (the tooltip names them), rather than "Spr…".
         if let (Some((text, false)), Some(q)) = (chip.as_mut(), tab.quick.as_ref()) {
@@ -1734,7 +1734,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
             let tw = rect.width() - 42.0;
             let mut job = egui::text::LayoutJob::simple_singleline(text, FontId::proportional(12.5), th.strong());
             job.wrap = egui::text::TextWrapping::truncate_at_width(tw.max(8.0));
-            let g = ui.fonts(|f| f.layout_job(job));
+            let g = ui.fonts_mut(|f| f.layout_job(job));
             ui.painter().galley(pos2(rect.left() + 26.0, rect.center().y - g.size().y / 2.0), g, th.strong());
             let x = Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), vec2(14.0, 14.0)).shrink(3.5);
             let s = egui::Stroke::new(1.4_f32, if resp.hovered() { th.strong() } else { th.weak });
@@ -1831,7 +1831,7 @@ fn quick_filter_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut
         menu_style(ui);
         ui.set_width(FIND_W);
         // One column: Find, then the kinds of files; it scrolls in a short window.
-        let room = (ui.ctx().screen_rect().bottom() - r.rect.bottom() - 40.0).max(160.0);
+        let room = (ui.ctx().content_rect().bottom() - r.rect.bottom() - 40.0).max(160.0);
         egui::ScrollArea::vertical().max_height(room).min_scrolled_height(room).auto_shrink([false, true]).show(ui, |ui| {
             find_column(ui, tab, c, ev, focus, finding, FIND_W);
             ui.separator();
@@ -1956,7 +1956,7 @@ fn find_options(ui: &mut egui::Ui, d: &mut Find, th: &Theme, w: f32) {
     if !changed.is_empty() {
         let mut job = egui::text::LayoutJob::simple_singleline(changed.join(" · "), FontId::proportional(11.5), th.accent);
         job.wrap = egui::text::TextWrapping::truncate_at_width((row.right() - label.right() - 16.0).max(10.0));
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.painter().galley(pos2(label.right() + 10.0, row.center().y - g.size().y / 2.0), g, th.accent);
     }
     if resp.on_hover_text(t("Files and folders shown, and how names compare")).clicked() {
@@ -2034,7 +2034,7 @@ fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pa
         };
         let mut job = egui::text::LayoutJob::simple_singleline(q.display_name(), FontId::proportional(13.5), th.text);
         job.wrap = egui::text::TextWrapping::truncate_at_width((row.width() - 52.0 - 8.0 - count_w).max(10.0));
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.painter().galley(pos2(row.left() + 52.0, row.center().y - g.size().y / 2.0), g, th.text);
         let shown: Vec<String> = exts.iter().take(14).map(|e| format!(".{e}")).collect();
         let more = if exts.len() > 14 { " …" } else { "" };
@@ -2197,16 +2197,16 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
         let (lr, lresp) = ui.allocate_exact_size(vec2(room, 26.0), Sense::click());
         let name = term.activity_label();
         let bold = FontId::new(13.0, egui::FontFamily::Name("bold".into()));
-        let name_g = ui.fonts(|f| f.layout_no_wrap(name, bold.clone(), th.strong()));
+        let name_g = ui.fonts_mut(|f| f.layout_no_wrap(name, bold.clone(), th.strong()));
         let name_w = name_g.size().x.min(room * 0.45);
         let mut job = egui::text::LayoutJob::simple_singleline(term.activity_label(), bold, if c.active { th.strong() } else { th.text });
         job.wrap = egui::text::TextWrapping::truncate_at_width(name_w + 1.0);
-        let name_g = ui.fonts(|f| f.layout_job(job));
+        let name_g = ui.fonts_mut(|f| f.layout_job(job));
         let p = ui.painter();
         p.galley(pos2(lr.left(), lr.center().y - name_g.size().y / 2.0), name_g, th.text);
         let mut x = lr.left() + name_w + 10.0;
         if let Some(code) = exited {
-            let g = ui.fonts(|f| f.layout_no_wrap(format!("{} ({code})", t("exited")), FontId::proportional(12.5), th.danger));
+            let g = ui.fonts_mut(|f| f.layout_no_wrap(format!("{} ({code})", t("exited")), FontId::proportional(12.5), th.danger));
             p.galley(pos2(x, lr.center().y - g.size().y / 2.0), g.clone(), th.danger);
             x += g.size().x + 10.0;
         }
@@ -2217,12 +2217,12 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
         let cands = crate::util::short_path_candidates(&full);
         let pick = cands
             .iter()
-            .find(|cand| ui.fonts(|f| f.layout_no_wrap((*cand).clone(), font.clone(), th.weak).size().x) <= path_room)
+            .find(|cand| ui.fonts_mut(|f| f.layout_no_wrap((*cand).clone(), font.clone(), th.weak).size().x) <= path_room)
             .unwrap_or_else(|| cands.last().unwrap())
             .clone();
         let mut job = egui::text::LayoutJob::simple_singleline(pick, font, th.weak);
         job.wrap = egui::text::TextWrapping::truncate_at_width(path_room.max(4.0));
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         p.galley(pos2(x, lr.center().y - g.size().y / 2.0), g, th.weak);
         if lresp.clicked() {
             ev.push(PaneEvent::Focus);
@@ -2345,22 +2345,22 @@ fn du_header(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<PaneE
         let summary = du.summary(&t);
         let bold = FontId::new(13.0, egui::FontFamily::Name("bold".into()));
         let small = FontId::proportional(12.5);
-        let sum_w = ui.fonts(|f| f.layout_no_wrap(summary.clone(), small.clone(), th.weak).size().x).min(room * 0.5);
+        let sum_w = ui.fonts_mut(|f| f.layout_no_wrap(summary.clone(), small.clone(), th.weak).size().x).min(room * 0.5);
         let path_room = (room - sum_w - 12.0).max(20.0);
         let cands = crate::util::short_path_candidates(&full);
         let pick = cands
             .iter()
-            .find(|s| ui.fonts(|f| f.layout_no_wrap((*s).clone(), bold.clone(), th.strong()).size().x) <= path_room)
+            .find(|s| ui.fonts_mut(|f| f.layout_no_wrap((*s).clone(), bold.clone(), th.strong()).size().x) <= path_room)
             .unwrap_or_else(|| cands.last().unwrap())
             .clone();
         let mut job = egui::text::LayoutJob::simple_singleline(pick, bold, th.strong());
         job.wrap = egui::text::TextWrapping::truncate_at_width(path_room);
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         let gw = g.size().x;
         ui.painter().galley(pos2(lr.left(), lr.center().y - g.size().y / 2.0), g, th.strong());
         let mut job = egui::text::LayoutJob::simple_singleline(summary, small, th.weak);
         job.wrap = egui::text::TextWrapping::truncate_at_width(sum_w + 1.0);
-        let g = ui.fonts(|f| f.layout_job(job));
+        let g = ui.fonts_mut(|f| f.layout_job(job));
         ui.painter().galley(pos2(lr.left() + gw + 12.0, lr.center().y - g.size().y / 2.0), g, th.weak);
         if lresp.clicked() {
             ev.push(PaneEvent::Focus);
@@ -2497,7 +2497,7 @@ fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
     let widths: Vec<f32> = segs
         .iter()
         .enumerate()
-        .map(|(i, (l, _))| ui.fonts(|f| f.layout_no_wrap(l.clone(), if i == last { bold.clone() } else { font.clone() }, th.text).size().x) + 12.0)
+        .map(|(i, (l, _))| ui.fonts_mut(|f| f.layout_no_wrap(l.clone(), if i == last { bold.clone() } else { font.clone() }, th.text).size().x) + 12.0)
         .collect();
     let sep_w = 12.0;
     // The "…" button for the folders left out, and its separator.
@@ -2721,7 +2721,7 @@ pub fn suggestion_popup(parent: &egui::Ui, id: egui::Id, anchor: Rect, comp: &mu
 fn fit_text(ui: &egui::Ui, text: &str, font: FontId, color: Color32, width: f32) -> (Arc<egui::Galley>, bool) {
     let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font, color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(4.0));
-    let galley = ui.fonts(|f| f.layout_job(job));
+    let galley = ui.fonts_mut(|f| f.layout_job(job));
     let cut = galley.elided;
     (galley, cut)
 }
@@ -2926,7 +2926,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 );
                 job.wrap = egui::text::TextWrapping { max_width: cell_w - 14.0, max_rows: 2, break_anywhere: false, overflow_character: Some('…') };
                 job.halign = egui::Align::Center;
-                let galley = ui.fonts(|f| f.layout_job(job));
+                let galley = ui.fonts_mut(|f| f.layout_job(job));
                 p.galley(pos2(rect.center().x, rect.top() + 68.0), galley, name_color);
                 if !e.is_parent && ui.rect_contains_pointer(rect) && payload.is_none() {
                     resp.clone().on_hover_text(format!("{}\n{} · {}", e.name, size_txt, format_time(e.modified)));

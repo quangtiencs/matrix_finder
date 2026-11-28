@@ -1655,7 +1655,7 @@ fn settings_fonts_and_terminal_themes() {
 
     // The interface size scales interface text, and only that.
     let width = |h: &Harness<'static, App>, family: egui::FontFamily| {
-        h.ctx.fonts(|f| f.layout_no_wrap("MMMMMMMMMM".into(), egui::FontId::new(14.0, family), egui::Color32::WHITE).size().x)
+        h.ctx.fonts_mut(|f| f.layout_no_wrap("MMMMMMMMMM".into(), egui::FontId::new(14.0, family), egui::Color32::WHITE).size().x)
     };
     let term_family = || egui::FontFamily::Name("term".into());
     let (ui_before, term_before) = (width(&h, egui::FontFamily::Proportional), width(&h, term_family()));
