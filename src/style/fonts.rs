@@ -9,14 +9,20 @@ use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// Text size the interface was designed for (`theme::apply`'s body text).
-pub const DEFAULT_UI_SIZE: f32 = 14.0;
+/// Text size the interface was designed for (`theme::apply`'s body text): the size
+/// setting scales every text from it.
+pub const DESIGN_UI_SIZE: f32 = 14.0;
+/// The interface text size of a fresh install, as the system's own: 13 on macOS (Finder,
+/// and VS Code's interface everywhere) and Windows (Segoe UI); 14 on Linux, between GNOME's
+/// 11 pt (~14.7 px) and KDE's 10 pt (~13.3 px).
+pub const DEFAULT_UI_SIZE: f32 = if cfg!(any(target_os = "macos", windows)) { 13.0 } else { 14.0 };
 pub const UI_SIZES: std::ops::RangeInclusive<f32> = 11.0..=20.0;
 pub const DEFAULT_TERM_SIZE: f32 = 14.0;
 pub const TERM_SIZES: std::ops::RangeInclusive<f32> = 8.0..=28.0;
 
 /// Interface fonts that ship with the app: (setting value, name). "" is the default.
-pub const UI_BUILTIN: [(&str, &str); 3] = [("", "Source Sans 3"), ("builtin:serif", "Source Serif 4"), ("builtin:code", "Source Code Pro")];
+pub const UI_BUILTIN: [(&str, &str); 4] =
+    [("", "Inter"), ("builtin:source-sans", "Source Sans 3"), ("builtin:serif", "Source Serif 4"), ("builtin:code", "Source Code Pro")];
 /// Terminal fonts that ship with the app.
 pub const TERM_BUILTIN: [(&str, &str); 3] = [("", "JetBrains Mono"), ("builtin:code", "Source Code Pro"), ("builtin:dejavu", "DejaVu Sans Mono")];
 
@@ -113,9 +119,42 @@ fn list_families(db: &fontdb::Database) -> Vec<Family> {
         }
         *by_name.entry(name).or_default() |= face.monospaced;
     }
-    let mut list: Vec<Family> = by_name.into_iter().map(|(name, mono)| Family { name: name.to_string(), mono }).collect();
+    // Only fonts the interface can use: one that draws no Latin letters (another script's,
+    // emoji, symbols) would change nothing when chosen.
+    let mut list: Vec<Family> =
+        by_name.into_iter().filter(|(name, _)| pick_face(db, name, 400).is_some()).map(|(name, mono)| Family { name: name.to_string(), mono }).collect();
     list.sort_by_cached_key(|f| f.name.to_lowercase());
     list
+}
+
+/// The order to try a family's faces in for `weight`: upright ones first, then the
+/// nearest weight (`faces`: weight, upright).
+fn face_order(faces: &[(u16, bool)], weight: u16) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..faces.len()).collect();
+    order.sort_by_key(|&k| (!faces[k].1, faces[k].0.abs_diff(weight)));
+    order
+}
+
+/// The face of `family` to use for `weight`: the first in `face_order` that draws Latin
+/// letters (a family may hold an ornaments face of the same weight, like Hoefler Text).
+/// Remembered: the font list checks every family once, choosing a font checks it again.
+fn pick_face(db: &fontdb::Database, family: &str, weight: u16) -> Option<fontdb::ID> {
+    static PICKED: OnceLock<Mutex<HashMap<(String, u16), Option<fontdb::ID>>>> = OnceLock::new();
+    let key = (family.to_string(), weight);
+    if let Some(found) = PICKED.get_or_init(Default::default).lock().ok().and_then(|p| p.get(&key).copied()) {
+        return found;
+    }
+    let faces: Vec<&fontdb::FaceInfo> = db.faces().filter(|f| f.families.iter().any(|(n, _)| n == family)).collect();
+    let shape: Vec<(u16, bool)> = faces.iter().map(|f| (f.weight.0, f.style == fontdb::Style::Normal)).collect();
+    // egui panics on a font it cannot parse, and shows nothing with a font that has no outlines.
+    let usable = |id| {
+        db.with_face_data(id, |data, index| ttf_parser::Face::parse(data, index).is_ok_and(|f| crate::style::fontfallback::draws(&f, 'A'))).unwrap_or(false)
+    };
+    let found = face_order(&shape, weight).into_iter().map(|k| faces[k].id).find(|id| usable(*id));
+    if let Ok(mut p) = PICKED.get_or_init(Default::default).lock() {
+        p.insert(key, found);
+    }
+    found
 }
 
 /// A font file's bytes and the index of a face in it.
@@ -126,22 +165,12 @@ type Face = (&'static [u8], u32);
 fn load_face(family: &str, weight: u16) -> Option<Face> {
     static LOADED: OnceLock<Mutex<HashMap<fontdb::ID, Face>>> = OnceLock::new();
     let db = db();
-    let id = db.query(&fontdb::Query {
-        families: &[fontdb::Family::Name(family)],
-        weight: fontdb::Weight(weight),
-        stretch: fontdb::Stretch::Normal,
-        style: fontdb::Style::Normal,
-    })?;
+    let id = pick_face(db, family, weight)?;
     let mut loaded = LOADED.get_or_init(Default::default).lock().ok()?;
     if let Some(face) = loaded.get(&id) {
         return Some(*face);
     }
     let (data, index) = db.with_face_data(id, |data, index| (data.to_vec(), index))?;
-    // egui panics on a font it cannot parse, and shows nothing with a font that has no outlines.
-    let face = ttf_parser::Face::parse(&data, index).ok()?;
-    if !crate::style::fontfallback::draws(&face, 'A') {
-        return None;
-    }
     let face: Face = (Box::leak(data.into_boxed_slice()), index);
     loaded.insert(id, face);
     Some(face)
@@ -156,6 +185,7 @@ fn font_data((data, index): Face) -> Arc<FontData> {
 /// Make font `value` available in `d`; returns its keys (regular, bold).
 fn user_font(d: &mut FontDefinitions, slot: &str, value: &str, bold_weight: u16) -> Option<(String, String)> {
     match value {
+        "builtin:source-sans" => return Some(("sans".into(), "sans-bold".into())),
         "builtin:serif" => return Some(("serif".into(), "serif-bold".into())),
         "builtin:code" => return Some(("mono".into(), "mono".into())),
         "builtin:dejavu" => return Some(("dejavu-mono".into(), "dejavu-mono".into())),
@@ -220,7 +250,7 @@ pub fn apply(ctx: &egui::Context, prefs: &FontPrefs) -> Vec<String> {
             d.families.entry(family).or_default().push(f.name.clone());
         }
     }
-    let scale = (prefs.ui_size / DEFAULT_UI_SIZE).clamp(0.5, 2.0);
+    let scale = (prefs.ui_size / DESIGN_UI_SIZE).clamp(0.5, 2.0);
     UI_SCALE.store(scale.to_bits(), Ordering::Relaxed);
     if scale != 1.0 {
         scale_interface(&mut d, scale);
@@ -259,11 +289,15 @@ fn base() -> &'static FontDefinitions {
 
 fn build_base() -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
-    // Bundled Adobe Source fonts (SIL OFL 1.1), full Latin coverage incl. Vietnamese:
-    // Source Sans 3 for the UI and for reading (Markdown; Source Serif 4 if chosen), Source Code Pro for code.
+    // Inter (SIL OFL 1.1) for the interface: made for screens, it stays clear at the small
+    // sizes of a file list. Adobe Source fonts (SIL OFL 1.1), full Latin coverage incl.
+    // Vietnamese: Source Sans 3 for reading (Markdown; Source Serif 4 if chosen, and an
+    // interface font to choose), Source Code Pro for code.
     let add = |fonts: &mut FontDefinitions, key: &str, data: &'static [u8]| {
         fonts.font_data.insert(key.into(), Arc::new(FontData::from_static(data)));
     };
+    add(&mut fonts, "ui", include_bytes!("../../assets/fonts/Inter-Regular.ttf"));
+    add(&mut fonts, "ui-bold", include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"));
     add(&mut fonts, "sans", include_bytes!("../../assets/fonts/SourceSans3-Regular.otf"));
     add(&mut fonts, "sans-bold", include_bytes!("../../assets/fonts/SourceSans3-Semibold.otf"));
     add(&mut fonts, "serif", include_bytes!("../../assets/fonts/SourceSerif4-Regular.otf"));
@@ -273,16 +307,11 @@ fn build_base() -> FontDefinitions {
     let defaults_prop = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     let defaults_mono = fonts.families.get(&FontFamily::Monospace).cloned().unwrap_or_default();
     let with = |first: &str, rest: &Vec<String>| [vec![first.to_string()], rest.clone()].concat();
-    fonts.families.insert(FontFamily::Proportional, with("sans", &defaults_prop));
+    fonts.families.insert(FontFamily::Proportional, with("ui", &defaults_prop));
     fonts.families.insert(FontFamily::Monospace, with("mono", &defaults_mono));
-    for (fam, key) in [
-        ("bold", "sans-bold"),
-        ("serif", "serif"),
-        ("serif-bold", "serif-bold"),
-        ("serif-italic", "serif-italic"),
-        ("read", "sans"),
-        ("read-bold", "sans-bold"),
-    ] {
+    for (fam, key) in
+        [("bold", "ui-bold"), ("serif", "serif"), ("serif-bold", "serif-bold"), ("serif-italic", "serif-italic"), ("read", "sans"), ("read-bold", "sans-bold")]
+    {
         fonts.families.insert(FontFamily::Name(fam.into()), with(key, &defaults_prop));
     }
     // Terminal: JetBrains Mono (OFL), then the Nerd Font symbols (MIT) for the icons and
@@ -359,15 +388,52 @@ mod tests {
         let term_before = keys(&d, FontFamily::Name("term".into()));
         scale_interface(&mut d, 1.5);
         assert_eq!(keys(&d, FontFamily::Name("term".into())), term_before);
-        assert_eq!(keys(&d, FontFamily::Proportional)[0], "sans@ui");
-        assert_eq!(d.font_data["sans@ui"].tweak.scale, 1.5);
-        assert_eq!(d.font_data["sans"].tweak.scale, 1.0);
+        assert_eq!(keys(&d, FontFamily::Proportional)[0], "ui@ui");
+        assert_eq!(d.font_data["ui@ui"].tweak.scale, 1.5);
+        assert_eq!(d.font_data["ui"].tweak.scale, 1.0);
+    }
+
+    #[test]
+    fn interface_size_follows_the_system() {
+        let want = if cfg!(any(target_os = "macos", windows)) { 13.0 } else { 14.0 };
+        assert_eq!(DEFAULT_UI_SIZE, want);
+        assert!(UI_SIZES.contains(&DEFAULT_UI_SIZE) && UI_SIZES.contains(&DESIGN_UI_SIZE));
+        assert_eq!(crate::config::Settings::default().ui_font_size, want);
+    }
+
+    #[test]
+    fn faces_are_tried_upright_and_nearest_weight_first() {
+        // Ornaments 400, Regular 400, Black 700, Italic 400, Light 300.
+        let faces = [(400, true), (400, true), (700, true), (400, false), (300, true)];
+        assert_eq!(face_order(&faces, 400), [0, 1, 4, 2, 3]);
+        assert_eq!(face_order(&faces, 700), [2, 0, 1, 4, 3]);
+        assert!(face_order(&[], 400).is_empty());
+    }
+
+    /// macOS's own fonts: a family with an ornaments face gets its regular one; fonts
+    /// without Latin letters are left out of the list.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn installed_fonts_are_the_usable_ones() {
+        let db = db();
+        let has = |n: &str| db.faces().any(|f| f.families.iter().any(|(m, _)| m == n));
+        if has("Hoefler Text") {
+            let id = pick_face(db, "Hoefler Text", 400).expect("its regular face");
+            assert_eq!(db.face(id).map(|f| f.post_script_name.as_str()), Some("HoeflerText-Regular"));
+        }
+        let list = list_families(db);
+        for gone in ["Apple Color Emoji", "Geeza Pro"] {
+            assert!(!list.iter().any(|f| f.name == gone), "{gone} draws no Latin letters");
+        }
+        assert!(list.iter().all(|f| pick_face(db, &f.name, 400).is_some()));
     }
 
     #[test]
     fn builtin_and_unknown_fonts() {
         let mut d = base().clone();
         assert_eq!(user_font(&mut d, "ui", "builtin:serif", 600), Some(("serif".into(), "serif-bold".into())));
+        assert_eq!(user_font(&mut d, "ui", "builtin:source-sans", 600), Some(("sans".into(), "sans-bold".into())));
+        assert_eq!(label("", &UI_BUILTIN), "Inter");
         assert_eq!(user_font(&mut d, "term", "No Such Font 123", 700), None);
         assert_eq!(label("", &TERM_BUILTIN), "JetBrains Mono");
         assert_eq!(label("Menlo", &TERM_BUILTIN), "Menlo");

@@ -371,7 +371,13 @@ impl App {
                     self.open_settings(self.settings_page);
                 }
                 self.view_options_button(ui, th);
-                self.split_view_button(ui, th);
+                // Only a file list or a terminal splits: not Settings, Tasks or a tool.
+                let tab = self.panes[self.active].tab();
+                if tab.is_files() || tab.is_terminal() {
+                    self.split_view_button(ui, th);
+                } else {
+                    egui::Popup::close_id(ui.ctx(), egui::Id::unique("split-view"));
+                }
                 let n_jobs = self.jobs.len();
                 let tr_shown = self.panes[self.active].tab().transfers;
                 let gauge = self.transfers_gauge();
@@ -644,9 +650,9 @@ impl App {
                     key_hint(ui, th, "↑↓", &t("Move"));
                 });
             } else if self.cfg.show_key_hints {
-                // The keys of the focused window: none for file lists where there is none.
+                // The keys of a file list, only when one is focused: in a terminal F9 is
+                // the program's, and Settings or a tool has no folder to open one in.
                 let files = self.panes[self.active].tab().is_files();
-                let terminal = self.panes[self.active].tab().is_terminal();
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.x = 4.0;
                     let hints: [(&str, String, Cmd); 7] = [
@@ -658,7 +664,7 @@ impl App {
                         (hint(Action::Delete), t("Delete"), Cmd::Delete),
                         (hint(Action::OpenTerminal), t("Terminal"), Cmd::Terminal),
                     ];
-                    for (key, label, cmd) in hints.iter().rev().filter(|h| if h.2 == Cmd::Terminal { !terminal } else { files }) {
+                    for (key, label, cmd) in hints.iter().rev().filter(|_| files) {
                         // Right to left: the ones that no longer fit are left out, not drawn over the job's progress.
                         if ui.available_width() < key_hint_width(ui, key, label) {
                             break;
@@ -847,6 +853,8 @@ fn key_hint(ui: &mut egui::Ui, th: &Theme, key: &str, label: &str) -> egui::Resp
     p.rect(cap, 4.0, th.surface, egui::Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
     p.text(cap.center(), egui::Align2::CENTER_CENTER, key, font.clone(), th.weak);
     p.text(egui::pos2(cap.right() + 6.0, rect.center().y), egui::Align2::LEFT_CENTER, label, font, if resp.hovered() { th.text } else { th.weak });
+    // Read out (and found by tests) as "F9 Terminal".
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{key} {label}")));
     resp
 }
 
