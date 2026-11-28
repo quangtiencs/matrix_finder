@@ -1621,9 +1621,10 @@ fn tool_window_header(
             let (ir, _) = ui.allocate_exact_size(vec2(22.0, 26.0), Sense::hover());
             icon(ui.painter(), Rect::from_center_size(ir.center(), vec2(15.0, 15.0)), if c.active { th.accent } else { th.weak });
             ui.label(egui::RichText::new(title).font(FontId::new(13.5, egui::FontFamily::Name("bold".into()))).color(th.strong()));
-            let room = (ui.available_width() - if c.pane_count > 1 { 56.0 } else { 28.0 } - SIDE_PAD).max(0.0);
+            // Settings and Tasks do not split: only a close button, in a split tab.
+            let room = (ui.available_width() - if c.pane_count > 1 { 28.0 } else { 0.0 } - SIDE_PAD).max(0.0);
             ui.add_space(room);
-            window_buttons(ui, false, c, ev);
+            close_window_button(ui, c, ev);
         });
     });
     let y = ui.cursor().top();
@@ -2134,6 +2135,7 @@ fn window_grip(ui: &mut egui::Ui, uid: u64, c: &PaneUiCtx, ev: &mut Vec<PaneEven
 fn window_buttons(ui: &mut egui::Ui, terminal: bool, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
     let th = c.theme;
     let sr = icons::icon_button(ui, 26.0, true, th, icons::mi_split).on_hover_text(t("Split window"));
+    sr.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Split window")));
     let id = sr.id.with("split-menu");
     if sr.clicked() {
         egui::Popup::toggle_id(ui.ctx(), id);
@@ -2150,6 +2152,12 @@ fn window_buttons(ui: &mut egui::Ui, terminal: bool, c: &PaneUiCtx, ev: &mut Vec
             ev.push(PaneEvent::Command(cmd));
         }
     });
+    close_window_button(ui, c, ev);
+}
+
+/// The close button of a window in a split tab (none when it is alone).
+fn close_window_button(ui: &mut egui::Ui, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
+    let th = c.theme;
     if c.pane_count > 1
         && icons::icon_button(ui, 26.0, true, th, |p, r, col| {
             let s = egui::Stroke::new(1.4_f32, col);

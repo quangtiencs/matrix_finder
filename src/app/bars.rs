@@ -371,13 +371,7 @@ impl App {
                     self.open_settings(self.settings_page);
                 }
                 self.view_options_button(ui, th);
-                // Only a file list or a terminal splits: not Settings, Tasks or a tool.
-                let tab = self.panes[self.active].tab();
-                if tab.is_files() || tab.is_terminal() {
-                    self.split_view_button(ui, th);
-                } else {
-                    egui::Popup::close_id(ui.ctx(), egui::Id::unique("split-view"));
-                }
+                self.split_view_button(ui, th);
                 let n_jobs = self.jobs.len();
                 let tr_shown = self.panes[self.active].tab().transfers;
                 let gauge = self.transfers_gauge();
@@ -768,6 +762,16 @@ impl App {
     /// side, within 2 × 2), or close it.
     fn split_view_button(&mut self, ui: &mut egui::Ui, th: &Theme) {
         let id = egui::Id::unique("split-view");
+        // Only a file list or a terminal splits: in Settings, Tasks or a tool it is dimmed.
+        let tab = self.panes[self.active].tab();
+        if !(tab.is_files() || tab.is_terminal()) {
+            egui::Popup::close_id(ui.ctx(), id);
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(30.0, 28.0), egui::Sense::hover());
+            icons::mi_split(ui.painter(), rect.shrink2(egui::vec2(8.0, 7.0)), th.weak.gamma_multiply(0.45));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, false, t("Split view")));
+            resp.on_hover_text(t("Split view"));
+            return;
+        }
         let open = egui::Popup::is_id_open(ui.ctx(), id);
         let resp = tool_icon(ui, th, &t("Split view"), open, icons::mi_split);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Split view")));
