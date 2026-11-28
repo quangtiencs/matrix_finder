@@ -1223,12 +1223,12 @@ impl TermSession {
         let offset = self.term.lock().grid().display_offset();
         let reporting = mode.intersects(TermMode::MOUSE_MODE) && !mods.shift;
 
-        // Pinch (and Ctrl+wheel) scales the text with the gesture, in half points.
+        // Pinch (and Ctrl+wheel) scales the text with the gesture, in whole points.
         if hovered && zoom != 1.0 {
             let sizes = crate::style::fonts::TERM_SIZES;
             let (lo, hi) = (sizes.start().min(o.font_size), sizes.end().max(o.font_size));
             self.pinch *= zoom;
-            let want = ((o.font_size * self.pinch * 2.0).round() / 2.0).clamp(lo, hi);
+            let want = (o.font_size * self.pinch).round().clamp(lo, hi);
             if want != o.font_size {
                 out.font_delta += want - o.font_size;
                 // Keep what is left over for the next step.

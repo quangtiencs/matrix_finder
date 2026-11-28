@@ -1163,6 +1163,9 @@ impl Settings {
                 p.theme = now.to_string();
             }
         }
+        // Font sizes are whole points (older settings could hold halves).
+        self.term_font_size = self.term_font_size.round();
+        self.ui_font_size = self.ui_font_size.round();
         if !(6.0..=40.0).contains(&self.term_font_size) {
             self.term_font_size = crate::style::fonts::DEFAULT_TERM_SIZE;
         }
@@ -1614,6 +1617,16 @@ mod tests {
         assert_eq!(old.text_gamma, None);
         let back: Settings = serde_json::from_str(&serde_json::to_string(&Settings { text_gamma: Some(0.7), ..Settings::default() }).unwrap()).unwrap();
         assert_eq!(back.text_gamma, Some(0.7));
+    }
+
+    #[test]
+    fn font_sizes_are_whole_points() {
+        let mut s = Settings { ui_font_size: 13.5, term_font_size: 12.4, ..Settings::default() };
+        s.normalize();
+        assert_eq!((s.ui_font_size, s.term_font_size), (14.0, 12.0));
+        let mut s = Settings { ui_font_size: f32::NAN, term_font_size: f32::INFINITY, ..Settings::default() };
+        s.normalize();
+        assert_eq!((s.ui_font_size, s.term_font_size), (crate::style::fonts::DEFAULT_UI_SIZE, crate::style::fonts::DEFAULT_TERM_SIZE));
     }
 
     #[test]
