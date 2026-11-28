@@ -61,7 +61,7 @@ if ! command -v cargo >/dev/null; then
     echo "==> Rust"
     curl -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal >/dev/null
 else
-    # The toolchain kept in the volume may be older than Cargo.toml's rust-version.
+    # The toolchain kept in the volume may be older than the rust-version in Cargo.toml.
     rustup update --no-self-update stable >/dev/null
 fi
 command -v cargo-deb >/dev/null || { echo "==> cargo-deb"; cargo install --locked cargo-deb; }
