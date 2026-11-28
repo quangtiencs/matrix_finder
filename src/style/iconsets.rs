@@ -238,8 +238,8 @@ mod tests {
         let r = Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(58.0, 58.0));
         let mut done = 0;
         for _ in 0..100 {
-            let _ = ctx.run(egui::RawInput::default(), |ctx| {
-                let p = ctx.layer_painter(egui::LayerId::background());
+            let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let p = ui.ctx().layer_painter(egui::LayerId::background());
                 for n in &names {
                     assert!(draw(Set::Material, &p, r, n, false, "", th), "drawn or waiting its turn");
                 }

@@ -185,7 +185,7 @@ impl Palette {
                         icons::search(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), th.weak);
                         let edit = egui::TextEdit::singleline(&mut self.query)
                             .id(egui::Id::new("palette-input"))
-                            .frame(false)
+                            .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 2)))
                             .font(FontId::proportional(16.0))
                             .hint_text(egui::RichText::new(t("Search files, commands, folders, settings…")).color(th.weak))
                             .desired_width(f32::INFINITY);

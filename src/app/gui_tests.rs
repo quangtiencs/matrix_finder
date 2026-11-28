@@ -973,7 +973,7 @@ fn center_dialog(h: &mut Harness<'static, App>, id: &str) {
 /// Scroll the Settings page down, leaving the pointer on nothing that reacts to it.
 fn scroll_settings(h: &mut Harness<'static, App>, by: f32) {
     move_to(h, pos2(W * 0.7, H * 0.6));
-    push(h, Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -by), modifiers: Modifiers::NONE });
+    push(h, Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -by), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
     settle(h, 4);
     move_to(h, pos2(330.0, H - 12.0));
     settle(h, 2);
@@ -3578,7 +3578,10 @@ fn geometry_preview_moves_and_shows_its_source() {
     let middle = pos2(W * 0.7, H * 0.55);
     drag(&mut h, middle, middle + egui::vec2(120.0, 40.0));
     move_to(&mut h, middle);
-    push(&mut h, Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 240.0), modifiers: Modifiers::NONE });
+    push(
+        &mut h,
+        Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 240.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE },
+    );
     settle(&mut h, 4);
     let after = h.render().unwrap();
     assert!(before.as_raw() != after.as_raw(), "dragging and zooming changed the view");
@@ -5367,7 +5370,15 @@ fn window_size_at_start_setting() {
         // Scroll down to the Window section.
         move_to(&mut h, pos2(W * 0.6, H * 0.6));
         for _ in 0..6 {
-            push(&mut h, Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -120.0), modifiers: Modifiers::NONE });
+            push(
+                &mut h,
+                Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -120.0),
+                    phase: egui::TouchPhase::Move,
+                    modifiers: Modifiers::NONE,
+                },
+            );
             h.step();
         }
         settle(&mut h, 3);
@@ -5787,7 +5798,7 @@ fn the_users_themes_are_made_edited_and_deleted() {
     h.state_mut().sync_custom_themes(&ctx);
     settle(&mut h, 3);
     assert_eq!(h.state().theme.bg, egui::Color32::from_rgb(0x12, 0x34, 0x56));
-    assert_eq!(h.ctx.style().visuals.extreme_bg_color, h.state().theme.surface, "and to egui's colours");
+    assert_eq!(h.ctx.global_style().visuals.extreme_bg_color, h.state().theme.surface, "and to egui's colours");
     // Delete asks first; then the app is back on a built-in theme.
     h.get_by_label(&t("Delete")).click_accesskit();
     settle(&mut h, 3);

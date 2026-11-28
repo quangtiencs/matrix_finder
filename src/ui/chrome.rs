@@ -339,7 +339,8 @@ impl Chrome {
     /// An in-app window (About, Keyboard shortcuts…) dressed as a dialog of the platform:
     /// instead of egui's title bar, [`Self::dialog_title`] draws the platform's.
     pub fn dialog_window<'a>(&self, ctx: &egui::Context, title: &str, id: egui::Id) -> egui::Window<'a> {
-        let frame = egui::Frame::window(&ctx.style()).inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 14 }).corner_radius(self.radius() as u8);
+        let frame =
+            egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 14 }).corner_radius(self.radius() as u8);
         egui::Window::new(title.to_string()).id(id).title_bar(false).collapsible(false).frame(frame)
     }
 

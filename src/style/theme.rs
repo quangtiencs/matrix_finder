@@ -1199,7 +1199,7 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
 
     // Pin egui's own light/dark preference so OS changes don't swap in egui's default style.
     ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.visuals = v;
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 4.0);
@@ -1210,6 +1210,8 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
     style.spacing.combo_width = 120.0;
     style.spacing.scroll.bar_width = 6.0;
     style.spacing.scroll.floating = true;
+    // No fading at the edges of scrolled lists: the file lists paint their own background.
+    style.spacing.scroll.fade.strength = 0.0;
     style.text_styles = [
         // Default text size: 14 px (Settings → UI scale zooms everything).
         (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),

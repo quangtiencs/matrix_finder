@@ -1164,7 +1164,7 @@ impl TermSession {
         let scroll: f32 = events
             .iter()
             .map(|e| match e {
-                egui::Event::MouseWheel { unit, delta, modifiers } => {
+                egui::Event::MouseWheel { unit, delta, modifiers, .. } => {
                     let d = if delta.y == 0.0 && modifiers.shift { delta.x } else { delta.y };
                     match unit {
                         egui::MouseWheelUnit::Point => d / self.cell.y.max(1.0) * o.scroll[0],
