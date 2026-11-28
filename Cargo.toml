@@ -18,6 +18,8 @@ pulldown-cmark = { version = "0.12", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 dirs = "6"
+# Already in the tree (through url); websites typed with accents match their links.
+idna = "1.1"
 walkdir = "2"
 chrono = "0.4"
 open = "5"

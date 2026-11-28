@@ -2,6 +2,7 @@
 pub mod fontfallback;
 pub mod fonts;
 pub mod icons;
+pub mod iconsets;
 pub mod logo;
 pub mod sysicons;
 pub mod theme;

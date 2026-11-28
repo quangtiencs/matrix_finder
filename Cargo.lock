@@ -3344,6 +3344,7 @@ dependencies = [
  "globset",
  "hayro",
  "hdf5-pure",
+ "idna",
  "image",
  "libc",
  "lofty",

@@ -270,10 +270,15 @@ pub fn names_for(name: &str, is_dir: bool, ext: &str) -> Vec<String> {
         crate::style::icons::FileKind::Audio => &["audio-x-generic"],
         crate::style::icons::FileKind::Archive => &["package-x-generic", "application-x-archive"],
         crate::style::icons::FileKind::Code => &["text-x-script", "text-x-generic"],
+        crate::style::icons::FileKind::Text => &["text-x-generic"],
         crate::style::icons::FileKind::Doc => &["x-office-document", "text-x-generic"],
+        crate::style::icons::FileKind::Sheet => &["x-office-spreadsheet", "text-x-generic"],
+        crate::style::icons::FileKind::Slides => &["x-office-presentation", "text-x-generic"],
+        crate::style::icons::FileKind::Disk => &["application-x-cd-image", "media-optical"],
+        crate::style::icons::FileKind::Font => &["font-x-generic", "application-x-font-ttf"],
         crate::style::icons::FileKind::Pdf => &["application-pdf"],
         crate::style::icons::FileKind::Exec => &["application-x-executable"],
-        crate::style::icons::FileKind::Data => &["x-office-spreadsheet", "text-x-generic"],
+        crate::style::icons::FileKind::Data => &["text-x-generic"],
         crate::style::icons::FileKind::Other => &["text-x-generic"],
     };
     mime.iter().chain(generic).chain(["application-x-generic", "unknown"].iter()).map(|s| s.to_string()).collect()

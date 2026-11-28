@@ -322,7 +322,7 @@ pub fn open_default(path: &Path) -> Res<()> {
 
 /// Open with a specific program (path or command name).
 pub fn open_with(program: &str, path: &Path) -> Res<()> {
-    let parts = shell_split(program);
+    let parts = crate::system::defaultapps::program_parts(program);
     let (prog, args) = parts.split_first().ok_or("No program given")?;
     if cfg!(target_os = "macos") && prog.ends_with(".app") {
         return spawn({
@@ -339,22 +339,38 @@ pub fn open_with(program: &str, path: &Path) -> Res<()> {
     spawn(c)
 }
 
-/// Open a web or mail link with `browser` (a program as in `open_with`), or with the
-/// system's default app for it when `browser` is empty. The link is one argument, never
-/// read by a shell.
-pub fn open_url(browser: &str, url: &str) -> Res<()> {
-    let parts = shell_split(browser);
-    let Some((prog, args)) = parts.split_first() else { return open::that_detached(url).map_err(es) };
-    if cfg!(target_os = "macos") && prog.ends_with(".app") {
-        return spawn({
-            let mut c = Command::new("open");
-            c.arg("-a").arg(prog).arg(url);
-            c
-        });
-    }
-    let mut c = Command::new(prog);
-    c.args(args).arg(url);
+/// Open a web or mail link with `browser` (a program as in `open_with`) started with
+/// `extra` arguments (a profile), or with the system's default app for it when `browser`
+/// is empty. The link is one argument, never read by a shell.
+pub fn open_url(browser: &str, extra: &[String], url: &str) -> Res<()> {
+    let Some(argv) = url_argv(browser, extra, url, cfg!(target_os = "macos")) else { return open::that_detached(url).map_err(es) };
+    let mut c = Command::new(&argv[0]);
+    c.args(&argv[1..]);
     spawn(c)
+}
+
+/// The command that opens `url` with `browser` and `extra` arguments (`None`: the
+/// system's default). On macOS an app bundle is opened with `open`; given arguments, as
+/// a new launch (`-n`) that hands the link to the running browser with them.
+fn url_argv(browser: &str, extra: &[String], url: &str, macos: bool) -> Option<Vec<String>> {
+    let parts = crate::system::defaultapps::program_parts(browser);
+    let (prog, args) = parts.split_first()?;
+    let mut argv: Vec<String> = Vec::new();
+    if macos && prog.ends_with(".app") {
+        argv.push("open".into());
+        if extra.is_empty() {
+            argv.extend(["-a".into(), prog.clone()]);
+        } else {
+            argv.extend(["-na".into(), prog.clone(), "--args".into()]);
+            argv.extend(extra.iter().cloned());
+        }
+    } else {
+        argv.push(prog.clone());
+        argv.extend(args.iter().cloned());
+        argv.extend(extra.iter().cloned());
+    }
+    argv.push(url.to_string());
+    Some(argv)
 }
 
 /// Show the file in the OS file manager.
@@ -379,6 +395,19 @@ pub fn reveal(path: &Path) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_open_in_the_browser_and_profile() {
+        let v = |b: &str, extra: &[&str], mac: bool| url_argv(b, &extra.iter().map(|s| s.to_string()).collect::<Vec<_>>(), "https://x.y/?a=1&b", mac);
+        assert_eq!(v("", &[], true), None, "the system's default");
+        assert_eq!(v("/Applications/Safari.app", &[], true).unwrap(), ["open", "-a", "/Applications/Safari.app", "https://x.y/?a=1&b"]);
+        assert_eq!(
+            v("/Applications/Google Chrome.app", &["--profile-directory=Profile 1"], true).unwrap(),
+            ["open", "-na", "/Applications/Google Chrome.app", "--args", "--profile-directory=Profile 1", "https://x.y/?a=1&b"]
+        );
+        assert_eq!(v("firefox --new-window", &["-P", "work"], false).unwrap(), ["firefox", "--new-window", "-P", "work", "https://x.y/?a=1&b"]);
+        assert_eq!(v("\"C:\\Program Files\\Chrome\\chrome.exe\"", &[], false).unwrap(), ["C:\\Program Files\\Chrome\\chrome.exe", "https://x.y/?a=1&b"]);
+    }
 
     #[test]
     fn external_terminals_start_the_shell_only() {

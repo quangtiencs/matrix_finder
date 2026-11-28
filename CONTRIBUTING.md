@@ -41,7 +41,7 @@ This builds `target/macos/Matrix Finder.app` and `target/macos/MatrixFinder-<ver
 - `--sign "Developer ID Application: …"` applies a real signature. The default is an ad-hoc signature, so macOS asks for confirmation the first time you open the app (right-click → Open).
 - `--no-layout` skips the Finder window styling, and `BUNDLE_ID=…` changes the bundle identifier.
 - After editing the SVGs in `assets/logo`, run `make icons` to regenerate the PNGs, the `.icns` file and the DMG background.
-- `make screenshots` re-renders the screenshots headlessly from a generated demo folder: every scene to `docs/light` and `docs/dark`, plus `docs/showcase.png` and `docs/banner.png` (the showcase under the logo, name, slogan and GitHub link; `SHOTS=panels,palette` renders only some).
+- `make screenshots` re-renders the screenshots headlessly from a generated demo folder: every scene to `docs/light` and `docs/dark`, plus `docs/showcase.png` and `docs/banner.png`, and the README's settings pictures (`dev-*.png`, cut from their scenes to keep them small) (the showcase under the logo, name, slogan and GitHub link; `SHOTS=panels,palette` renders only some).
 
 ## Tests
 
@@ -128,8 +128,10 @@ src/
 │   ├── jobs.rs        background jobs, the Transfers window, dropped files
 │   ├── keys.rs        shortcuts, the file list's keys, the type-to-search box
 │   ├── opening.rs     opening the cursor's item, Open with, archive passwords, local copies, Quick View
+│   ├── quickfilters.rs Settings' quick filters: rows, editor with extension chips, drag to reorder
 │   ├── settings_ui.rs the Settings tab
 │   ├── terminals.rs   terminals in folders or with a profile, their events, AI agents
+│   ├── themes.rs      Settings' theme galleries and the user's own themes: editor, import, export
 │   ├── windows.rs     tabs and windows: split, close, reopen, detach, merge, drag
 │   └── gui_tests.rs   GUI tests and screenshots, headless with egui_kittest (ignored by default)
 ├── files/             files and where they live
@@ -160,8 +162,9 @@ src/
 │   ├── chrome.rs      native-looking integrated title bar
 │   └── shortcuts.rs   keyboard shortcuts: actions, defaults per system, terminal safety
 ├── style/             how the app looks
-│   ├── theme.rs       colour themes (default: Breeze Light) and terminal colour schemes
-│   ├── icons.rs       icon packs and UI line icons
+│   ├── theme.rs       colour themes (default: Breeze Light), terminal colour schemes, the user's themes
+│   ├── icons.rs       file kinds, the drawn icon styles and UI line icons
+│   ├── iconsets.rs    bundled icon sets (Material Icon Theme, Fluent UI) + iconsets/: their generated tables
 │   ├── sysicons.rs    freedesktop icon themes
 │   ├── fonts.rs       bundled and installed fonts, interface and terminal font settings
 │   ├── fontfallback.rs system fonts loaded on demand for characters the bundled ones cannot draw
@@ -199,15 +202,17 @@ src/
     ├── activation.rs  Linux startup notification: hands the desktop's token to the window
     ├── defaultapps.rs which app opens which file type, and the system's own choice
     ├── agents.rs      AI coding agents for the AI button: which are installed, their logos
+    ├── browsers.rs    which browser and profile opens a web link (website rules), browsers' profiles
     ├── copies.rs      Linux: the install script's copy running over a .deb/.rpm package's
     └── update.rs      checking GitHub for a newer release (only when asked)
 assets/agents/     logos of the AI coding agents (LobeHub Icons, MIT)
+assets/icons/      Material Icon Theme and Fluent UI System Icons (MIT), copied by scripts/icon-sets.py
 assets/fonts/      Source Sans 3, Source Serif 4, Source Code Pro (SIL OFL 1.1)
 assets/logo/       Matrix Finder logo: a folder made of a matrix (SVG source + PNG exports)
 assets/linux/      the desktop entry (menu item) of the Linux packages and the install script
 assets/macos/      the .icns icon and the DMG background
 assets/testdata/   small files the tests read (certificates, encrypted archives)
-scripts/           install script, macOS bundle and DMG builder, Linux packages (linux/)
+scripts/           install script, macOS bundle and DMG builder, Linux packages (linux/), icon sets
 docs/              README screenshots (light and dark)
 ```
 

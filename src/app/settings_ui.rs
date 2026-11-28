@@ -9,7 +9,7 @@ const ROW_H: f32 = 36.0;
 
 type PageIcon = fn(&egui::Painter, egui::Rect, egui::Color32);
 
-fn bold(size: f32) -> FontId {
+pub(super) fn bold(size: f32) -> FontId {
     FontId::new(size, FontFamily::Name("bold".into()))
 }
 
@@ -23,6 +23,43 @@ pub(super) fn settings_section(ui: &mut egui::Ui, th: &Theme, title: &str, desc:
     ui.add_space(2.0);
 }
 
+/// The six dots of a handle a row is dragged by.
+pub(super) fn grip_dots(p: &egui::Painter, c: egui::Pos2, col: egui::Color32) {
+    for dy in [-5.0, 0.0, 5.0] {
+        for dx in [-2.5, 2.5] {
+            p.circle_filled(c + vec2(dx, dy), 1.4, col);
+        }
+    }
+}
+
+/// While a row of a settings list is dragged by `grip`: its name by the pointer, the
+/// grabbing cursor, and the page scrolling near its top or bottom to reach the rest.
+pub(super) fn drag_feedback(ui: &mut egui::Ui, grip: &egui::Response, name: &str) {
+    let Some(pointer) = ui.ctx().pointer_latest_pos() else { return };
+    egui::Area::new(egui::Id::new("settings-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(pointer + vec2(14.0, 6.0)).interactable(false).show(
+        ui.ctx(),
+        |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.label(name);
+            });
+        },
+    );
+    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    let clip = ui.clip_rect();
+    let edge = 36.0;
+    let speed = if pointer.y < clip.top() + edge {
+        edge - (pointer.y - clip.top()).max(0.0)
+    } else if pointer.y > clip.bottom() - edge {
+        -(edge - (clip.bottom() - pointer.y).max(0.0))
+    } else {
+        0.0
+    };
+    if speed != 0.0 && grip.dragged() {
+        ui.scroll_with_delta(vec2(0.0, speed * 0.5));
+        ui.ctx().request_repaint();
+    }
+}
+
 /// The frame of a settings card (`.begin()` it where a closure would be awkward).
 pub(super) fn card_frame(th: &Theme) -> egui::Frame {
     egui::Frame::new()
@@ -32,7 +69,7 @@ pub(super) fn card_frame(th: &Theme) -> egui::Frame {
         .inner_margin(egui::Margin::symmetric(14, 8))
 }
 
-fn card<R>(ui: &mut egui::Ui, th: &Theme, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(super) fn card<R>(ui: &mut egui::Ui, th: &Theme, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     card_frame(th)
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
@@ -42,7 +79,7 @@ fn card<R>(ui: &mut egui::Ui, th: &Theme, add: impl FnOnce(&mut egui::Ui) -> R) 
 }
 
 /// A line between two rows of a card.
-fn row_line(ui: &mut egui::Ui, th: &Theme) {
+pub(super) fn row_line(ui: &mut egui::Ui, th: &Theme) {
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
     ui.painter().hline(r.x_range(), r.center().y, Stroke::new(1.0_f32, th.border.gamma_multiply(0.6)));
 }
@@ -74,7 +111,7 @@ fn keyboard_icon(p: &egui::Painter, r: Rect, c: egui::Color32) {
 }
 
 /// A settings row: label on the left, its control beside it.
-fn row<R>(ui: &mut egui::Ui, th: &Theme, label: &str, hint: &str, control: impl FnOnce(&mut egui::Ui) -> R) -> R {
+pub(super) fn row<R>(ui: &mut egui::Ui, th: &Theme, label: &str, hint: &str, control: impl FnOnce(&mut egui::Ui) -> R) -> R {
     centered_row(ui, ROW_H, |ui| {
         row_label(ui, th, LABEL_W, ROW_H, label, hint);
         control(ui)
@@ -92,7 +129,7 @@ fn centered_row<R>(ui: &mut egui::Ui, height: f32, add: impl FnOnce(&mut egui::U
 }
 
 /// An on/off switch. `label` names it for screen readers.
-fn toggle(ui: &mut egui::Ui, th: &Theme, on: &mut bool, label: &str) -> egui::Response {
+pub(super) fn toggle(ui: &mut egui::Ui, th: &Theme, on: &mut bool, label: &str) -> egui::Response {
     let (r, mut resp) = ui.allocate_exact_size(vec2(36.0, 20.0), Sense::click());
     if resp.clicked() {
         *on = !*on;
@@ -128,7 +165,7 @@ pub(super) fn toggle_row(ui: &mut egui::Ui, th: &Theme, value: &mut bool, label:
 }
 
 /// A theme's picture: its panels and a selected file row.
-fn theme_card(ui: &mut egui::Ui, th: &Theme, label: &str, width: f32, selected: bool, cur: &Theme) -> egui::Response {
+pub(super) fn theme_card(ui: &mut egui::Ui, th: &Theme, label: &str, width: f32, selected: bool, cur: &Theme) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 70.0), egui::Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label));
     let p = ui.painter();
@@ -155,7 +192,7 @@ fn theme_card(ui: &mut egui::Ui, th: &Theme, label: &str, width: f32, selected: 
 }
 
 /// Card width for a gallery with as many columns as fit, filling `width` exactly.
-fn gallery_card_width(width: f32, min: f32, gap: f32) -> f32 {
+pub(super) fn gallery_card_width(width: f32, min: f32, gap: f32) -> f32 {
     let cols = ((width + gap) / (min + gap)).floor().max(1.0);
     ((width + gap) / cols - gap).floor()
 }
@@ -172,7 +209,7 @@ fn card_outline(p: &egui::Painter, rect: Rect, radius: f32, selected: bool, hove
 }
 
 /// A terminal colour scheme's picture: a prompt and its colours, on its background.
-fn term_theme_card(ui: &mut egui::Ui, scheme: &Theme, label: &str, width: f32, selected: bool, cur: &Theme) -> egui::Response {
+pub(super) fn term_theme_card(ui: &mut egui::Ui, scheme: &Theme, label: &str, width: f32, selected: bool, cur: &Theme) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 76.0), Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label));
     let p = ui.painter_at(rect);
@@ -281,6 +318,97 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
 }
 
 /// Let the user pick an application; returns it ready to store as a program.
+/// The system's default browser, named.
+fn system_browser_label(ctx: &egui::Context) -> String {
+    match crate::system::defaultapps::system_app(ctx, "html") {
+        Some(Some(app)) => format!("{app} ({})", t("system default")),
+        _ => t("System default"),
+    }
+}
+
+/// A list of the browsers installed (and the system's default, `system`) that sets
+/// `value` to the program chosen. Returns whether it changed.
+fn browser_combo(ui: &mut egui::Ui, th: &Theme, id: &str, value: &mut String, system: &str, width: f32) -> bool {
+    use crate::system::defaultapps as apps;
+    let mut changed = false;
+    let chosen = value.trim().to_string();
+    let missing = apps::program_missing(&chosen);
+    let current = if chosen.is_empty() { system.to_string() } else { apps::program_name(&chosen) };
+    let text = if missing { RichText::new(&current).color(th.danger) } else { RichText::new(&current) };
+    let combo = egui::ComboBox::from_id_salt(id).selected_text(text).width(width).show_ui(ui, |ui| {
+        if ui.selectable_label(chosen.is_empty(), system).clicked() {
+            value.clear();
+            changed = true;
+        }
+        let found = apps::browsers();
+        for (name, program) in &found {
+            if ui.selectable_label(&chosen == program, name).clicked() {
+                *value = program.clone();
+                changed = true;
+            }
+        }
+        // A browser chosen with Other app… stays in the list.
+        if !chosen.is_empty() && !found.iter().any(|(_, p)| p == &chosen) {
+            let _ = ui.selectable_label(true, apps::program_name(&chosen)).on_hover_text(&chosen);
+        }
+        ui.separator();
+        if ui.selectable_label(false, t("Other app…")).clicked() {
+            if let Some(app) = pick_application() {
+                *value = app;
+                changed = true;
+            }
+        }
+    });
+    if missing {
+        combo.response.on_hover_text(t("This program was not found"));
+    }
+    changed && value.trim() != chosen
+}
+
+/// A list of `browser`'s profiles (read from its files) that sets `value` to the one
+/// chosen; empty: the browser's own choice. Greyed out for a browser without profiles.
+fn profile_combo(ui: &mut egui::Ui, th: &Theme, id: &str, browser: &str, value: &mut String, width: f32) -> bool {
+    use crate::system::browsers;
+    let mut changed = false;
+    if !browsers::has_profiles(browser) {
+        let why =
+            if browser.trim().is_empty() { t("Choose a browser to pick one of its profiles") } else { t("This browser's profiles cannot be chosen here") };
+        ui.add_enabled_ui(false, |ui| {
+            egui::ComboBox::from_id_salt(id).selected_text(t("Default profile")).width(width).show_ui(ui, |_| {});
+        })
+        .response
+        .on_disabled_hover_text(why);
+        return false;
+    }
+    let list = browsers::profiles(browser);
+    let cur = value.trim().to_string();
+    let found = list.iter().find(|p| p.id == cur);
+    let text = match (cur.is_empty(), found) {
+        (true, _) => RichText::new(t("Default profile")),
+        (false, Some(p)) => RichText::new(&p.name),
+        (false, None) => RichText::new(&cur).color(th.danger),
+    };
+    let combo = egui::ComboBox::from_id_salt(id).selected_text(text).width(width).show_ui(ui, |ui| {
+        if ui.selectable_label(cur.is_empty(), t("Default profile")).on_hover_text(t("The one the browser opens by itself")).clicked() {
+            value.clear();
+            changed = true;
+        }
+        for p in &list {
+            if ui.selectable_label(cur == p.id, &p.name).clicked() {
+                *value = p.id.clone();
+                changed = true;
+            }
+        }
+        if list.is_empty() {
+            ui.label(RichText::new(t("No profiles found")).color(th.weak));
+        }
+    });
+    if !cur.is_empty() && found.is_none() {
+        combo.response.on_hover_text(t("This profile was not found"));
+    }
+    changed
+}
+
 pub(super) fn pick_application() -> Option<String> {
     let mut dialog = rfd::FileDialog::new();
     if cfg!(target_os = "macos") {
@@ -720,7 +848,7 @@ impl App {
     }
 
     /// Open terminals follow the colour theme of the profile they were started from.
-    fn sync_terminal_profiles(&mut self) {
+    pub(super) fn sync_terminal_profiles(&mut self) {
         let profiles = self.cfg.terminal_profiles.clone();
         for pane in all_panes!(self) {
             let Some(term) = pane.tab_mut().term.as_mut() else { continue };
@@ -734,28 +862,7 @@ impl App {
         let mut changed = false;
         match self.settings_page {
             SettingsPage::Appearance => {
-                settings_section(ui, th, &t("Theme"), &t("Pick a theme. Changes apply instantly."));
-                card(ui, th, |ui| {
-                    ui.add_space(4.0);
-                    let card_w = gallery_card_width(ui.available_width(), 118.0, 8.0);
-                    ui.horizontal_wrapped(|ui| {
-                        ui.spacing_mut().item_spacing = egui::vec2(8.0, 8.0);
-                        let native = theme::native(ui.ctx().system_theme() == Some(egui::Theme::Dark));
-                        let sys_label = format!("{} · {}", t("System"), native.name);
-                        if theme_card(ui, native, &sys_label, card_w, self.cfg.theme == theme::SYSTEM, self.theme)
-                            .on_hover_text(t("Follow the operating system: native look, light or dark automatically"))
-                            .clicked()
-                        {
-                            self.set_theme(ui.ctx(), theme::SYSTEM);
-                        }
-                        for theme in theme::THEMES {
-                            if theme_card(ui, theme, theme.name, card_w, self.cfg.theme == theme.name, self.theme).clicked() {
-                                self.set_theme(ui.ctx(), theme.name);
-                            }
-                        }
-                    });
-                    ui.add_space(4.0);
-                });
+                changed |= self.theme_gallery(ui, th);
                 settings_section(ui, th, &t("Size"), "");
                 card(ui, th, |ui| {
                     row(ui, th, &t("UI scale"), &t("Zooms everything, not just the text."), |ui| {
@@ -1086,7 +1193,7 @@ impl App {
     /// Settings → Terminal → Links: the browser that opens web links, and the question
     /// before a link clicked in a terminal is opened.
     fn link_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
-        use crate::system::defaultapps as apps;
+        use crate::system::browsers;
         let mut changed = false;
         let key = if cfg!(target_os = "macos") { "⌘+Click" } else { "Ctrl+Click" };
         settings_section(
@@ -1095,43 +1202,16 @@ impl App {
             &t("Links"),
             &t("{key} on a link in a terminal opens it, also while a program there (vim, tmux, Claude Code) uses the mouse.").replace("{key}", key),
         );
-        let current = self.browser_label(ui.ctx());
-        let system = match apps::system_app(ui.ctx(), "html") {
-            Some(Some(app)) => format!("{app} ({})", t("system default")),
-            _ => t("System default"),
-        };
-        let missing = apps::program_missing(&self.cfg.browser);
+        let system = system_browser_label(ui.ctx());
         card(ui, th, |ui| {
             row(ui, th, &t("Web browser"), &t("Opens web links from terminals and the update check"), |ui| {
-                let text = if missing { RichText::new(&current).color(th.danger) } else { RichText::new(&current) };
-                let combo = egui::ComboBox::from_id_salt("browser").selected_text(text).width(240.0).show_ui(ui, |ui| {
-                    let chosen = self.cfg.browser.trim().to_string();
-                    if ui.selectable_label(chosen.is_empty(), &system).clicked() {
-                        self.cfg.browser.clear();
-                        changed = true;
-                    }
-                    let found = apps::browsers();
-                    for (name, program) in &found {
-                        if ui.selectable_label(&chosen == program, name).clicked() {
-                            self.cfg.browser = program.clone();
-                            changed = true;
-                        }
-                    }
-                    // A browser chosen with Other app… stays in the list.
-                    if !chosen.is_empty() && !found.iter().any(|(_, p)| p == &chosen) {
-                        let _ = ui.selectable_label(true, apps::program_name(&chosen)).on_hover_text(&chosen);
-                    }
-                    ui.separator();
-                    if ui.selectable_label(false, t("Other app…")).clicked() {
-                        if let Some(app) = pick_application() {
-                            self.cfg.browser = app;
-                            changed = true;
-                        }
-                    }
-                });
-                if missing {
-                    combo.response.on_hover_text(t("This program was not found"));
+                if browser_combo(ui, th, "browser", &mut self.cfg.browser, &system, 240.0) {
+                    self.cfg.browser_profile.clear();
+                    changed = true;
                 }
+            });
+            row(ui, th, &t("Profile"), &t("The browser's profile the links open in"), |ui| {
+                changed |= profile_combo(ui, th, "browser-profile", &self.cfg.browser, &mut self.cfg.browser_profile, 240.0);
             });
             row_line(ui, th);
             changed |= toggle_row(
@@ -1141,6 +1221,63 @@ impl App {
                 &t("Ask before opening a link"),
                 &t("Shows where the link goes first. The question can be turned off for one terminal until it closes."),
             );
+            row_line(ui, th);
+            let header = egui::CollapsingHeader::new(RichText::new(t("Advanced: a browser for each website")).color(th.text))
+                .id_salt("link-rules")
+                .default_open(!self.cfg.link_rules.is_empty());
+            header.show(ui, |ui| {
+                ui.label(
+                    RichText::new(t("Links to these websites open in their own browser and profile; the others in the ones above. A website covers its subdomains too (github.com: gist.github.com), and the most particular one wins."))
+                        .size(12.0)
+                        .color(th.weak),
+                );
+                ui.add_space(4.0);
+                let mut remove = None;
+                let n = self.cfg.link_rules.len();
+                for k in 0..n {
+                    let r = &mut self.cfg.link_rules[k];
+                    ui.horizontal(|ui| {
+                        let domain = ui.add(egui::TextEdit::singleline(&mut r.domain).desired_width(170.0).hint_text("github.com"));
+                        let shown = browsers::normalize_domain(&r.domain);
+                        if domain.lost_focus() && shown != r.domain.trim() {
+                            r.domain = shown.clone();
+                        }
+                        changed |= domain.changed() || domain.lost_focus();
+                        if browser_combo(ui, th, &format!("rule-browser-{k}"), &mut r.browser, &system, 170.0) {
+                            r.profile.clear();
+                            changed = true;
+                        }
+                        changed |= profile_combo(ui, th, &format!("rule-profile-{k}"), &r.browser, &mut r.profile, 140.0);
+                        if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(t("Remove")).clicked() {
+                            remove = Some(k);
+                        }
+                    });
+                }
+                if let Some(k) = remove {
+                    self.cfg.link_rules.remove(k);
+                    changed = true;
+                }
+                ui.horizontal(|ui| {
+                    if ui.button(format!("+ {}", t("Add website"))).clicked() {
+                        // Starts with the default browser, to change from there.
+                        let r = crate::config::LinkRule { domain: String::new(), browser: self.cfg.browser.clone(), profile: self.cfg.browser_profile.clone() };
+                        self.cfg.link_rules.push(r);
+                        changed = true;
+                    }
+                });
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(t("Try a link:")).color(th.weak));
+                    ui.add(egui::TextEdit::singleline(&mut self.link_try).desired_width(260.0).hint_text("https://gist.github.com/…"));
+                    let url = self.link_try.trim();
+                    if !url.is_empty() {
+                        let url = if url.contains("://") { url.to_string() } else { format!("https://{url}") };
+                        let (b, p) = self.link_browser(&url);
+                        let to = if browsers::link_host(&url).is_some() { super::opening::browser_name(ui.ctx(), &b, &p) } else { t("not a web link") };
+                        ui.label(RichText::new(format!("→ {to}")).strong());
+                    }
+                });
+            });
         });
         changed
     }
@@ -1519,27 +1656,7 @@ impl App {
             crate::terminal::view::preview(ui, shown, self.cfg.term_font_size, width);
             ui.add_space(6.0);
             ui.label(RichText::new(t("Colour theme")).font(bold(13.5)).color(th.strong()));
-            let gap = 8.0;
-            let card_w = gallery_card_width(width, 112.0, gap);
-            let mut pick: Option<String> = None;
-            ui.horizontal_wrapped(|ui| {
-                ui.spacing_mut().item_spacing = vec2(gap, gap);
-                if term_theme_card(ui, self.theme, &t("Same as the app"), card_w, current.is_empty(), th).clicked() {
-                    pick = Some(String::new());
-                }
-                // A theme from older settings that is not one of the schemes stays selectable.
-                let listed = theme::TERM_THEMES.iter().any(|s| s.name == current);
-                let legacy = (!current.is_empty() && !listed).then(|| theme::term_by_name(&current));
-                for s in legacy.into_iter().chain(theme::TERM_THEMES) {
-                    if term_theme_card(ui, s, s.name, card_w, current == s.name, th).clicked() {
-                        pick = Some(s.name.to_string());
-                    }
-                }
-            });
-            if let Some(name) = pick {
-                self.cfg.terminal_profiles[i].theme = name;
-                changed = true;
-            }
+            changed |= self.term_theme_gallery(ui, th, i, width);
         } else {
             ui.label(RichText::new(t("Colours and fonts are set in that terminal's own settings.")).size(12.0).color(th.weak));
         }
@@ -1586,9 +1703,15 @@ impl App {
             let cur = current.clone().map(|c| format!(" ({c})")).unwrap_or_default();
             options.push(("system".into(), format!("{}{cur}", t("System icon theme"))));
         }
-        for (k, v) in
-            [("matrix", "Matrix Finder"), ("adwaita", "Adwaita (GNOME)"), ("breeze", "Breeze (KDE Plasma)"), ("macos", "macOS"), ("windows", "Windows 11")]
-        {
+        for (k, v) in [
+            ("matrix", "Matrix Finder"),
+            ("material", "Material Icon Theme"),
+            ("fluent", "Fluent UI"),
+            ("adwaita", "Adwaita (GNOME)"),
+            ("breeze", "Breeze (KDE Plasma)"),
+            ("macos", "macOS"),
+            ("windows", "Windows 11"),
+        ] {
             options.push((k.into(), v.into()));
         }
         for n in installed {
@@ -1627,80 +1750,6 @@ impl App {
                 ui.end_row();
             }
         });
-        changed
-    }
-
-    /// Settings → Quick filters: the categories and their extensions.
-    pub(super) fn quick_filter_settings(&mut self, ui: &mut egui::Ui, th: &Theme) -> bool {
-        let mut changed = false;
-        ui.label(RichText::new(t("The funnel button of a file window shows only the kinds of file you tick (one or several). Folders stay visible, and the filter stays on while you browse. Add your own lists here.")).size(12.0).color(th.weak));
-        ui.add_space(6.0);
-        let mut frame = card_frame(th).begin(ui);
-        {
-            let ui = &mut frame.content_ui;
-            ui.set_width(ui.available_width());
-            let n = self.cfg.quick_filters.len();
-            let mut edit: Option<(usize, i32)> = None; // -1 up, 1 down, 0 delete
-                                                       // One width for every row (icon, name, count and buttons take ~310 px), so
-                                                       // the rows line up and never widen the page.
-            let ext_w = (ui.available_width() - 310.0).max(160.0);
-            for i in 0..n {
-                let q = &mut self.cfg.quick_filters[i];
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    let (r, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
-                    crate::ui::pane::quick_filter_icon(ui.painter(), r.shrink(5.0), &q.ext_list(), th);
-                    changed |= ui.add(egui::TextEdit::singleline(&mut q.name).desired_width(130.0).hint_text(t("Name"))).changed();
-                    changed |= ui
-                        .add(egui::TextEdit::singleline(&mut q.exts).desired_width(ext_w).hint_text(t("Extensions, e.g. jpg png gif")))
-                        .on_hover_text(t("Extensions separated by spaces or commas (dots are optional)"))
-                        .changed();
-                    let (cr, cresp) = ui.allocate_exact_size(egui::vec2(26.0, 24.0), egui::Sense::hover());
-                    ui.painter().text(cr.center(), egui::Align2::CENTER_CENTER, q.ext_list().len().to_string(), egui::FontId::proportional(11.5), th.weak);
-                    cresp.on_hover_text(t("Extensions"));
-                    if icons::icon_button(ui, 24.0, i > 0, th, |p, r, c| icons::chevron(p, r, 0, c)).on_hover_text(t("Move up")).clicked() {
-                        edit = Some((i, -1));
-                    }
-                    if icons::icon_button(ui, 24.0, i + 1 < n, th, |p, r, c| icons::chevron(p, r, 2, c)).on_hover_text(t("Move down")).clicked() {
-                        edit = Some((i, 1));
-                    }
-                    if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(t("Remove")).clicked() {
-                        edit = Some((i, 0));
-                    }
-                });
-            }
-            match edit {
-                Some((i, -1)) => self.cfg.quick_filters.swap(i, i - 1),
-                Some((i, 1)) => self.cfg.quick_filters.swap(i, i + 1),
-                Some((i, _)) => {
-                    self.cfg.quick_filters.remove(i);
-                }
-                None => {}
-            }
-            changed |= edit.is_some();
-            ui.add_space(6.0);
-            ui.horizontal_wrapped(|ui| {
-                if ui.button(format!("+ {}", t("New quick filter"))).clicked() {
-                    let name = crate::config::unused_quick_filter_name(&self.cfg.quick_filters, &t("New filter"));
-                    self.cfg.quick_filters.push(crate::config::QuickFilter::new(&name, ""));
-                    changed = true;
-                }
-                if ui
-                    .button(t("Restore the built-in filters"))
-                    .on_hover_text(t("Adds the built-in categories that are missing and resets their extensions"))
-                    .clicked()
-                {
-                    for d in crate::config::default_quick_filters() {
-                        match self.cfg.quick_filters.iter_mut().find(|q| q.name == d.name) {
-                            Some(q) => q.exts = d.exts,
-                            None => self.cfg.quick_filters.push(d),
-                        }
-                    }
-                    changed = true;
-                }
-            });
-        }
-        frame.end(ui);
         changed
     }
 

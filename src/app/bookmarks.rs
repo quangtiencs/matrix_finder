@@ -405,7 +405,12 @@ impl App {
         }
         top.end(ui);
 
-        settings_section(ui, th, &t("Bookmarks"), &t("Rename, reorder and pick icons. Put bookmarks into groups to keep them together."));
+        settings_section(
+            ui,
+            th,
+            &t("Bookmarks"),
+            &t("Rename them and pick icons. Drag a row by its handle to reorder it, or to move a bookmark into or out of a group."),
+        );
         let folders: Vec<(usize, String)> = self.cfg.bookmarks.iter().enumerate().filter(|(_, b)| b.folder).map(|(i, b)| (i, b.name.clone())).collect();
         let mut list = card_frame(th).begin(ui);
         let ui_outer = ui;
@@ -415,13 +420,16 @@ impl App {
         ui.add_space(6.0);
         let focus_last = std::mem::take(&mut self.bm_focus_last);
         // The location takes the width the rest of a row leaves (a row inside a folder is indented).
-        let path_w = (ui.available_width() - 413.0).max(120.0);
+        let path_w = (ui.available_width() - 433.0).max(120.0);
         let mut edit: Option<BmEdit> = None;
         let sys = self.cfg.bookmark_system_icons;
         let n = self.cfg.bookmarks.len();
         let mut paths = std::mem::take(&mut self.bookmark_paths);
         let (drives, show_hidden) = (&self.drives, self.cfg.show_hidden);
         let home = dirs::home_dir();
+        // Each row's place and its drag handle, to find where a dragged row is dropped.
+        let mut rows: Vec<(BmRow, egui::Rect)> = Vec::new();
+        let mut grips: Vec<((usize, Option<usize>), egui::Response)> = Vec::new();
         let mut row =
             |ui: &mut egui::Ui, b: &mut Bookmark, at: (usize, Option<usize>), count: usize, edit: &mut Option<BmEdit>, changed: &mut bool, focus: bool| {
                 ui.horizontal(|ui| {
@@ -429,6 +437,11 @@ impl App {
                     if at.1.is_some() {
                         ui.add_space(22.0);
                     }
+                    let (gr, _) = ui.allocate_exact_size(egui::vec2(14.0, 26.0), egui::Sense::hover());
+                    let grip = ui.interact(gr, egui::Id::new(("bm-grip", at)), egui::Sense::drag());
+                    let c = if grip.hovered() || grip.dragged() { th.text } else { th.weak };
+                    super::settings_ui::grip_dots(ui.painter(), gr.center(), c);
+                    let grip = if grip.dragged() { grip } else { grip.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(t("Drag to reorder")) };
                     if b.folder {
                         let (r, _) = ui.allocate_exact_size(egui::vec2(26.0, 26.0), egui::Sense::hover());
                         icons::bookmark_folder(ui.painter(), r.shrink(5.0), th.weak);
@@ -506,26 +519,38 @@ impl App {
                     if icons::icon_button(ui, 24.0, true, th, icons::mi_trash).on_hover_text(tip).clicked() {
                         *edit = Some(BmEdit::Delete(at));
                     }
-                });
+                    grip
+                })
             };
         for i in 0..n {
             let b = &mut self.cfg.bookmarks[i];
-            row(ui, b, (i, None), n, &mut edit, &mut changed, focus_last && i + 1 == n);
-            if b.folder {
-                let m = b.children.len();
+            let folder = b.folder;
+            let r = row(ui, b, (i, None), n, &mut edit, &mut changed, focus_last && i + 1 == n);
+            rows.push((BmRow::Top(i, folder), r.response.rect));
+            grips.push(((i, None), r.inner));
+            if folder {
+                let m = self.cfg.bookmarks[i].children.len();
                 for j in 0..m {
                     let c = &mut self.cfg.bookmarks[i].children[j];
-                    row(ui, c, (i, Some(j)), m, &mut edit, &mut changed, false);
+                    let r = row(ui, c, (i, Some(j)), m, &mut edit, &mut changed, false);
+                    rows.push((BmRow::Child(i, j), r.response.rect));
+                    grips.push(((i, Some(j)), r.inner));
                 }
                 if m == 0 {
-                    ui.horizontal(|ui| {
-                        ui.add_space(54.0);
-                        ui.label(RichText::new(t("Empty group: pick it in a bookmark's Group list")).size(11.5).color(th.weak));
+                    let r = ui.horizontal(|ui| {
+                        ui.add_space(74.0);
+                        ui.label(RichText::new(t("Empty group: drag a bookmark here or pick it in a bookmark's Group list")).size(11.5).color(th.weak));
                     });
+                    rows.push((BmRow::Empty(i), r.response.rect));
                 }
             }
         }
         self.bookmark_paths = paths;
+        if let Some((from, grip)) = grips.into_iter().find(|(_, g)| g.dragged() || g.drag_stopped()) {
+            if let Some(e) = self.bookmark_drag(ui, th, &rows, from, &grip) {
+                edit = Some(e);
+            }
+        }
         if let Some(e) = edit {
             apply_bookmark_edit(&mut self.cfg.bookmarks, e);
             changed = true;
@@ -535,6 +560,55 @@ impl App {
         }
         list.end(ui_outer);
         changed
+    }
+
+    /// A row of Settings → Bookmarks dragged by its handle: show where it goes (a line, the
+    /// row's name at the pointer) and, when it is let go there, the move to make. Let go
+    /// away from the list, it stays where it was.
+    fn bookmark_drag(
+        &self,
+        ui: &mut egui::Ui,
+        th: &Theme,
+        rows: &[(BmRow, egui::Rect)],
+        from: (usize, Option<usize>),
+        grip: &egui::Response,
+    ) -> Option<BmEdit> {
+        let list = &self.cfg.bookmarks;
+        let b = match from {
+            (i, None) => list.get(i)?,
+            (i, Some(j)) => list.get(i)?.children.get(j)?,
+        };
+        let group = from.1.is_none() && b.folder;
+        let area = rows.iter().fold(egui::Rect::NOTHING, |a, (_, r)| a.union(*r));
+        let pointer = ui.ctx().pointer_latest_pos()?;
+        let gap = ui.spacing().item_spacing.y;
+        let slot = Some(pointer)
+            .filter(|p| area.expand2(egui::vec2(40.0, 30.0)).contains(*p))
+            .and_then(|p| drop_slot(rows, group, p.y, gap))
+            .filter(|(s, ..)| !bm_same_place(from, *s));
+        let p = ui.painter();
+        if let Some((_, r)) = rows.iter().find(|(k, _)| k.at() == Some(from)) {
+            p.rect_stroke(r.expand(1.0), 6.0, egui::Stroke::new(1.0_f32, th.accent), egui::StrokeKind::Outside);
+        }
+        if let Some((_, y, indent)) = slot {
+            let x0 = area.left() + if indent { 22.0 } else { 0.0 };
+            p.circle_stroke(egui::pos2(x0 + 3.0, y), 3.0, egui::Stroke::new(2.0_f32, th.accent));
+            p.line_segment([egui::pos2(x0 + 6.0, y), egui::pos2(area.right(), y)], egui::Stroke::new(2.0_f32, th.accent));
+        }
+        let name = if b.name.is_empty() {
+            if b.folder {
+                t("Unnamed group")
+            } else {
+                b.path.clone()
+            }
+        } else {
+            b.name.clone()
+        };
+        super::settings_ui::drag_feedback(ui, grip, &name);
+        if grip.drag_stopped() {
+            return slot.map(|(s, ..)| BmEdit::Place(from, s));
+        }
+        None
     }
 
     pub(super) fn toggle_bookmark(&mut self, path: String, name: String) {
@@ -558,6 +632,124 @@ enum BmEdit {
     Delete((usize, Option<usize>)),
     /// Move a bookmark into a folder (top-level index) or out of its folder (`None`).
     MoveTo((usize, Option<usize>), Option<usize>),
+    /// Move a bookmark or group (dragged by its handle) to a place in the list.
+    Place((usize, Option<usize>), BmSlot),
+}
+
+/// A place in the bookmark list: before bookmark `index` of the top list (`group: None`)
+/// or of group `group`'s bookmarks; `index` may be the length (at the end).
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BmSlot {
+    group: Option<usize>,
+    index: usize,
+}
+
+/// A row of Settings → Bookmarks: a top-level bookmark or group (`true`: a group), a
+/// bookmark in group `.0`, or the note in an empty group.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum BmRow {
+    Top(usize, bool),
+    Child(usize, usize),
+    Empty(usize),
+}
+
+impl BmRow {
+    fn at(self) -> Option<(usize, Option<usize>)> {
+        match self {
+            BmRow::Top(i, _) => Some((i, None)),
+            BmRow::Child(i, j) => Some((i, Some(j))),
+            BmRow::Empty(_) => None,
+        }
+    }
+}
+
+/// Where a row dragged to height `y` goes, with the height of the line that shows it and
+/// whether that line is indented (inside a group). Over the upper half of a row it goes
+/// before that row, over the lower half after it; after a group's own row is the start of
+/// the group. A group (`group`) only moves among the top-level rows, with its bookmarks.
+/// `gap` is the space between rows, the line is drawn in its middle.
+fn drop_slot(rows: &[(BmRow, egui::Rect)], group: bool, y: f32, gap: f32) -> Option<(BmSlot, f32, bool)> {
+    let last = rows.last()?.1;
+    let top = |index| BmSlot { group: None, index };
+    let inside = |g, index| BmSlot { group: Some(g), index };
+    let n = rows.iter().filter(|(r, _)| matches!(r, BmRow::Top(..))).count();
+    let (before, after) = (|r: egui::Rect| r.top() - gap / 2.0, |r: egui::Rect| r.bottom() + gap / 2.0);
+    if group {
+        let starts: Vec<(usize, egui::Rect)> = rows.iter().filter_map(|(k, r)| if let BmRow::Top(i, _) = k { Some((*i, *r)) } else { None }).collect();
+        for (k, (i, r)) in starts.iter().enumerate() {
+            // A group's block reaches to the next top-level row.
+            let end = starts.get(k + 1).map_or(last.bottom(), |(_, next)| next.top());
+            if y < (r.top() + end) / 2.0 {
+                return Some((top(*i), before(*r), false));
+            }
+        }
+        return Some((top(n), after(last), false));
+    }
+    let Some(&(row, r)) = rows.iter().find(|(_, r)| y < r.bottom()) else {
+        // Below the list: after its last row, or at the very end when well below it.
+        return match rows.last()? {
+            (BmRow::Top(i, false), r) => Some((top(i + 1), after(*r), false)),
+            (_, r) if y > r.bottom() + 8.0 => Some((top(n), after(*r), false)),
+            (BmRow::Child(i, j), r) => Some((inside(*i, j + 1), after(*r), true)),
+            (BmRow::Empty(i), r) => Some((inside(*i, 0), r.center().y, true)),
+            (BmRow::Top(i, true), r) => Some((inside(*i, 0), after(*r), true)),
+        };
+    };
+    let upper = y < r.center().y;
+    Some(match (row, upper) {
+        (BmRow::Top(i, _), true) => (top(i), before(r), false),
+        (BmRow::Top(i, false), false) => (top(i + 1), after(r), false),
+        (BmRow::Top(i, true), false) => (inside(i, 0), after(r), true),
+        (BmRow::Child(i, j), true) => (inside(i, j), before(r), true),
+        (BmRow::Child(i, j), false) => (inside(i, j + 1), after(r), true),
+        (BmRow::Empty(i), _) => (inside(i, 0), r.center().y, true),
+    })
+}
+
+/// Whether moving the row at `from` to `slot` leaves it where it is.
+fn bm_same_place(from: (usize, Option<usize>), slot: BmSlot) -> bool {
+    match from {
+        (i, None) => slot.group.is_none() && (slot.index == i || slot.index == i + 1),
+        (g, Some(j)) => slot.group == Some(g) && (slot.index == j || slot.index == j + 1),
+    }
+}
+
+/// Move the bookmark or group at `from` to `slot` (a place counted before the move).
+/// A group cannot go into a group; out-of-range places are ignored.
+fn place_bookmark(list: &mut Vec<Bookmark>, from: (usize, Option<usize>), slot: BmSlot) {
+    let valid = match from {
+        (i, None) => i < list.len(),
+        (i, Some(j)) => list.get(i).is_some_and(|b| b.folder && j < b.children.len()),
+    };
+    if !valid {
+        return;
+    }
+    let target_ok = match slot.group {
+        None => slot.index <= list.len(),
+        Some(g) => list.get(g).is_some_and(|f| f.folder && slot.index <= f.children.len()) && !(from.1.is_none() && (list[from.0].folder || from.0 == g)),
+    };
+    if !target_ok || bm_same_place(from, slot) {
+        return;
+    }
+    let b = match from {
+        (i, Some(j)) => list[i].children.remove(j),
+        (i, None) => list.remove(i),
+    };
+    match slot.group {
+        None => {
+            let k = if from.1.is_none() && slot.index > from.0 { slot.index - 1 } else { slot.index };
+            list.insert(k.min(list.len()), b);
+        }
+        Some(g) => {
+            let g = if from.1.is_none() && g > from.0 { g - 1 } else { g };
+            let k = match from {
+                (i, Some(j)) if i == g && slot.index > j => slot.index - 1,
+                _ => slot.index,
+            };
+            let c = &mut list[g].children;
+            c.insert(k.min(c.len()), b);
+        }
+    }
 }
 
 fn apply_bookmark_edit(list: &mut Vec<Bookmark>, e: BmEdit) {
@@ -588,6 +780,7 @@ fn apply_bookmark_edit(list: &mut Vec<Bookmark>, e: BmEdit) {
                 }
             }
         }
+        BmEdit::Place(from, slot) => place_bookmark(list, from, slot),
         _ => {}
     }
 }
@@ -628,5 +821,75 @@ mod tests {
         assert_eq!(names(&l), ["a", "b", "c"]);
         apply_bookmark_edit(&mut l, BmEdit::Delete((1, None)));
         assert_eq!(names(&l), ["a", "c"]);
+    }
+
+    fn slot(group: Option<usize>, index: usize) -> BmSlot {
+        BmSlot { group, index }
+    }
+
+    #[test]
+    fn dragged_bookmarks_go_where_they_are_dropped() {
+        let start = || vec![Bookmark::new("a", "/a"), Bookmark::new("b", "/b"), Bookmark::new_folder("F"), Bookmark::new("c", "/c")];
+        let moved = |from, to| {
+            let mut l = start();
+            l[2].children = vec![Bookmark::new("x", "/x"), Bookmark::new("y", "/y")];
+            apply_bookmark_edit(&mut l, BmEdit::Place(from, to));
+            names(&l)
+        };
+        // Within the top list, both ways.
+        assert_eq!(moved((0, None), slot(None, 2)), ["b", "a", "[F: x y]", "c"]);
+        assert_eq!(moved((3, None), slot(None, 0)), ["c", "a", "b", "[F: x y]"]);
+        assert_eq!(moved((0, None), slot(None, 4)), ["b", "[F: x y]", "c", "a"], "to the end");
+        // A group moves with its bookmarks.
+        assert_eq!(moved((2, None), slot(None, 0)), ["[F: x y]", "a", "b", "c"]);
+        // Into a group (it is after the bookmark: its index shifts), out of it, within it.
+        assert_eq!(moved((0, None), slot(Some(2), 1)), ["b", "[F: x a y]", "c"]);
+        assert_eq!(moved((3, None), slot(Some(2), 0)), ["a", "b", "[F: c x y]"]);
+        assert_eq!(moved((2, Some(1)), slot(None, 0)), ["y", "a", "b", "[F: x]", "c"]);
+        assert_eq!(moved((2, Some(0)), slot(None, 3)), ["a", "b", "[F: y]", "x", "c"], "right after the group");
+        assert_eq!(moved((2, Some(0)), slot(Some(2), 2)), ["a", "b", "[F: y x]", "c"]);
+        // Nothing happens: the same place, a group into a group, places that do not exist.
+        let same = names(&{
+            let mut l = start();
+            l[2].children = vec![Bookmark::new("x", "/x"), Bookmark::new("y", "/y")];
+            l
+        });
+        for (from, to) in [
+            ((1, None), slot(None, 1)),
+            ((1, None), slot(None, 2)),
+            ((2, Some(0)), slot(Some(2), 1)),
+            ((2, None), slot(Some(2), 0)),
+            ((0, None), slot(Some(1), 0)),
+            ((9, None), slot(None, 0)),
+            ((2, Some(5)), slot(None, 0)),
+            ((0, None), slot(None, 9)),
+            ((0, None), slot(Some(2), 9)),
+        ] {
+            assert_eq!(moved(from, to), same, "{from:?} → {to:?}");
+        }
+    }
+
+    #[test]
+    fn the_drop_place_follows_the_pointer() {
+        // Rows 20 high with 4 between: a, F, x (in F), the note of the empty group E, b.
+        let kinds = [BmRow::Top(0, false), BmRow::Top(1, true), BmRow::Child(1, 0), BmRow::Top(2, true), BmRow::Empty(2), BmRow::Top(3, false)];
+        let rows: Vec<(BmRow, egui::Rect)> =
+            kinds.iter().enumerate().map(|(k, r)| (*r, egui::Rect::from_min_size(egui::pos2(0.0, k as f32 * 24.0), egui::vec2(300.0, 20.0)))).collect();
+        let at = |group, y| drop_slot(&rows, group, y, 4.0).map(|(s, line, indent)| (s.group, s.index, line, indent));
+        assert_eq!(at(false, -30.0), Some((None, 0, -2.0, false)), "above the list: first");
+        assert_eq!(at(false, 5.0), Some((None, 0, -2.0, false)), "upper half of a: before it");
+        assert_eq!(at(false, 15.0), Some((None, 1, 22.0, false)), "lower half of a: after it");
+        assert_eq!(at(false, 40.0), Some((Some(1), 0, 46.0, true)), "lower half of a group's row: its start");
+        assert_eq!(at(false, 64.0), Some((Some(1), 1, 70.0, true)), "lower half of its last bookmark: its end");
+        assert_eq!(at(false, 75.0), Some((None, 2, 70.0, false)), "upper half of the next row: after the group");
+        assert_eq!(at(false, 100.0), Some((Some(2), 0, 106.0, true)), "an empty group's note: into it");
+        assert_eq!(at(false, 125.0), Some((None, 3, 118.0, false)), "before b");
+        assert_eq!(at(false, 135.0), Some((None, 4, 142.0, false)), "after b, the last");
+        assert_eq!(at(false, 300.0), Some((None, 4, 142.0, false)), "below the list: the end");
+        // A group only goes between top-level rows: F's block is rows 24..72.
+        assert_eq!(at(true, 40.0), Some((None, 1, 22.0, false)));
+        assert_eq!(at(true, 60.0), Some((None, 2, 70.0, false)), "lower half of F with x: after it");
+        assert_eq!(at(true, 300.0), Some((None, 4, 142.0, false)));
+        assert_eq!(drop_slot(&[], false, 0.0, 4.0), None);
     }
 }

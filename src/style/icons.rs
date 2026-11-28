@@ -14,51 +14,92 @@ pub enum FileKind {
     Audio,
     Archive,
     Code,
+    /// Plain text, Markdown, logs.
+    Text,
+    /// Word processor documents and e-books.
     Doc,
+    /// Spreadsheets and comma- or tab-separated tables.
+    Sheet,
+    /// Presentations.
+    Slides,
     Pdf,
     Exec,
+    /// Disk images.
+    Disk,
+    Font,
     Data,
     Other,
 }
 
 pub fn kind_of(ext: &str) -> FileKind {
     match ext {
-        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tif" | "tiff" | "heic" | "avif" | "psd" => FileKind::Image,
-        "mp4" | "mkv" | "avi" | "mov" | "webm" | "wmv" | "m4v" => FileKind::Video,
-        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" => FileKind::Audio,
-        "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "xz" | "txz" | "zst" | "tzst" | "bz2" | "jar" | "apk" | "cbz" | "whl" => FileKind::Archive,
-        "rs" | "py" | "js" | "mjs" | "ts" | "tsx" | "jsx" | "go" | "c" | "h" | "cpp" | "hpp" | "cc" | "java" | "kt" | "cs" | "rb" | "php" | "swift" | "lua"
-        | "html" | "css" | "scss" | "vue" | "svelte" | "zig" | "dart" | "scala" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "sql" | "hs" | "ex" | "exs" => {
-            FileKind::Code
-        }
-        "md" | "markdown" | "txt" | "rst" | "doc" | "docx" | "odt" | "rtf" | "pages" | "log" => FileKind::Doc,
+        "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "svg" | "ico" | "tif" | "tiff" | "heic" | "heif" | "avif" | "psd" | "jxl" | "raw" | "cr2" | "cr3"
+        | "nef" | "arw" | "dng" | "orf" | "rw2" | "raf" => FileKind::Image,
+        "mp4" | "mkv" | "avi" | "mov" | "webm" | "wmv" | "m4v" | "mpg" | "mpeg" | "flv" | "3gp" => FileKind::Video,
+        "mp3" | "flac" | "wav" | "ogg" | "m4a" | "aac" | "opus" | "aiff" | "aif" | "wma" | "mid" | "midi" => FileKind::Audio,
+        "zip" | "7z" | "rar" | "tar" | "gz" | "tgz" | "xz" | "txz" | "zst" | "tzst" | "bz2" | "tbz2" | "lz" | "lzma" | "jar" | "apk" | "cbz" | "cbr"
+        | "whl" | "crate" | "gem" => FileKind::Archive,
+        "rs" | "py" | "js" | "mjs" | "cjs" | "ts" | "tsx" | "jsx" | "go" | "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "java" | "kt" | "kts" | "cs" | "rb"
+        | "php" | "swift" | "lua" | "html" | "htm" | "css" | "scss" | "sass" | "less" | "vue" | "svelte" | "zig" | "dart" | "scala" | "sh" | "bash" | "zsh"
+        | "fish" | "ps1" | "sql" | "hs" | "ex" | "exs" | "erl" | "clj" | "jl" | "r" | "m" | "mm" | "pl" | "nim" | "v" | "sv" | "vhdl" | "f90" | "asm" | "s"
+        | "ipynb" | "makefile" | "cmake" | "gradle" | "nix" => FileKind::Code,
+        "md" | "markdown" | "txt" | "rst" | "log" | "tex" | "org" | "adoc" | "nfo" | "srt" | "vtt" => FileKind::Text,
+        "doc" | "docx" | "odt" | "rtf" | "pages" | "epub" | "mobi" | "djvu" => FileKind::Doc,
+        "xls" | "xlsx" | "xlsm" | "xlsb" | "ods" | "numbers" | "csv" | "tsv" => FileKind::Sheet,
+        // Not `.key`: a Keynote document is a folder on macOS; a `.key` file is a private key.
+        "ppt" | "pptx" | "odp" => FileKind::Slides,
         "pdf" => FileKind::Pdf,
-        "exe" | "msi" | "app" | "bat" | "cmd" | "appimage" | "deb" | "rpm" | "dmg" | "pkg" | "bin" => FileKind::Exec,
-        "json" | "toml" | "yaml" | "yml" | "xml" | "csv" | "tsv" | "parquet" | "pq" | "avro" | "xlsm" | "xlsb" | "ini" | "cfg" | "conf" | "lock" | "db"
-        | "sqlite" | "xls" | "xlsx" | "ods" | "geojson" | "geojsonl" | "wkt" | "wkb" | "h5" | "hdf5" | "npy" | "npz" | "safetensors" | "onnx" | "feather"
-        | "arrow" => FileKind::Data,
+        "exe" | "msi" | "app" | "bat" | "cmd" | "appimage" | "deb" | "rpm" | "pkg" | "bin" | "run" | "com" | "flatpak" | "snap" => FileKind::Exec,
+        "iso" | "dmg" | "img" | "vhd" | "vhdx" | "vmdk" | "qcow2" | "toast" => FileKind::Disk,
+        "ttf" | "otf" | "woff" | "woff2" | "ttc" | "pfb" => FileKind::Font,
+        "json" | "jsonl" | "ndjson" | "toml" | "yaml" | "yml" | "xml" | "parquet" | "pq" | "avro" | "orc" | "ini" | "cfg" | "conf" | "env" | "lock" | "db"
+        | "sqlite" | "sqlite3" | "duckdb" | "geojson" | "geojsonl" | "wkt" | "wkb" | "shp" | "gpkg" | "kml" | "h5" | "hdf5" | "nc" | "npy" | "npz"
+        | "safetensors" | "onnx" | "pt" | "pth" | "ckpt" | "gguf" | "pkl" | "feather" | "arrow" | "mat" | "dta" | "sav" | "rds" => FileKind::Data,
         _ => FileKind::Other,
     }
+}
+
+/// The short label a large icon shows for its file: the extension, up to 4 letters.
+fn ext_label(ext: &str) -> Option<String> {
+    let e = ext.trim_start_matches('.');
+    (!e.is_empty() && e.chars().count() <= 4 && e.chars().all(|c| c.is_ascii_alphanumeric())).then(|| e.to_ascii_uppercase())
 }
 
 pub fn kind_color(k: FileKind, th: &Theme) -> Color32 {
     // Muted, harmonious hues (similar lightness) so the list stays calm.
     let c = match k {
-        FileKind::Image => Color32::from_rgb(0x7f, 0xc4, 0xa4),
-        FileKind::Video => Color32::from_rgb(0xe0, 0x8a, 0x92),
-        FileKind::Audio => Color32::from_rgb(0xd6, 0x94, 0xc0),
+        FileKind::Image => Color32::from_rgb(0x6f, 0xc2, 0x9b),
+        FileKind::Video => Color32::from_rgb(0xe0, 0x84, 0x8e),
+        FileKind::Audio => Color32::from_rgb(0xd0, 0x8c, 0xc8),
         FileKind::Archive => th.archive,
         FileKind::Code => Color32::from_rgb(0x8c, 0xaa, 0xee),
-        FileKind::Doc => Color32::from_rgb(0xe2, 0xc0, 0x7e),
-        FileKind::Pdf => Color32::from_rgb(0xe5, 0x8a, 0x80),
+        FileKind::Text => Color32::from_rgb(0xa8, 0xb0, 0xbe),
+        FileKind::Doc => Color32::from_rgb(0x6f, 0x9c, 0xf0),
+        FileKind::Sheet => Color32::from_rgb(0x5c, 0xbf, 0x7e),
+        FileKind::Slides => Color32::from_rgb(0xf0, 0x9a, 0x5e),
+        FileKind::Pdf => Color32::from_rgb(0xe8, 0x6a, 0x62),
         FileKind::Exec => Color32::from_rgb(0xa3, 0xa9, 0xb8),
-        FileKind::Data => Color32::from_rgb(0x7c, 0xc3, 0xcf),
+        FileKind::Disk => Color32::from_rgb(0x9a, 0xa6, 0xc4),
+        FileKind::Font => Color32::from_rgb(0xb8, 0x9c, 0xe8),
+        FileKind::Data => Color32::from_rgb(0x6c, 0xc0, 0xcc),
         FileKind::Other => th.weak,
     };
     if th.dark {
         c
     } else {
         c.lerp_to_gamma(Color32::BLACK, 0.22)
+    }
+}
+
+/// The colour of a kind's symbol and label on white paper: as `kind_color` on a light
+/// theme, whatever the theme (the paper is white in both).
+fn ink(k: FileKind, th: &Theme) -> Color32 {
+    let c = kind_color(k, th);
+    let c = if th.dark { c.lerp_to_gamma(Color32::BLACK, 0.22) } else { c };
+    if k == FileKind::Other {
+        Color32::from_rgb(0x8a, 0x8f, 0x99)
+    } else {
+        c
     }
 }
 
@@ -71,6 +112,33 @@ pub fn folder(p: &Painter, r: Rect, color: Color32) {
     p.rect_filled(body, w * 0.1, color.gamma_multiply(0.8));
     let front = Rect::from_min_max(body.min + vec2(0.0, w * 0.12), body.max);
     p.rect_filled(front, w * 0.1, color);
+}
+
+/// Document page with a folded corner (the Matrix Finder style: coloured paper). A large
+/// one shows its kind's symbol and its extension.
+fn page_matrix(p: &Painter, r: Rect, color: Color32, th: &Theme, kind: FileKind, ext: &str) {
+    let w = r.width();
+    if w < 28.0 {
+        return page(p, r, color, th);
+    }
+    let x0 = r.left() + w * 0.16;
+    let x1 = r.right() - w * 0.16;
+    let y0 = r.top() + w * 0.04;
+    let y1 = r.bottom() - w * 0.04;
+    let fold = w * 0.24;
+    let body = vec![pos2(x0, y0), pos2(x1 - fold, y0), pos2(x1, y0 + fold), pos2(x1, y1), pos2(x0, y1)];
+    p.add(Shape::convex_polygon(body, color, Stroke::NONE));
+    let corner = vec![pos2(x1 - fold, y0), pos2(x1 - fold, y0 + fold), pos2(x1, y0 + fold)];
+    p.add(Shape::convex_polygon(corner, Color32::from_white_alpha(if th.dark { 110 } else { 150 }), Stroke::NONE));
+    let on = Color32::from_white_alpha(235);
+    let label = if kind == FileKind::Pdf { None } else { ext_label(ext) };
+    let has_label = label.is_some();
+    let g = Rect::from_center_size(pos2((x0 + x1) / 2.0, r.top() + w * if has_label { 0.47 } else { 0.56 }), vec2(w * 0.38, w * 0.34));
+    kind_glyph(p, g, kind, on);
+    if let Some(l) = label {
+        let size = (w * 0.15).clamp(7.0, 13.0);
+        p.text(pos2((x0 + x1) / 2.0, y1 - w * 0.13), egui::Align2::CENTER_CENTER, l, egui::FontId::new(size, egui::FontFamily::Name("bold".into())), on);
+    }
 }
 
 /// Document page with a folded corner.
@@ -125,9 +193,33 @@ pub enum IconPack {
     Breeze,
     MacOS,
     Windows,
+    /// Material Icon Theme (bundled SVGs, `iconsets`).
+    Material,
+    /// Fluent UI System Icons (bundled SVGs, `iconsets`).
+    Fluent,
 }
 
 impl IconPack {
+    pub const ALL: [IconPack; 7] =
+        [IconPack::Matrix, IconPack::Adwaita, IconPack::Breeze, IconPack::MacOS, IconPack::Windows, IconPack::Material, IconPack::Fluent];
+
+    /// The name a saved theme uses for this style.
+    pub fn key(self) -> &'static str {
+        match self {
+            IconPack::Matrix => "matrix",
+            IconPack::Adwaita => "adwaita",
+            IconPack::Breeze => "breeze",
+            IconPack::MacOS => "macos",
+            IconPack::Windows => "windows",
+            IconPack::Material => "material",
+            IconPack::Fluent => "fluent",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<IconPack> {
+        Self::ALL.into_iter().find(|p| p.key() == key)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             IconPack::Matrix => "Matrix Finder",
@@ -135,6 +227,8 @@ impl IconPack {
             IconPack::Breeze => "Breeze (KDE Plasma)",
             IconPack::MacOS => "macOS",
             IconPack::Windows => "Windows 11",
+            IconPack::Material => "Material Icon Theme",
+            IconPack::Fluent => "Fluent UI",
         }
     }
 }
@@ -241,11 +335,19 @@ pub fn file_icon_with(set: &IconSet, p: &Painter, r: Rect, name: &str, is_dir: b
         }
     }
     if !done {
+        let bundled = match set.pack {
+            IconPack::Material => Some(crate::style::iconsets::Set::Material),
+            IconPack::Fluent => Some(crate::style::iconsets::Set::Fluent),
+            _ => None,
+        };
+        done = bundled.is_some_and(|b| crate::style::iconsets::draw(b, p, r, name, is_dir, ext, th));
+    }
+    if !done {
         if is_dir {
             folder_styled(p, r, set.pack, th);
         } else {
             let k = kind_of(ext);
-            page_styled(p, r, kind_color(k, th), set.pack, th, k);
+            page_styled(p, r, kind_color(k, th), set.pack, th, k, ext);
         }
     }
     if is_link {
@@ -272,127 +374,295 @@ pub fn drive_icon(p: &Painter, r: Rect, th: &Theme) {
 
 fn folder_styled(p: &Painter, r: Rect, pack: IconPack, th: &Theme) {
     let w = r.width();
+    if pack == IconPack::Breeze {
+        return folder_breeze(p, r);
+    }
+    let rgb = Color32::from_rgb;
+    // Back (with its tab), front, a light line along the front's top edge.
     let (back, front, highlight) = match pack {
-        IconPack::Matrix => return folder(p, r, th.dir),
-        IconPack::Adwaita => (Color32::from_rgb(0x43, 0x8d, 0xe6), Color32::from_rgb(0x62, 0xa0, 0xea), Some(Color32::from_rgb(0x99, 0xc1, 0xf1))),
-        IconPack::Breeze => (Color32::from_rgb(0x1d, 0x99, 0xf3), Color32::from_rgb(0x3d, 0xae, 0xe9), None),
-        IconPack::MacOS => (Color32::from_rgb(0x4a, 0xa3, 0xe6), Color32::from_rgb(0x74, 0xbe, 0xf4), Some(Color32::from_rgb(0xa6, 0xd6, 0xfa))),
-        IconPack::Windows => (Color32::from_rgb(0xe8, 0xa3, 0x17), Color32::from_rgb(0xff, 0xc8, 0x3d), Some(Color32::from_rgb(0xff, 0xdf, 0x7e))),
+        IconPack::Matrix | IconPack::Material | IconPack::Fluent => {
+            let d = th.dir;
+            (d.lerp_to_gamma(Color32::BLACK, 0.22), d, Some(d.lerp_to_gamma(Color32::WHITE, 0.35)))
+        }
+        IconPack::Adwaita => (rgb(0x35, 0x84, 0xe4), rgb(0x62, 0xa0, 0xea), Some(rgb(0x99, 0xc1, 0xf1))),
+        IconPack::Breeze => (rgb(0x14, 0x7e, 0xc9), rgb(0x3d, 0xae, 0xe9), Some(rgb(0x6f, 0xc5, 0xf2))),
+        IconPack::MacOS => (rgb(0x4a, 0x9c, 0xe0), rgb(0x76, 0xbd, 0xf5), Some(rgb(0xa9, 0xd7, 0xfb))),
+        IconPack::Windows => (rgb(0xe0, 0x9a, 0x12), rgb(0xff, 0xc8, 0x3d), Some(rgb(0xff, 0xe0, 0x8a))),
     };
     let round = match pack {
-        IconPack::Breeze => 0.05,
-        IconPack::Windows => 0.08,
-        _ => 0.12,
+        IconPack::Breeze => 0.03,
+        IconPack::Windows => 0.07,
+        IconPack::MacOS => 0.1,
+        _ => 0.09,
     };
-    // back with tab
-    let tab = Rect::from_min_size(r.min + vec2(w * 0.06, w * 0.14), vec2(w * 0.4, w * 0.22));
-    p.rect_filled(tab, w * round, back);
-    let body = Rect::from_min_max(r.min + vec2(w * 0.06, w * 0.24), r.max - vec2(w * 0.06, w * 0.12));
-    p.rect_filled(body, w * round, back);
-    // front
+    let rr = (w * round).max(1.0);
+    let tab_w = if pack == IconPack::MacOS { 0.34 } else { 0.4 };
+    let tab = Rect::from_min_size(r.min + vec2(w * 0.06, w * 0.13), vec2(w * tab_w, w * 0.2));
+    p.rect_filled(tab, rr, back);
+    let body = Rect::from_min_max(r.min + vec2(w * 0.06, w * 0.2), r.max - vec2(w * 0.06, w * 0.12));
+    p.rect_filled(body, rr, back);
+    if pack == IconPack::Windows && w >= 20.0 {
+        // A sheet of paper sticking out of the folder.
+        let sheet = Rect::from_min_max(body.min + vec2(w * 0.08, w * 0.06), pos2(body.right() - w * 0.08, body.bottom()));
+        p.rect_filled(sheet, rr, Color32::from_rgb(0xfa, 0xfa, 0xfa));
+    }
     let front_r = Rect::from_min_max(body.min + vec2(0.0, w * 0.13), body.max);
-    p.rect_filled(front_r, w * round, front);
+    p.rect_filled(front_r, rr, front);
     if let Some(h) = highlight {
-        let line = Rect::from_min_size(front_r.min + vec2(w * 0.04, 0.0), vec2(front_r.width() - w * 0.08, (w * 0.06).max(1.0)));
+        let line = Rect::from_min_size(front_r.min + vec2(rr, 0.0), vec2(front_r.width() - 2.0 * rr, (w * 0.05).max(1.0)));
         p.rect_filled(line, 0.0, h);
     }
 }
 
-fn page_styled(p: &Painter, r: Rect, color: Color32, pack: IconPack, th: &Theme, kind: FileKind) {
-    if pack == IconPack::Matrix {
-        return page(p, r, color, th);
-    }
+/// Breeze's folder: flat blue, square-ish corners, no highlight.
+fn folder_breeze(p: &Painter, r: Rect) {
     let w = r.width();
-    let x0 = r.left() + w * 0.13;
-    let x1 = r.right() - w * 0.13;
-    let y0 = r.top() + w * 0.02;
-    let y1 = r.bottom() - w * 0.02;
+    let (back, front) = (Color32::from_rgb(0x1d, 0x99, 0xf3), Color32::from_rgb(0x3d, 0xae, 0xe9));
+    let rr = w * 0.05;
+    p.rect_filled(Rect::from_min_size(r.min + vec2(w * 0.06, w * 0.14), vec2(w * 0.4, w * 0.22)), rr, back);
+    let body = Rect::from_min_max(r.min + vec2(w * 0.06, w * 0.24), r.max - vec2(w * 0.06, w * 0.12));
+    p.rect_filled(body, rr, back);
+    p.rect_filled(Rect::from_min_max(body.min + vec2(0.0, w * 0.13), body.max), rr, front);
+}
+
+/// Breeze's document: square paper, the fold in the kind's colour, the kind's symbol in
+/// that colour in the middle.
+fn page_breeze(p: &Painter, r: Rect, color: Color32, th: &Theme, kind: FileKind) {
+    let w = r.width();
+    let (x0, x1) = (r.left() + w * 0.13, r.right() - w * 0.13);
+    let (y0, y1) = (r.top() + w * 0.02, r.bottom() - w * 0.02);
     let fold = w * 0.27;
-    let (paper, edge) = if th.dark && pack != IconPack::MacOS {
+    let (paper, edge) = if th.dark {
         (Color32::from_rgb(0xf2, 0xf2, 0xf2), Color32::from_rgb(0x8a, 0x8a, 0x8a))
     } else {
         (Color32::WHITE, Color32::from_rgb(0xb4, 0xb4, 0xba))
     };
-    let radius_fudge = if pack == IconPack::Breeze { 0.0 } else { 0.5 };
     let pts = vec![pos2(x0, y0), pos2(x1 - fold, y0), pos2(x1, y0 + fold), pos2(x1, y1), pos2(x0, y1)];
-    p.add(Shape::convex_polygon(pts, paper, Stroke::new(1.0_f32 - radius_fudge * 0.2, edge)));
+    p.add(Shape::convex_polygon(pts, paper, Stroke::new(1.0_f32, edge)));
     let corner = vec![pos2(x1 - fold, y0), pos2(x1 - fold, y0 + fold), pos2(x1, y0 + fold)];
-    let corner_fill = match pack {
-        IconPack::Breeze | IconPack::Windows => color,
-        _ => Color32::from_rgb(0xdc, 0xdc, 0xe0),
-    };
-    p.add(Shape::convex_polygon(corner, corner_fill, Stroke::new(1.0_f32, edge)));
+    p.add(Shape::convex_polygon(corner, color, Stroke::new(1.0_f32, edge)));
     let g = Rect::from_center_size(pos2((x0 + x1) / 2.0, r.top() + w * 0.62), vec2(w * 0.46, w * 0.42));
     kind_glyph(p, g, kind, color);
+}
+
+/// The paper of a document in the desktop styles: its outline with a folded corner (the
+/// other three corners rounded by `round`), and the fold.
+fn paper_shape(r: Rect, fold: f32, round: f32) -> (Vec<Pos2>, Vec<Pos2>) {
+    let arc = |c: Pos2, from: f32, pts: &mut Vec<Pos2>| {
+        for k in 0..=4 {
+            let a = from + std::f32::consts::FRAC_PI_2 * k as f32 / 4.0;
+            pts.push(c + vec2(a.cos(), a.sin()) * round);
+        }
+    };
+    let q = std::f32::consts::FRAC_PI_2;
+    let mut pts = Vec::with_capacity(18);
+    // Clockwise from the top left (y grows downwards).
+    if round > 0.5 {
+        arc(pos2(r.left() + round, r.top() + round), 2.0 * q, &mut pts);
+    } else {
+        pts.push(r.left_top());
+    }
+    pts.push(pos2(r.right() - fold, r.top()));
+    pts.push(pos2(r.right(), r.top() + fold));
+    if round > 0.5 {
+        arc(pos2(r.right() - round, r.bottom() - round), 0.0, &mut pts);
+        arc(pos2(r.left() + round, r.bottom() - round), q, &mut pts);
+    } else {
+        pts.push(r.right_bottom());
+        pts.push(r.left_bottom());
+    }
+    let corner = vec![pos2(r.right() - fold, r.top()), pos2(r.right() - fold, r.top() + fold), pos2(r.right(), r.top() + fold)];
+    (pts, corner)
+}
+
+fn page_styled(p: &Painter, r: Rect, color: Color32, pack: IconPack, th: &Theme, kind: FileKind, ext: &str) {
+    if matches!(pack, IconPack::Matrix | IconPack::Material | IconPack::Fluent) {
+        return page_matrix(p, r, color, th, kind, ext);
+    }
+    if pack == IconPack::Breeze {
+        return page_breeze(p, r, color, th, kind);
+    }
+    let w = r.width();
+    let large = w >= 28.0;
+    let ink = ink(kind, th);
+    let paper_c = if th.dark { Color32::from_rgb(0xf4, 0xf4, 0xf6) } else { Color32::WHITE };
+    let edge = if th.dark { Color32::from_rgb(0x9a, 0x9a, 0xa2) } else { Color32::from_rgb(0xb8, 0xb8, 0xc0) };
+    let paper = Rect::from_min_max(pos2(r.left() + w * 0.15, r.top() + w * 0.03), pos2(r.right() - w * 0.15, r.bottom() - w * 0.03));
+    let fold = w * 0.24;
+    let line = Stroke::new(if large { 1.0_f32 } else { 0.8 }, edge);
+    // The PDF symbol says it already.
+    let label = if large && kind != FileKind::Pdf { ext_label(ext) } else { None };
+    let bold = |size: f32| egui::FontId::new(size, egui::FontFamily::Name("bold".into()));
+    let round = match pack {
+        IconPack::Adwaita => w * 0.07,
+        IconPack::MacOS => w * 0.04,
+        IconPack::Windows => w * 0.03,
+        _ => 0.0,
+    };
+    let (pts, corner) = paper_shape(paper, fold, round);
+    match pack {
+        IconPack::Adwaita => {
+            // Rounded paper, a big symbol in the kind's colour, the extension under it.
+            p.add(Shape::convex_polygon(pts, paper_c, line));
+            p.add(Shape::convex_polygon(corner, Color32::from_rgb(0xde, 0xdd, 0xda), line));
+            let g = Rect::from_center_size(pos2(paper.center().x, r.top() + w * if label.is_some() { 0.46 } else { 0.56 }), vec2(w * 0.4, w * 0.36));
+            kind_glyph(p, g, kind, ink);
+            if let Some(l) = label {
+                p.text(pos2(paper.center().x, paper.bottom() - w * 0.13), egui::Align2::CENTER_CENTER, l, bold((w * 0.14).clamp(7.0, 12.0)), ink);
+            }
+        }
+        IconPack::MacOS => {
+            // White paper with a soft fold; the extension in grey capitals at the bottom.
+            p.add(Shape::convex_polygon(pts, paper_c, line));
+            p.add(Shape::convex_polygon(corner, Color32::from_rgb(0xe4, 0xe4, 0xe8), line));
+            let g = Rect::from_center_size(pos2(paper.center().x, r.top() + w * if label.is_some() { 0.47 } else { 0.56 }), vec2(w * 0.42, w * 0.38));
+            kind_glyph(p, g, kind, ink);
+            if let Some(l) = label {
+                p.text(
+                    pos2(paper.center().x, paper.bottom() - w * 0.12),
+                    egui::Align2::CENTER_CENTER,
+                    l,
+                    bold((w * 0.13).clamp(6.5, 11.0)),
+                    Color32::from_rgb(0x8e, 0x8e, 0x93),
+                );
+            }
+        }
+        IconPack::Windows | IconPack::Matrix | IconPack::Breeze | IconPack::Material | IconPack::Fluent => {
+            // White paper; a tile in the kind's colour at the lower left, its symbol white.
+            p.add(Shape::convex_polygon(pts, paper_c, line));
+            p.add(Shape::convex_polygon(corner, Color32::from_rgb(0xe6, 0xe6, 0xe6), line));
+            let tile = Rect::from_min_size(pos2(r.left() + w * 0.06, r.bottom() - w * 0.5), vec2(w * 0.46, w * 0.46));
+            p.rect_filled(tile, w * 0.07, ink);
+            if large {
+                kind_glyph(p, tile.shrink(w * 0.1), kind, Color32::WHITE);
+                for k in 0..3 {
+                    let y = paper.top() + w * (0.22 + 0.11 * k as f32);
+                    p.line_segment(
+                        [pos2(paper.left() + w * 0.12, y), pos2(paper.right() - w * if k == 0 { 0.3 } else { 0.1 }, y)],
+                        Stroke::new(w * 0.035, edge),
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Small type symbol drawn on a document (image, note, play, </>, zipper…).
 fn kind_glyph(p: &Painter, g: Rect, kind: FileKind, c: Color32) {
     let w = g.width();
-    let s = Stroke::new((w * 0.16).max(1.0), c);
+    let h = g.height();
+    let s = Stroke::new((w * 0.13).max(1.0), c);
+    let thin = Stroke::new((w * 0.08).max(1.0), c);
+    let bold = |size: f32| egui::FontId::new(size, egui::FontFamily::Name("bold".into()));
     match kind {
         FileKind::Image => {
             let base = g.bottom();
             p.add(Shape::convex_polygon(
-                vec![pos2(g.left(), base), pos2(g.left() + w * 0.38, g.top() + w * 0.25), pos2(g.left() + w * 0.7, base)],
+                vec![pos2(g.left(), base), pos2(g.left() + w * 0.38, g.top() + h * 0.3), pos2(g.left() + w * 0.7, base)],
                 c,
                 Stroke::NONE,
             ));
             p.add(Shape::convex_polygon(
-                vec![pos2(g.left() + w * 0.45, base), pos2(g.left() + w * 0.72, g.top() + w * 0.45), pos2(g.right(), base)],
+                vec![pos2(g.left() + w * 0.45, base), pos2(g.left() + w * 0.72, g.top() + h * 0.5), pos2(g.right(), base)],
                 c.gamma_multiply(0.75),
                 Stroke::NONE,
             ));
-            p.circle_filled(pos2(g.right() - w * 0.18, g.top() + w * 0.12), w * 0.12, c);
+            p.circle_filled(pos2(g.right() - w * 0.18, g.top() + h * 0.14), w * 0.12, c);
         }
         FileKind::Video => {
-            let pts = vec![pos2(g.left() + w * 0.25, g.top()), pos2(g.right() - w * 0.1, g.center().y), pos2(g.left() + w * 0.25, g.bottom())];
+            // A play mark in a rounded frame.
+            p.rect_stroke(g.shrink(w * 0.02), w * 0.12, thin, egui::StrokeKind::Inside);
+            let cy = g.center().y;
+            let pts = vec![pos2(g.left() + w * 0.38, cy - h * 0.24), pos2(g.left() + w * 0.72, cy), pos2(g.left() + w * 0.38, cy + h * 0.24)];
             p.add(Shape::convex_polygon(pts, c, Stroke::NONE));
         }
         FileKind::Audio => {
-            let head = pos2(g.left() + w * 0.3, g.bottom() - w * 0.16);
-            p.circle_filled(head, w * 0.18, c);
-            p.line_segment([pos2(head.x + w * 0.16, head.y), pos2(head.x + w * 0.16, g.top())], s);
-            p.line_segment([pos2(head.x + w * 0.16, g.top()), pos2(g.right() - w * 0.05, g.top() + w * 0.18)], s);
+            let head = pos2(g.left() + w * 0.3, g.bottom() - h * 0.16);
+            p.circle_filled(head, w * 0.17, c);
+            p.line_segment([pos2(head.x + w * 0.15, head.y), pos2(head.x + w * 0.15, g.top())], s);
+            p.line_segment([pos2(head.x + w * 0.15, g.top()), pos2(g.right() - w * 0.05, g.top() + h * 0.2)], s);
         }
         FileKind::Archive => {
+            // A zipper: teeth left and right of a line, and its pull at the bottom.
             let x = g.center().x;
-            let step = g.height() / 5.0;
+            let tooth = vec2(w * 0.24, h * 0.13);
             for i in 0..4 {
-                let y = g.top() + step * i as f32;
-                let dx = if i % 2 == 0 { -w * 0.12 } else { 0.0 };
-                p.rect_filled(Rect::from_min_size(pos2(x + dx, y), vec2(w * 0.12, step * 0.8)), 0.0, c);
+                let y = g.top() + i as f32 * h * 0.14;
+                let min = if i % 2 == 0 { pos2(x - tooth.x, y) } else { pos2(x, y) };
+                p.rect_filled(Rect::from_min_size(min, tooth), w * 0.02, c);
             }
-            p.rect_filled(Rect::from_center_size(pos2(x, g.bottom() - step * 0.4), vec2(w * 0.3, step * 1.0)), 1.0, c);
+            let pull = Rect::from_min_max(pos2(x - w * 0.2, g.top() + h * 0.58), pos2(x + w * 0.2, g.bottom()));
+            p.rect_filled(pull, w * 0.07, c);
+            let hole = if c == Color32::WHITE { Color32::from_black_alpha(90) } else { Color32::from_white_alpha(200) };
+            p.rect_filled(Rect::from_center_size(pull.center() + vec2(0.0, h * 0.03), vec2(w * 0.14, h * 0.16)), w * 0.02, hole);
         }
         FileKind::Code => {
             let cy = g.center().y;
-            let h = g.height() * 0.42;
-            p.add(Shape::line(vec![pos2(g.left() + w * 0.3, cy - h), pos2(g.left(), cy), pos2(g.left() + w * 0.3, cy + h)], s));
-            p.add(Shape::line(vec![pos2(g.right() - w * 0.3, cy - h), pos2(g.right(), cy), pos2(g.right() - w * 0.3, cy + h)], s));
+            let k = h * 0.32;
+            p.add(Shape::line(vec![pos2(g.left() + w * 0.28, cy - k), pos2(g.left(), cy), pos2(g.left() + w * 0.28, cy + k)], s));
+            p.add(Shape::line(vec![pos2(g.right() - w * 0.28, cy - k), pos2(g.right(), cy), pos2(g.right() - w * 0.28, cy + k)], s));
+            p.line_segment([pos2(g.center().x + w * 0.08, cy - k), pos2(g.center().x - w * 0.08, cy + k)], s);
         }
-        FileKind::Data => {
-            let cw = (w - 2.0) / 2.0;
-            let ch = (g.height() - 2.0) / 2.0;
-            for (i, j) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let rr = Rect::from_min_size(pos2(g.left() + i as f32 * (cw + 2.0), g.top() + j as f32 * (ch + 2.0)), vec2(cw, ch));
-                p.rect_filled(rr, 1.0, if (i + j) % 2 == 0 { c } else { c.gamma_multiply(0.6) });
+        FileKind::Sheet => {
+            // A table: a frame, a header row and columns.
+            let t = g.shrink(w * 0.04);
+            p.rect_filled(Rect::from_min_size(t.min, vec2(t.width(), t.height() * 0.28)), w * 0.06, c);
+            p.rect_stroke(t, w * 0.06, thin, egui::StrokeKind::Inside);
+            for k in 1..3 {
+                let y = t.top() + t.height() * (0.28 + 0.24 * k as f32);
+                p.line_segment([pos2(t.left(), y), pos2(t.right(), y)], thin);
+            }
+            p.line_segment([pos2(t.left() + t.width() * 0.4, t.top()), pos2(t.left() + t.width() * 0.4, t.bottom())], thin);
+        }
+        FileKind::Slides => {
+            // A slide with a little bar chart on it.
+            let t = Rect::from_min_size(g.min + vec2(0.0, h * 0.08), vec2(w, h * 0.7));
+            p.rect_stroke(t, w * 0.06, thin, egui::StrokeKind::Inside);
+            for (k, frac) in [0.45f32, 0.75, 0.6].iter().enumerate() {
+                let bw = t.width() * 0.16;
+                let x = t.left() + t.width() * (0.2 + 0.24 * k as f32);
+                let top = t.bottom() - t.height() * 0.14 - (t.height() * 0.62) * frac;
+                p.rect_filled(Rect::from_min_max(pos2(x, top), pos2(x + bw, t.bottom() - t.height() * 0.14)), 0.0, c);
+            }
+            p.line_segment([pos2(g.center().x, t.bottom()), pos2(g.center().x, g.bottom())], thin);
+        }
+        FileKind::Pdf => {
+            // "PDF" in heavy letters: white on a band of `c`, or in `c` itself when that is
+            // white (on a coloured tile).
+            let band = Rect::from_center_size(g.center(), vec2(w * 1.05, h * 0.52));
+            if c == Color32::WHITE {
+                p.text(band.center(), egui::Align2::CENTER_CENTER, "PDF", bold(band.height() * 0.8), c);
+            } else {
+                p.rect_filled(band, w * 0.08, c);
+                p.text(band.center(), egui::Align2::CENTER_CENTER, "PDF", bold(band.height() * 0.72), Color32::WHITE);
             }
         }
         FileKind::Exec => {
             let cy = g.center().y;
-            p.add(Shape::line(vec![pos2(g.left(), cy - w * 0.3), pos2(g.left() + w * 0.35, cy), pos2(g.left(), cy + w * 0.3)], s));
-            p.line_segment([pos2(g.left() + w * 0.5, cy + w * 0.3), pos2(g.right(), cy + w * 0.3)], s);
+            p.add(Shape::line(vec![pos2(g.left(), cy - h * 0.3), pos2(g.left() + w * 0.35, cy), pos2(g.left(), cy + h * 0.3)], s));
+            p.line_segment([pos2(g.left() + w * 0.5, cy + h * 0.3), pos2(g.right(), cy + h * 0.3)], s);
         }
-        FileKind::Pdf => {
-            p.rect_filled(Rect::from_min_size(g.min + vec2(0.0, g.height() * 0.15), vec2(w, g.height() * 0.5)), 2.0, c);
+        FileKind::Disk => {
+            let c0 = g.center();
+            let rad = w.min(h) * 0.5;
+            p.circle_stroke(c0, rad - thin.width / 2.0, thin);
+            p.circle_stroke(c0, rad * 0.62, Stroke::new(thin.width * 0.6, c.gamma_multiply(0.6)));
+            p.circle_filled(c0, rad * 0.2, c);
         }
-        FileKind::Doc | FileKind::Other => {
-            let n = 3;
+        FileKind::Font => {
+            p.text(g.center(), egui::Align2::CENTER_CENTER, "Aa", egui::FontId::new(h * 0.95, egui::FontFamily::Name("bold".into())), c);
+        }
+        FileKind::Data => {
+            p.text(g.center(), egui::Align2::CENTER_CENTER, "{ }", bold(h * 0.95), c);
+        }
+        FileKind::Text | FileKind::Doc | FileKind::Other => {
+            // Lines of text; a document has a heading.
+            let n = 4;
             for i in 0..n {
-                let y = g.top() + g.height() * (0.15 + 0.33 * i as f32);
-                let x_end = if i == n - 1 { g.left() + w * 0.6 } else { g.right() };
-                p.line_segment([pos2(g.left(), y), pos2(x_end, y)], Stroke::new((w * 0.13).max(1.0), c));
+                let y = g.top() + h * (0.08 + 0.28 * i as f32);
+                let x_end = if i == n - 1 { g.left() + w * 0.55 } else { g.right() };
+                let width = if kind == FileKind::Doc && i == 0 { (w * 0.17).max(1.0) } else { (w * 0.1).max(1.0) };
+                p.line_segment([pos2(g.left(), y), pos2(x_end, y)], Stroke::new(width, c));
             }
         }
     }
@@ -756,12 +1026,63 @@ pub fn mi_star(p: &Painter, r: Rect, c: Color32) {
     star(p, r, c, false);
 }
 
-/// Split glyph with the same thin stroke as the other menu and window-toolbar icons.
+/// Split a window: a window in two, the new half (on the right) filled.
 pub fn mi_split(p: &Painter, r: Rect, c: Color32) {
-    let s = ms(c);
-    let b = r.shrink(1.0);
-    p.rect_stroke(b, 2.5, s, egui::StrokeKind::Inside);
-    p.line_segment([pos2(b.center().x, b.top()), pos2(b.center().x, b.bottom())], s);
+    split_half(p, r, c, Side::Right, false);
+}
+
+/// Which half of a window a new one takes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Side {
+    Right,
+    Left,
+    Bottom,
+    Top,
+}
+
+/// A window divided in two, the half where the new window goes filled; `terminal`
+/// draws a prompt (`>`) there instead of the fill. Drawn on whole pixels, the fill and
+/// the divider inside the outline, so every corner has the same round.
+pub fn split_half(p: &Painter, r: Rect, c: Color32, side: Side, terminal: bool) {
+    const W: f32 = 1.3;
+    const RADIUS: f32 = 3.0;
+    let s = Stroke::new(W, c);
+    // The outline on whole pixels, a square-ish window a little wider than tall.
+    use egui::emath::GuiRounding;
+    let ppp = p.pixels_per_point();
+    let f = Rect::from_center_size(r.center(), egui::vec2(r.width(), (r.height() * 0.86).max(8.0))).round_to_pixels(ppp);
+    let inner = f.shrink(W);
+    let (cx, cy) = (inner.center().x.round_to_pixel_center(ppp), inner.center().y.round_to_pixel_center(ppp));
+    let half = match side {
+        Side::Right => Rect::from_min_max(pos2(cx, inner.top()), inner.max),
+        Side::Left => Rect::from_min_max(inner.min, pos2(cx, inner.bottom())),
+        Side::Bottom => Rect::from_min_max(pos2(inner.left(), cy), inner.max),
+        Side::Top => Rect::from_min_max(inner.min, pos2(inner.right(), cy)),
+    };
+    if terminal {
+        // A prompt (">") as large as the new half allows.
+        let k = half.width().min(half.height()) * 0.62;
+        let c0 = half.center();
+        let t = Stroke::new(1.3_f32, c);
+        p.line_segment([pos2(c0.x - k * 0.3, c0.y - k * 0.5), pos2(c0.x + k * 0.25, c0.y)], t);
+        p.line_segment([pos2(c0.x + k * 0.25, c0.y), pos2(c0.x - k * 0.3, c0.y + k * 0.5)], t);
+    } else {
+        // Rounded where it meets the outline's corners (about its radius less the stroke).
+        let o = 2;
+        let corners = match side {
+            Side::Right => egui::CornerRadius { ne: o, se: o, ..Default::default() },
+            Side::Left => egui::CornerRadius { nw: o, sw: o, ..Default::default() },
+            Side::Bottom => egui::CornerRadius { sw: o, se: o, ..Default::default() },
+            Side::Top => egui::CornerRadius { nw: o, ne: o, ..Default::default() },
+        };
+        p.rect_filled(half, corners, c.gamma_multiply(0.8));
+    }
+    // The divider between the halves, inside the outline.
+    match side {
+        Side::Right | Side::Left => p.line_segment([pos2(cx, inner.top()), pos2(cx, inner.bottom())], s),
+        Side::Bottom | Side::Top => p.line_segment([pos2(inner.left(), cy), pos2(inner.right(), cy)], s),
+    };
+    p.rect_stroke(f, RADIUS, s, egui::StrokeKind::Inside);
 }
 
 pub fn mi_disk(p: &Painter, r: Rect, c: Color32) {
