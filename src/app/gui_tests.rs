@@ -6123,8 +6123,9 @@ fn split_view_splits_the_focused_window() {
     assert_eq!(h.state().panes.len(), 2);
 }
 
-/// Settings (and Tasks, and the tools) is no folder: the toolbar has no Split view for it,
-/// and the status bar no file keys, F9 Terminal included (which folder would it open?).
+/// Settings and Tasks cannot split: their title row has no split menu and the toolbar's
+/// Split view is dimmed (still there, so the toolbar does not shift); the file key hints
+/// (F9 opens a terminal where?) show only for a file list.
 #[test]
 #[ignore]
 fn settings_has_no_split_or_file_keys() {
@@ -6135,17 +6136,24 @@ fn settings_has_no_split_or_file_keys() {
     h.state_mut().shot_pane(0, &d.demo, None);
     settle(&mut h, 3);
     let terminal_key = format!("{} {}", crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::OpenTerminal), t("Terminal"));
-    let shown = |h: &Harness<'static, App>, label: &str| {
-        h.query_all_by(|n| n.role() == egui::accesskit::Role::Button && n.label().as_deref() == Some(label)).count() > 0
+    // (shown, enabled) of a button.
+    let button = |h: &Harness<'static, App>, label: &str| {
+        let count = |enabled: bool| {
+            h.query_all_by(|n| n.role() == egui::accesskit::Role::Button && n.label().as_deref() == Some(label) && (!enabled || !n.is_disabled())).count()
+        };
+        (count(false) > 0, count(true) > 0)
     };
-    assert!(shown(&h, &t("Split view")) && shown(&h, &terminal_key), "a file list has both");
+    assert_eq!(button(&h, &t("Split view")), (true, true), "a file list splits");
+    assert!(button(&h, &terminal_key).0, "a file list has the key hints");
     h.state_mut().open_settings(SettingsPage::Fonts);
     settle(&mut h, 4);
-    assert!(!shown(&h, &t("Split view")), "no Split view in Settings");
-    assert!(!shown(&h, &terminal_key), "no {terminal_key} in Settings");
+    assert_eq!(button(&h, &t("Split view")), (true, false), "Split view is dimmed in Settings");
+    assert!(!button(&h, &t("Split window")).0, "no split menu in the Settings title row");
+    assert!(!button(&h, &terminal_key).0, "no {terminal_key} in Settings");
     h.state_mut().open_transfers();
     settle(&mut h, 4);
-    assert!(!shown(&h, &t("Split view")) && !shown(&h, &terminal_key), "nor in Tasks");
+    assert_eq!(button(&h, &t("Split view")), (true, false), "nor in Tasks");
+    assert!(!button(&h, &t("Split window")).0 && !button(&h, &terminal_key).0, "nor in Tasks");
 }
 
 /// Settings → Fonts → Text gamma: Automatic draws text as egui does for a light or dark
