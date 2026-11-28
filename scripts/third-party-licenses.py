@@ -79,6 +79,7 @@ is a blessing:
 # Fonts and icons in assets/, built into the program: (what, license, files).
 ASSETS = [
     ("Source Sans 3, Source Serif 4, Source Code Pro (Adobe)", "OFL-1.1", ["assets/fonts/OFL.txt"]),
+    ("Inter", "OFL-1.1", ["assets/fonts/OFL-Inter.txt"]),
     ("JetBrains Mono NL", "OFL-1.1", ["assets/fonts/OFL-JetBrainsMono.txt"]),
     ("Noto Sans Symbols 2", "OFL-1.1", ["assets/fonts/OFL-NotoSansSymbols2.txt"]),
     ("DejaVu Sans Mono", "Bitstream Vera and Arev fonts licenses, public domain changes", ["assets/fonts/LICENSE-DejaVu.txt"]),

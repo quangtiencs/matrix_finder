@@ -252,19 +252,48 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
         th.text,
     );
     icons::chevron(ui.painter(), Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(10.0, 10.0)), 2, th.weak);
+    // The font chosen with the arrow keys (an index into the fonts listed), and the list's
+    // scroll offset, kept between frames.
+    let sel_id = id.with("sel");
+    let offset_id = id.with("offset");
+    let focus_id = id.with("focus");
     if btn.clicked() {
         search.clear();
         egui::Popup::toggle_id(ui.ctx(), id);
+        ui.data_mut(|d| {
+            d.insert_temp(sel_id, None::<usize>);
+            d.insert_temp(offset_id, 0.0_f32);
+            d.insert_temp(focus_id, true);
+        });
     }
     let mut picked = None;
+    let mut close = false;
     let installed = fonts::families(ui.ctx());
     crate::ui::popup_below(id, &btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         ui.set_width(W);
         crate::ui::pane::menu_style(ui);
+        let needle_before = search.to_lowercase();
+        // The keys the list takes, before the field sees them.
+        let (down, up, enter, esc) = ui.input_mut(|i| {
+            (
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter),
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Escape),
+            )
+        });
         let field = ui.add(
-            egui::TextEdit::singleline(search).desired_width(W - 12.0).background_color(th.bg).hint_text(RichText::new(t("Search fonts…")).color(th.weak)),
+            egui::TextEdit::singleline(search)
+                .desired_width(W - 12.0)
+                .margin(egui::Margin::symmetric(8, 5))
+                .background_color(th.bg)
+                .hint_text(RichText::new(t("Search fonts…")).color(th.weak)),
         );
-        field.request_focus();
+        // The keyboard goes to the field when the list opens (and after a click on it).
+        if ui.data_mut(|d| d.remove_temp::<bool>(focus_id)).unwrap_or(false) {
+            field.request_focus();
+        }
+        ui.add_space(4.0);
         let needle = search.to_lowercase();
         let matches = |name: &str| name.to_lowercase().contains(&needle);
         let mut items = vec![Item::Header(t("Included with Matrix Finder"))];
@@ -273,9 +302,52 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
         for f in installed.unwrap_or_default().iter().filter(|f| (!mono_only || f.mono) && matches(&f.name)) {
             items.push(Item::Font(&f.name, &f.name));
         }
-        egui::ScrollArea::vertical().id_salt(("font-list", id_salt)).max_height(280.0).show_rows(ui, ITEM_H, items.len(), |ui, range| {
+        // Rows that are fonts (headers are skipped by the arrow keys).
+        let fonts_at: Vec<usize> = items.iter().enumerate().filter(|(_, it)| matches!(it, Item::Font(..))).map(|(k, _)| k).collect();
+        let mut sel: Option<usize> = ui.data(|d| d.get_temp(sel_id)).flatten();
+        if needle != needle_before {
+            // Typing: the first match is the one Enter takes.
+            sel = (!fonts_at.is_empty()).then_some(0);
+        }
+        let moved = down || up;
+        if down {
+            sel = Some(sel.map_or(0, |k| (k + 1).min(fonts_at.len().saturating_sub(1))));
+        }
+        if up {
+            sel = sel.map(|k| k.saturating_sub(1));
+        }
+        let sel = sel.filter(|k| *k < fonts_at.len());
+        ui.data_mut(|d| d.insert_temp(sel_id, sel));
+        if enter {
+            if let Some(Item::Font(value, _)) = sel.or((!fonts_at.is_empty()).then_some(0)).map(|k| &items[fonts_at[k]]) {
+                picked = Some(value.to_string());
+            }
+        }
+        close |= esc;
+        let sel_row = sel.map(|k| fonts_at[k]);
+        // As tall as the room below (or above, where the popup goes when there is more)
+        // allows, up to 280: it opens there, never beside the button.
+        let screen = ui.ctx().content_rect();
+        let room = (screen.bottom() - btn.rect.bottom()).max(btn.rect.top() - screen.top());
+        let list_h = (room - 90.0).clamp(120.0, 280.0);
+        // Keep the chosen row in view.
+        let mut offset: f32 = ui.data(|d| d.get_temp(offset_id)).unwrap_or(0.0);
+        if let (true, Some(row)) = (moved, sel_row) {
+            let top = row as f32 * ITEM_H;
+            if top < offset {
+                offset = top;
+            } else if top + ITEM_H > offset + list_h {
+                offset = top + ITEM_H - list_h;
+            }
+        }
+        // A fixed height: filtering never makes the list (and the popup) shrink or jump.
+        let mut area = egui::ScrollArea::vertical().id_salt(("font-list", id_salt)).auto_shrink([false, false]).max_height(list_h).min_scrolled_height(list_h);
+        if moved {
+            area = area.vertical_scroll_offset(offset);
+        }
+        let out = area.show_rows(ui, ITEM_H, items.len(), |ui, range| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            for item in &items[range] {
+            for (k, item) in items.iter().enumerate().skip(range.start).take(range.len()) {
                 let (row, resp) = ui.allocate_exact_size(
                     vec2(W - 12.0, ITEM_H),
                     match item {
@@ -288,8 +360,8 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
                         ui.painter().text(pos2(row.left() + 8.0, row.bottom() - 9.0), Align2::LEFT_CENTER, text, FontId::proportional(11.5), th.weak);
                     }
                     Item::Font(value, name) => {
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *name));
-                        crate::ui::pane::menu_row_fill(ui, row, th, *value == current, resp.hovered());
+                        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel_row == Some(k), *name));
+                        crate::ui::pane::menu_row_fill(ui, row, th, *value == current, resp.hovered() || sel_row == Some(k));
                         ui.painter().with_clip_rect(row).text(
                             pos2(row.left() + 8.0, row.center().y),
                             Align2::LEFT_CENTER,
@@ -304,6 +376,10 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
                 }
             }
         });
+        ui.data_mut(|d| d.insert_temp(offset_id, out.state.clamped_offset().y));
+        if fonts_at.is_empty() && installed.is_some() {
+            ui.label(RichText::new(t("No font matches")).size(12.0).color(th.weak));
+        }
         if installed.is_none() {
             ui.horizontal(|ui| {
                 ui.spinner();
@@ -311,7 +387,7 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
             });
         }
     });
-    if picked.is_some() {
+    if picked.is_some() || close {
         egui::Popup::close_id(ui.ctx(), id);
     }
     picked
@@ -1299,6 +1375,29 @@ impl App {
                 changed |= ui.add(egui::Slider::new(&mut self.cfg.ui_font_size, fonts::UI_SIZES).step_by(0.5).fixed_decimals(1).suffix(" px")).changed();
                 if self.cfg.ui_font_size != fonts::DEFAULT_UI_SIZE && ui.small_button(t("Reset")).clicked() {
                     self.cfg.ui_font_size = fonts::DEFAULT_UI_SIZE;
+                    changed = true;
+                }
+            });
+            row_line(ui, th);
+            let hint = if self.cfg.text_gamma.is_none() {
+                t("Automatic suits the light or dark theme. Turn it off to set it yourself.")
+            } else {
+                t("Lower draws fuller text, 1.0 the thinnest. Applies to all text.")
+            };
+            row(ui, th, &t("Text gamma"), &hint, |ui| {
+                ui.spacing_mut().slider_width = 200.0;
+                let before = self.cfg.text_gamma;
+                let mut auto = before.is_none();
+                if ui.checkbox(&mut auto, t("Automatic")).changed() {
+                    // Off starts from the gamma closest to what Automatic drew.
+                    self.cfg.text_gamma = if auto { None } else { Some(theme::auto_gamma(self.theme.dark)) };
+                }
+                if let Some(g) = &mut self.cfg.text_gamma {
+                    ui.add(egui::Slider::new(g, theme::TEXT_GAMMAS).step_by(0.05).fixed_decimals(2));
+                }
+                if self.cfg.text_gamma != before {
+                    theme::set_text_gamma(self.cfg.text_gamma);
+                    theme::apply(ui.ctx(), self.theme);
                     changed = true;
                 }
             });

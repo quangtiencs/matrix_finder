@@ -6122,3 +6122,182 @@ fn split_view_splits_the_focused_window() {
     choose(&mut h, &t("Close window"));
     assert_eq!(h.state().panes.len(), 2);
 }
+
+/// Settings (and Tasks, and the tools) is no folder: the toolbar has no Split view for it,
+/// and the status bar no file keys, F9 Terminal included (which folder would it open?).
+#[test]
+#[ignore]
+fn settings_has_no_split_or_file_keys() {
+    let d = demo_env();
+    let mut s = settings("Breeze Light", &d);
+    s.show_key_hints = true;
+    let mut h = app_harness(&s, "gnome");
+    h.state_mut().shot_pane(0, &d.demo, None);
+    settle(&mut h, 3);
+    let terminal_key = format!("{} {}", crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::OpenTerminal), t("Terminal"));
+    let shown = |h: &Harness<'static, App>, label: &str| {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::Button && n.label().as_deref() == Some(label)).count() > 0
+    };
+    assert!(shown(&h, &t("Split view")) && shown(&h, &terminal_key), "a file list has both");
+    h.state_mut().open_settings(SettingsPage::Fonts);
+    settle(&mut h, 4);
+    assert!(!shown(&h, &t("Split view")), "no Split view in Settings");
+    assert!(!shown(&h, &terminal_key), "no {terminal_key} in Settings");
+    h.state_mut().open_transfers();
+    settle(&mut h, 4);
+    assert!(!shown(&h, &t("Split view")) && !shown(&h, &terminal_key), "nor in Tasks");
+}
+
+/// Settings → Fonts → Text gamma: Automatic draws text as egui does for a light or dark
+/// theme; turning it off shows a slider (from the gamma closest to Automatic) that changes
+/// how full text is drawn at once and is saved; turning it on again goes back.
+#[test]
+#[ignore]
+fn text_gamma_is_set_in_settings() {
+    use egui::epaint::FontColorTransferFunction as F;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().open_settings(SettingsPage::Fonts);
+    settle(&mut h, 4);
+    let drawn = |h: &Harness<'static, App>| h.ctx.style_of(egui::Theme::Light).visuals.text_options.color_transfer_function;
+    let gamma_slider = |h: &Harness<'static, App>| {
+        h.query_all_by(|n| n.role() == egui::accesskit::Role::Slider && n.numeric_value().is_some_and(|v| (0.3..=1.0).contains(&v))).next().map(|n| n.rect())
+    };
+    assert_eq!(h.state().cfg.text_gamma, None, "Automatic by default");
+    assert_eq!(drawn(&h), F::LIGHT_MODE_DEFAULT);
+    assert!(gamma_slider(&h).is_none(), "no slider while Automatic");
+    h.get_by_label(&t("Automatic")).click_accesskit();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.text_gamma, Some(1.0), "starts where Automatic was (light theme)");
+    let r = gamma_slider(&h).expect("the slider");
+    click_at(&mut h, pos2(r.left() + r.width() * 0.25, r.center().y));
+    settle(&mut h, 3);
+    let g = h.state().cfg.text_gamma.unwrap();
+    assert!(g < 0.6, "{g}");
+    assert_eq!(drawn(&h), F::Gamma(g), "drawn at once");
+    wait_until(&mut h, 3.0, |a| a.cfg_dirty.is_none());
+    assert_eq!(Settings::load().text_gamma, Some(g), "saved");
+    h.get_by_label(&t("Automatic")).click_accesskit();
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.text_gamma, None);
+    assert_eq!(drawn(&h), F::LIGHT_MODE_DEFAULT);
+    // A dark theme: Automatic draws its light text fuller.
+    let ctx = h.ctx.clone();
+    h.state_mut().set_theme(&ctx, "Breeze Dark");
+    settle(&mut h, 3);
+    assert_eq!(h.ctx.style_of(egui::Theme::Dark).visuals.text_options.color_transfer_function, F::DARK_MODE_DEFAULT);
+}
+
+/// Settings → Fonts: the font list is searched as typed, the arrow keys move through the
+/// fonts (not the headers) and Enter takes one; clearing the search brings every font
+/// back, in a list that keeps its height.
+#[test]
+#[ignore]
+fn font_search_keys_and_clearing() {
+    use egui::accesskit::Role;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().open_settings(SettingsPage::Fonts);
+    settle(&mut h, 4);
+    wait_until(&mut h, 5.0, |_| crate::style::fonts::families(&egui::Context::default()).is_some());
+    // The interface's font: the page's first font list.
+    let open = |h: &mut Harness<'static, App>| {
+        h.query_all_by(|n| n.role() == Role::ComboBox).min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).expect("the interface font").click_accesskit();
+        settle(h, 4);
+    };
+    let fonts_shown = |h: &Harness<'static, App>| {
+        h.query_all_by(|n| {
+            n.role() == Role::Button && n.label().is_some_and(|l| ["Inter", "Source Sans 3", "Source Serif 4", "Source Code Pro"].contains(&l.as_str()))
+        })
+        .count()
+    };
+    let list_h = |h: &Harness<'static, App>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("font-picker", "ui")))).map(|r| r.height());
+    open(&mut h);
+    assert_eq!(fonts_shown(&h), 4);
+    let h0 = list_h(&h);
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("font-picker.png")).unwrap();
+    }
+    // Typing filters; clearing brings the fonts back in a list of the same height.
+    push(&mut h, Event::Text("serif".into()));
+    settle(&mut h, 3);
+    assert_eq!(fonts_shown(&h), 1, "only Source Serif 4 of the bundled ones");
+    assert_eq!(list_h(&h), h0, "the list keeps its height");
+    for _ in 0..5 {
+        key_press(&mut h, Key::Backspace, None, Modifiers::NONE);
+    }
+    settle(&mut h, 3);
+    assert_eq!(h.state().font_search, "");
+    assert_eq!(fonts_shown(&h), 4, "every font again");
+    assert_eq!(list_h(&h), h0);
+    // The first font is chosen; ↓ goes through the fonts, ↑ back, Enter takes the one chosen.
+    for _ in 0..2 {
+        key_press(&mut h, Key::ArrowDown, None, Modifiers::NONE);
+    }
+    key_press(&mut h, Key::ArrowUp, None, Modifiers::NONE);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.ui_font, "builtin:source-sans", "the second font");
+    open(&mut h);
+    push(&mut h, Event::Text("code".into()));
+    settle(&mut h, 2);
+    key_press(&mut h, Key::Enter, None, Modifiers::NONE);
+    settle(&mut h, 3);
+    assert_eq!(h.state().cfg.ui_font, "builtin:code", "Enter takes the first match");
+    assert!(!egui::Popup::is_id_open(&h.ctx, egui::Id::unique(("font-picker", "ui"))), "and closes the list");
+}
+
+/// A short window: the font list opens above or below its button, never beside it.
+#[test]
+#[ignore]
+fn font_list_opens_above_or_below() {
+    use egui::accesskit::Role;
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.set_size(egui::vec2(W, 430.0));
+    h.state_mut().open_settings(SettingsPage::Fonts);
+    settle(&mut h, 4);
+    wait_until(&mut h, 5.0, |_| crate::style::fonts::families(&egui::Context::default()).is_some());
+    let btn = h.query_all_by(|n| n.role() == Role::ComboBox).min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).expect("the interface font").rect();
+    h.query_all_by(|n| n.role() == Role::ComboBox).min_by(|a, b| a.rect().top().total_cmp(&b.rect().top())).unwrap().click_accesskit();
+    settle(&mut h, 6);
+    let popup = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("font-picker", "ui")))).expect("the list is open");
+    if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
+        h.render().unwrap().save(Path::new(&out).join("font-list-short-window.png")).unwrap();
+    }
+    assert!((popup.left() - btn.left()).abs() < 2.0, "lined up with the button: {popup:?} {btn:?}");
+    assert!(popup.top() >= btn.bottom() - 1.0 || popup.bottom() <= btn.top() + 1.0, "above or below the button: {popup:?} {btn:?}");
+    assert!(popup.bottom() <= 430.0 + 1.0 && popup.top() >= -1.0, "on screen: {popup:?}");
+}
+
+/// Dialog windows open in the middle of the window (egui would put them in a corner), and
+/// the update notice keeps its width whatever the release notes hold (a long command).
+#[test]
+#[ignore]
+fn dialogs_open_centred_and_the_update_notice_keeps_its_width() {
+    let d = demo_env();
+    let mut h = app_harness(&settings("Breeze Light", &d), "gnome");
+    h.state_mut().shot_pane(0, &d.demo, None);
+    h.state_mut().show_about = true;
+    settle(&mut h, 6);
+    let about = h.ctx.memory(|m| m.area_rect(egui::Id::unique("about"))).expect("About is open");
+    let screen = h.ctx.content_rect();
+    assert!((about.center() - screen.center()).length() < 2.0, "centred: {about:?} in {screen:?}");
+    h.state_mut().show_about = false;
+    let notes_src = format!("Notes.\n\n```bash\ncurl -fsSL https://example.com/{}/install.sh | bash\n```\n", "x".repeat(200));
+    let r = crate::system::update::Release {
+        version: crate::system::update::parse_version("99.0.0").unwrap(),
+        tag: "v99.0.0".into(),
+        title: "Matrix Finder 99.0.0".into(),
+        url: "https://example.com".into(),
+        notes: notes_src.clone(),
+        date: "2026-11-28".into(),
+        assets: vec![],
+    };
+    let notes = crate::preview::markdown::parse_markdown(&notes_src, h.state().theme.syntax);
+    h.state_mut().update_found = Some((r, notes));
+    settle(&mut h, 6);
+    let update = h.ctx.memory(|m| m.area_rect(egui::Id::unique("update"))).expect("the notice is open");
+    assert!(update.width() < 520.0, "its own width, not the long line's: {update:?}");
+    assert!(screen.contains_rect(update), "all of it on screen: {update:?}");
+}

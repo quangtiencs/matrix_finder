@@ -440,6 +440,7 @@ impl App {
         shortcuts::install(&cfg.shortcuts);
         // A font that is no longer installed leaves the bundled default in its place.
         let _ = crate::style::fonts::apply(&cc.egui_ctx, &crate::style::fonts::FontPrefs::of(&cfg));
+        theme::set_text_gamma(cfg.text_gamma);
         theme::apply(&cc.egui_ctx, theme);
         cc.egui_ctx.set_zoom_factor(cfg.ui_scale.clamp(0.6, 2.5));
         // Zooming by keys is the app's own (saved, and rebindable): egui's would not be
@@ -1151,6 +1152,7 @@ impl App {
         i18n::set_language(&self.cfg.language);
         theme::set_custom(&self.cfg.custom_themes, &self.cfg.custom_terminal_themes);
         self.theme = theme::by_name(&self.cfg.theme);
+        theme::set_text_gamma(self.cfg.text_gamma);
         theme::apply(ctx, self.theme);
         ctx.set_zoom_factor(self.cfg.ui_scale.clamp(0.6, 2.5));
         self.apply_fonts(ctx);

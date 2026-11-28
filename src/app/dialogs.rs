@@ -200,6 +200,9 @@ impl App {
             .open(&mut open)
             .resizable(false)
             .default_width(460.0)
+            // A long line in the notes (a command) scrolls instead of widening the window.
+            .min_width(460.0)
+            .max_width(460.0)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 close |= chrome.dialog_title(ui, th, &title);
@@ -212,7 +215,7 @@ impl App {
                 if !notes.is_empty() {
                     ui.add_space(6.0);
                     egui::Frame::NONE.fill(th.surface).corner_radius(6).inner_margin(8.0).show(ui, |ui| {
-                        egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
+                        egui::ScrollArea::both().max_height(260.0).auto_shrink([false, true]).show(ui, |ui| {
                             crate::preview::markdown::markdown_ui(ui, notes, th);
                         });
                     });

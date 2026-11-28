@@ -14,6 +14,7 @@ pub mod tabs;
 
 /// A popup below `widget`, at least as wide as it, open while `id` is (`egui::Popup::open_id`,
 /// `toggle_id`); `None` when it is closed. What egui's old `popup_below_widget` did.
+/// Above it when it does not fit below; never beside it (egui would try every side).
 pub fn popup_below<R>(id: egui::Id, widget: &egui::Response, close: egui::PopupCloseBehavior, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
     egui::Popup::from_response(widget)
         .layout(egui::Layout::top_down_justified(egui::Align::LEFT))
@@ -21,6 +22,7 @@ pub fn popup_below<R>(id: egui::Id, widget: &egui::Response, close: egui::PopupC
         .close_behavior(close)
         .id(id)
         .align(egui::RectAlign::BOTTOM_START)
+        .align_alternatives(&[egui::RectAlign::TOP_START])
         .width(widget.rect.width())
         .show(|ui| {
             ui.set_min_width(ui.available_width());

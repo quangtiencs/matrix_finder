@@ -341,7 +341,15 @@ impl Chrome {
     pub fn dialog_window<'a>(&self, ctx: &egui::Context, title: &str, id: egui::Id) -> egui::Window<'a> {
         let frame =
             egui::Frame::window(&ctx.global_style()).inner_margin(egui::Margin { left: 14, right: 14, top: 0, bottom: 14 }).corner_radius(self.radius() as u8);
-        egui::Window::new(title.to_string()).id(id).title_bar(false).collapsible(false).frame(frame)
+        // Opens in the middle of the window (egui would put a new window in a corner); it
+        // can still be dragged away.
+        egui::Window::new(title.to_string())
+            .id(id)
+            .title_bar(false)
+            .collapsible(false)
+            .frame(frame)
+            .pivot(egui::Align2::CENTER_CENTER)
+            .default_pos(ctx.content_rect().center())
     }
 
     /// The title bar of a [`Self::dialog_window`], in the platform's style: the title

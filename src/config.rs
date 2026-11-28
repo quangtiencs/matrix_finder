@@ -395,7 +395,7 @@ impl Default for BackupProfile {
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ReadingFont {
-    /// Source Sans 3, like the interface.
+    /// Source Sans 3.
     #[default]
     Sans,
     /// Source Serif 4.
@@ -486,6 +486,9 @@ pub struct Settings {
     pub ui_font: String,
     /// Interface text size in points.
     pub ui_font_size: f32,
+    /// How full text looks: the gamma of its edges (`theme::TEXT_GAMMAS`, lower is
+    /// fuller). `None`: Automatic, as egui draws text in a light or dark theme.
+    pub text_gamma: Option<f32>,
     pub terminal: TerminalKind,
     pub custom_terminal: String,
     pub show_hidden: bool,
@@ -678,6 +681,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             ui_font: String::new(),
             ui_font_size: crate::style::fonts::DEFAULT_UI_SIZE,
+            text_gamma: None,
             terminal: TerminalKind::Native,
             custom_terminal: String::new(),
             show_hidden: false,
@@ -1183,6 +1187,9 @@ impl Settings {
                 *v = default;
             }
         }
+        if self.text_gamma.is_some_and(|g| !crate::style::theme::TEXT_GAMMAS.contains(&g)) {
+            self.text_gamma = None;
+        }
         if !crate::style::fonts::UI_SIZES.contains(&self.ui_font_size) {
             self.ui_font_size = crate::style::fonts::DEFAULT_UI_SIZE;
         }
@@ -1590,6 +1597,23 @@ mod tests {
         s.quick_filters = vec![QuickFilter::new("Raw", "cr2 nef")];
         s.reset_preferences();
         assert_eq!(s.quick_filters.len(), 1);
+    }
+
+    #[test]
+    fn text_gamma_out_of_range_is_automatic() {
+        for bad in [0.0, -1.0, 3.0, f32::NAN] {
+            let mut s = Settings { text_gamma: Some(bad), ..Settings::default() };
+            s.normalize();
+            assert_eq!(s.text_gamma, None, "{bad}");
+        }
+        let mut s = Settings { text_gamma: Some(0.8), ..Settings::default() };
+        s.normalize();
+        assert_eq!(s.text_gamma, Some(0.8), "kept");
+        // Older settings files have none, and Automatic is saved as none.
+        let old: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.text_gamma, None);
+        let back: Settings = serde_json::from_str(&serde_json::to_string(&Settings { text_gamma: Some(0.7), ..Settings::default() }).unwrap()).unwrap();
+        assert_eq!(back.text_gamma, Some(0.7));
     }
 
     #[test]

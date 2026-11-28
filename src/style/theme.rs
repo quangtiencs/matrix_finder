@@ -269,9 +269,14 @@ pub const TERM_THEMES: &[Theme] = &[
     scheme("Amber Phosphor", true, 0x140e04, 0xffc24a, 0xffa200, &AMBER_PHOSPHOR),
 ];
 
+/// The built-in themes as they are shown: with `Theme::readable` secondary text.
+static SHOWN: LazyLock<(Vec<Theme>, Vec<Theme>)> =
+    LazyLock::new(|| (THEMES.iter().map(Theme::readable).collect(), TERM_THEMES.iter().map(Theme::readable).collect()));
+
 /// A terminal profile's colour theme: a scheme, or (from older settings) an app theme.
 pub fn term_by_name(name: &str) -> &'static Theme {
-    TERM_THEMES
+    SHOWN
+        .1
         .iter()
         .find(|t| t.name == name)
         .or_else(|| CUSTOM.read().ok().and_then(|c| c.1.iter().copied().find(|t| t.name == name)))
@@ -306,7 +311,8 @@ pub const THEMES: &[Theme] = &[
         bg: hex(0x1e1e1e),
         panel: hex(0x2a2a2c),
         surface: hex(0x3a3a3c),
-        text: hex(0xf5f5f7),
+        // macOS's label colour: white at 85% (on the window background), not pure white.
+        text: hex(0xdddddd),
         weak: hex(0x98989d),
         accent: hex(0x0a84ff),
         selection: hex(0x1d3b63),
@@ -830,12 +836,13 @@ pub fn native(dark: bool) -> &'static Theme {
 
 pub fn by_name(name: &str) -> &'static Theme {
     let name = renamed(name).unwrap_or(name);
-    THEMES
+    let shown = &SHOWN.0;
+    shown
         .iter()
         .find(|t| t.name == name)
         .or_else(|| CUSTOM.read().ok().and_then(|c| c.0.iter().copied().find(|t| t.name == name)))
-        .or_else(|| THEMES.iter().find(|t| t.name == DEFAULT))
-        .unwrap_or(&THEMES[0])
+        .or_else(|| shown.iter().find(|t| t.name == DEFAULT))
+        .unwrap_or(&shown[0])
 }
 
 /// The theme an old name now stands for: themes renamed together with the app (Ferrum
@@ -946,7 +953,7 @@ fn parse_ansi(list: &[String]) -> Option<[u32; 16]> {
 /// theme it falls back to (Breeze Light or Dark).
 pub fn from_custom(c: &CustomTheme) -> Theme {
     let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-    from_custom_in(&mut pool, c)
+    from_custom_in(&mut pool, c).readable()
 }
 
 fn from_custom_in(pool: &mut Pool, c: &CustomTheme) -> Theme {
@@ -977,7 +984,7 @@ fn from_custom_in(pool: &mut Pool, c: &CustomTheme) -> Theme {
 /// A terminal colour scheme the user made; light or dark follows its background.
 pub fn from_custom_term(c: &CustomTermTheme) -> Theme {
     let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
-    from_custom_term_in(&mut pool, c)
+    from_custom_term_in(&mut pool, c).readable()
 }
 
 fn from_custom_term_in(pool: &mut Pool, c: &CustomTermTheme) -> Theme {
@@ -1032,12 +1039,12 @@ pub fn set_custom(app: &[CustomTheme], term: &[CustomTermTheme]) {
     let mut pool = POOL.lock().unwrap_or_else(|e| e.into_inner());
     let mut a: Vec<&'static Theme> = Vec::with_capacity(app.len());
     for c in app {
-        let t = from_custom_in(&mut pool, c);
+        let t = from_custom_in(&mut pool, c).readable();
         a.push(pool.theme(t));
     }
     let mut b: Vec<&'static Theme> = Vec::with_capacity(term.len());
     for c in term {
-        let t = from_custom_term_in(&mut pool, c);
+        let t = from_custom_term_in(&mut pool, c).readable();
         b.push(pool.theme(t));
     }
     drop(pool);
@@ -1059,6 +1066,21 @@ fn by_builtin(name: &str) -> &'static Theme {
 }
 
 impl Theme {
+    /// Secondary text (`weak`: hints, sizes, dates) that reads at small sizes: at least
+    /// 4.5:1 (WCAG AA) on the background and the panels, moved toward the text colour only
+    /// as far as needed. It stays lighter than the text: a theme whose text itself is soft
+    /// (Solarized) keeps a softer secondary text rather than losing the difference.
+    pub fn readable(&self) -> Theme {
+        const MIN: f32 = 4.5;
+        let reads = |c: Color32| contrast(c, self.bg).min(contrast(c, self.panel)) >= MIN;
+        let mut t = *self;
+        if !reads(self.weak) {
+            t.weak =
+                (1..=16).map(|i| self.weak.lerp_to_gamma(self.text, i as f32 / 20.0)).find(|c| reads(*c)).unwrap_or(self.weak.lerp_to_gamma(self.text, 0.8));
+        }
+        t
+    }
+
     /// Readable text colour on top of the accent colour.
     pub fn on_accent(&self) -> Color32 {
         let [r, g, b, _] = self.accent.to_array();
@@ -1134,6 +1156,51 @@ pub fn contrast(a: Color32, b: Color32) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
+/// Gamma of the text's edges (Settings → Fonts): the glyph coverage `c` is drawn as
+/// `c^gamma`, lower is fuller. `None` (Automatic) draws text as egui does: dark text on
+/// a light background as the rasterizer made it (gamma 1), light text on a dark one
+/// fuller (`2c − c²`, close to gamma 0.5), since blending in sRGB thins it there.
+pub const TEXT_GAMMAS: std::ops::RangeInclusive<f32> = 0.3..=1.0;
+
+/// The gamma closest to Automatic in a light or dark theme: where the slider starts.
+pub fn auto_gamma(dark: bool) -> f32 {
+    if dark {
+        0.5
+    } else {
+        1.0
+    }
+}
+
+/// 0: Automatic; otherwise the bits of the gamma.
+static TEXT_GAMMA_BITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The gamma `apply` uses from now on (re-apply the theme to see it). A value that is
+/// not a number is Automatic; others are held to `TEXT_GAMMAS`.
+pub fn set_text_gamma(gamma: Option<f32>) {
+    let bits = match gamma {
+        Some(g) if g.is_finite() => g.clamp(*TEXT_GAMMAS.start(), *TEXT_GAMMAS.end()).to_bits(),
+        _ => 0,
+    };
+    TEXT_GAMMA_BITS.store(bits, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn text_gamma() -> Option<f32> {
+    match TEXT_GAMMA_BITS.load(std::sync::atomic::Ordering::Relaxed) {
+        0 => None,
+        bits => Some(f32::from_bits(bits)),
+    }
+}
+
+/// How text is drawn in a light or dark theme with the setting.
+fn text_transfer(dark: bool) -> egui::epaint::FontColorTransferFunction {
+    use egui::epaint::FontColorTransferFunction as F;
+    match text_gamma() {
+        Some(g) => F::Gamma(g),
+        None if dark => F::DARK_MODE_DEFAULT,
+        None => F::LIGHT_MODE_DEFAULT,
+    }
+}
+
 pub fn apply(ctx: &egui::Context, t: &Theme) {
     use egui::{CornerRadius, FontFamily, FontId, Margin, Shadow, TextStyle};
     let mut v = if t.dark { Visuals::dark() } else { Visuals::light() };
@@ -1201,6 +1268,8 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
     ctx.set_theme(if t.dark { egui::Theme::Dark } else { egui::Theme::Light });
     let mut style = (*ctx.global_style()).clone();
     style.visuals = v;
+    // Text as full as the setting asks (see `TEXT_GAMMAS`).
+    style.visuals.text_options.color_transfer_function = text_transfer(t.dark);
     // Round slider handles, as egui drew them until 0.35.
     style.visuals.handle_shape = egui::style::HandleShape::Circle;
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
@@ -1250,6 +1319,27 @@ mod tests {
             assert_eq!(t.dark, b < 0.3, "{}: dark flag", t.name);
             assert!(t.ansi.is_some());
         }
+    }
+
+    #[test]
+    fn secondary_text_reads_and_stays_secondary() {
+        let pairs = THEMES.iter().map(|o| (o, by_name(o.name))).chain(TERM_THEMES.iter().map(|o| (o, term_by_name(o.name))));
+        for (original, t) in pairs {
+            let (weak, text) = (contrast(t.weak, t.bg).min(contrast(t.weak, t.panel)), contrast(t.text, t.bg));
+            // Or as close as it gets while staying softer than the text (Solarized's text is soft itself).
+            let closest = original.weak.lerp_to_gamma(original.text, 0.8);
+            assert!(weak >= 4.5 || t.weak == closest, "{}: secondary text {weak:.1}:1 (text {text:.1}:1)", t.name);
+            assert!(contrast(t.weak, t.bg) < text, "{}: still softer than the text", t.name);
+        }
+        // A theme that already reads keeps its colour; one that does not moves toward its text.
+        let breeze_dark = THEMES.iter().find(|t| t.name == "Breeze Dark").unwrap();
+        assert_eq!(by_name("Breeze Dark").weak, breeze_dark.weak);
+        let breeze_light = THEMES.iter().find(|t| t.name == "Breeze Light").unwrap();
+        assert!(contrast(breeze_light.weak, breeze_light.bg) < 4.5);
+        assert!(contrast(by_name("Breeze Light").weak, breeze_light.bg) >= 4.5);
+        // So does a theme the user makes.
+        let mine = CustomTheme { name: "Pale".into(), dark: false, bg: "#ffffff".into(), weak: "#dddddd".into(), ..Default::default() };
+        assert!(contrast(from_custom(&mine).weak, Color32::WHITE) >= 4.5);
     }
 
     #[test]
@@ -1356,6 +1446,29 @@ mod tests {
         assert!(!is_builtin("My Matrix"));
         let got = crate::config::unique_theme_names(&["Nord".into(), "mine".into(), " Mine ".into(), "".into(), "Mine 2".into()], "Custom");
         assert_eq!(got, ["Nord 2", "mine", "Mine 2", "Custom", "Mine 2 2"]);
+    }
+
+    /// Automatic draws text as egui does for the theme's light or dark background; a
+    /// gamma the user sets applies to both; out-of-range values are held back.
+    #[test]
+    fn text_keeps_its_weight() {
+        let gamma_of = |name: &str| {
+            let ctx = egui::Context::default();
+            apply(&ctx, by_name(name));
+            [egui::Theme::Light, egui::Theme::Dark].map(|th| ctx.style_of(th).visuals.text_options.color_transfer_function)
+        };
+        use egui::epaint::FontColorTransferFunction as F;
+        assert_eq!(text_gamma(), None, "Automatic before any setting");
+        assert_eq!(gamma_of("Breeze Light"), [F::LIGHT_MODE_DEFAULT; 2]);
+        assert_eq!(gamma_of("Breeze Dark"), [F::DARK_MODE_DEFAULT; 2]);
+        set_text_gamma(Some(0.8));
+        assert_eq!(gamma_of("Breeze Light"), [F::Gamma(0.8); 2]);
+        assert_eq!(gamma_of("Breeze Dark"), [F::Gamma(0.8); 2]);
+        set_text_gamma(Some(5.0));
+        assert_eq!(text_gamma(), Some(1.0), "held to the range");
+        set_text_gamma(Some(f32::NAN));
+        assert_eq!(text_gamma(), None);
+        set_text_gamma(None);
     }
 
     #[test]

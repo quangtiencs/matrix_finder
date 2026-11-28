@@ -3333,7 +3333,7 @@ dependencies = [
 
 [[package]]
 name = "matrix_finder"
-version = "0.18.0"
+version = "0.18.1"
 dependencies = [
  "alacritty_terminal",
  "apache-avro",
