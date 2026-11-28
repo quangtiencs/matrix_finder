@@ -1720,7 +1720,7 @@ fn header_row(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: 
         if let Some((text, recursive)) = chip {
             let (rect, resp) = ui.allocate_exact_size(vec2(chip_w, 24.0), Sense::click());
             let label = text.clone();
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
             let bad = !recursive && tab.filter.is_err();
             let base = if bad { th.danger } else { th.accent };
             let fill = base.gamma_multiply(if resp.hovered() { 0.32 } else { 0.2 });
@@ -1779,7 +1779,7 @@ fn folder_tree_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut 
     let shown = tab.tree.is_some();
     let accent = th.accent;
     let r = icons::icon_button(ui, 26.0, true, th, |p, r, col| foldertree::icon(p, r, if shown { accent } else { col })).on_hover_text(t("Folder tree"));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Folder tree")));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Folder tree")));
     if r.clicked() {
         tab.tree = match tab.tree {
             Some(_) => None,
@@ -1790,7 +1790,7 @@ fn folder_tree_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut 
         };
     }
     let Some(tree) = tab.tree.as_mut() else { return };
-    match foldertree::popup(ui, egui::Id::new(("folder-tree", tab.uid)), r.rect, tree, c.app_theme) {
+    match foldertree::popup(ui, egui::Id::unique(("folder-tree", tab.uid)), r.rect, tree, c.app_theme) {
         Popup::Picked(p) => {
             tab.tree = None;
             ev.push(PaneEvent::Navigate(Location::Local(p)));
@@ -1812,13 +1812,13 @@ fn quick_filter_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut
     let on = tab.quick.is_some() || finding;
     let accent = th.accent;
     let r = icons::icon_button(ui, 26.0, true, th, |p, r, col| icons::funnel(p, r, if on { accent } else { col }, on));
-    r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Find and filter")));
+    r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Find and filter")));
     let tip = match &tab.quick {
         Some(q) => format!("{}: {}", t("Quick filter"), q.label()),
         None => format!("{} ({})", t("Find and filter"), crate::ui::shortcuts::hint(crate::ui::shortcuts::Action::Filter)),
     };
     let r = r.on_hover_text(tip);
-    let id = egui::Id::new(("quick-filter", tab.uid));
+    let id = egui::Id::unique(("quick-filter", tab.uid));
     let focus = id.with("focus");
     if std::mem::take(&mut tab.open_find) {
         egui::Popup::open_id(ui.ctx(), id);
@@ -1928,10 +1928,10 @@ fn find_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pan
 /// The Find panel's options, folded under one row that says which ones are changed:
 /// files and folders shown, and how names compare (case, `-` `_` and spaces).
 fn find_options(ui: &mut egui::Ui, d: &mut Find, th: &Theme, w: f32) {
-    let id = egui::Id::new("find-options-open");
+    let id = egui::Id::unique("find-options-open");
     let mut open = ui.data(|m| m.get_temp::<bool>(id)).unwrap_or(false);
     let (row, resp) = ui.allocate_exact_size(vec2(w, 24.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, t("Options")));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, open, t("Options")));
     if resp.hovered() {
         ui.painter().rect_filled(row, 5.0, th.hover());
     }
@@ -2010,9 +2010,9 @@ fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pa
         let count: usize = exts.iter().map(|x| by_ext.get(x.as_str()).copied().unwrap_or(0)).sum();
         let at = pos2(left + (i % 2) as f32 * (col_w + gap), top + (i / 2) as f32 * 28.0);
         let row = Rect::from_min_size(at, vec2(col_w, 28.0));
-        let resp = ui.interact(row, egui::Id::new(("quick-kind", i)), Sense::click());
+        let resp = ui.interact(row, egui::Id::unique(("quick-kind", i)), Sense::click());
         let sel = tab.quick.as_ref().is_some_and(|a| a.has(&q.name));
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, sel, t(&q.name)));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, true, sel, t(&q.name)));
         menu_row_fill(ui, row, th, sel, resp.hovered());
         // The tick box.
         let bx = Rect::from_center_size(pos2(row.left() + 13.0, row.center().y), vec2(15.0, 15.0));
@@ -2245,7 +2245,7 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
             use crate::system::agents::AgentAct;
             let idle = term.is_idle();
             let r = icons::icon_button(ui, 26.0, idle, th, |p, r, col| crate::system::agents::paint_logo(p, r.shrink(0.5), a, col));
-            r.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, idle, a.name));
+            r.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, idle, a.name));
             let r = r.on_hover_ui(|ui| {
                 ui.label(egui::RichText::new(a.name).strong());
                 ui.label(if idle { t("Start it in this terminal") } else { t("Available when the terminal is idle (no program running)") });
@@ -2282,7 +2282,7 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
                 _ => out.open_dir = Some(term.cwd.clone()),
             }
         }
-        let copied_key = egui::Id::new(("term-path-copied", tab.uid));
+        let copied_key = egui::Id::unique(("term-path-copied", tab.uid));
         let now = ui.input(|i| i.time);
         let copied = ui.ctx().data(|d| d.get_temp::<f64>(copied_key)).is_some_and(|at| now - at < 1.2);
         let ok_col = th.accent;
@@ -2470,7 +2470,7 @@ fn crumb_label(l: &Location, c: &PaneUiCtx) -> String {
 fn breadcrumb(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx, ev: &mut Vec<PaneEvent>) {
     let th = c.theme;
     let width = ui.available_width();
-    let path_id = egui::Id::new(("path", side));
+    let path_id = egui::Id::unique(("path", side));
     if tab.focus_path {
         tab.editing_path = true;
     }
@@ -2765,7 +2765,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     };
     for (key, label, x, w, align) in &cols {
         let r = Rect::from_min_size(pos2(hrect.left() + x, hrect.top()), vec2(*w, hrect.height()));
-        let resp = ui.interact(r, egui::Id::new(("hdr", side, *key as u8)), Sense::click());
+        let resp = ui.interact(r, egui::Id::unique(("hdr", side, *key as u8)), Sense::click());
         let sorted = tab.sort == *key;
         let arrow = if sorted {
             if tab.desc {
@@ -3035,7 +3035,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                             break;
                         }
                         let rect = Rect::from_min_size(pos2(line_rect.left() + SIDE_PAD + k as f32 * cell_w, line_rect.top()), vec2(cell_w, CELL_H));
-                        let resp = ui.interact(rect, egui::Id::new(("cell", tab_ro.uid, row)), Sense::click_and_drag());
+                        let resp = ui.interact(rect, egui::Id::unique(("cell", tab_ro.uid, row)), Sense::click_and_drag());
                         item(ui, row, rect, resp);
                     }
                     // The empty cells after the last icon are background, as below it.
@@ -3043,7 +3043,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                     if used < per_line {
                         let x0 = line_rect.left() + SIDE_PAD + used as f32 * cell_w;
                         let rest = Rect::from_min_max(pos2(x0, line_rect.top()), pos2(line_rect.right(), line_rect.bottom()));
-                        let bg = ui.interact(rest, egui::Id::new(("cells-rest", tab_ro.uid)), Sense::click());
+                        let bg = ui.interact(rest, egui::Id::unique(("cells-rest", tab_ro.uid)), Sense::click());
                         if bg.clicked() {
                             ev.push(PaneEvent::Focus);
                         }
@@ -3110,7 +3110,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
         })
     });
     if !tab.ensure_visible {
-        tab.scroll_offset = out.inner.state.offset.y;
+        tab.scroll_offset = out.inner.state.clamped_offset().y;
     }
     tab.menu_open = menu_open || bg_menu_open;
     if menu_for.is_some() {
@@ -3254,8 +3254,8 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
             let info = format!("{:.0}% · {left_txt} · {found} {} · {checked} {}", fraction * 100.0, t("found"), t("checked"));
             // Stop, at the right end.
             let stop = Rect::from_min_size(pos2(right - 64.0, frect.center().y - 10.0), vec2(64.0, 20.0));
-            let resp = ui.interact(stop, egui::Id::new(("stop-search", tab.uid)), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Stop")));
+            let resp = ui.interact(stop, egui::Id::unique(("stop-search", tab.uid)), Sense::click());
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Stop")));
             p.rect(
                 stop,
                 5.0,

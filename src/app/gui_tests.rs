@@ -743,6 +743,8 @@ fn app_harness(cfg: &Settings, chrome: &str) -> Harness<'static, App> {
     let mut h = Harness::builder()
         .with_size(egui::vec2(W, H))
         .with_pixels_per_point(1.0)
+        // Screenshots without the mouse pointer kittest would draw.
+        .with_render_cursor(false)
         .wgpu()
         .build_eframe(|cc| App::new(cc, crate::ui::chrome::Chrome::detect(true), None));
     let app = h.state_mut();
@@ -858,10 +860,9 @@ fn term_type(h: &mut Harness<'static, App>, side: usize, uid: u64, text: &str) {
 }
 
 /// Centre of the first accessibility node with this label (and an optional x range).
-/// A submenu's button is named with its arrow (`View ⏵`), a menu item with its key.
+/// A menu item's name ends with its key: a space when it has none.
 fn node_center(h: &Harness<'static, App>, label: &str, x_min: f32) -> Option<Pos2> {
-    let submenu = format!("{label} ⏵");
-    let found = h.query_all_by(|n| n.label().is_some_and(|l| l.trim_end() == label || l == submenu)).find_map(|n| {
+    let found = h.query_all_by(|n| n.label().is_some_and(|l| l.trim_end() == label)).find_map(|n| {
         let r = n.accesskit_node().bounding_box()?;
         ((r.x0 as f32) >= x_min).then(|| pos2(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32))
     });
@@ -965,7 +966,7 @@ fn drag(h: &mut Harness<'static, App>, from: Pos2, to: Pos2) {
 /// Drag a dialog (`id` is its egui id: the app's windows set their own, e.g. "about")
 /// to the middle of the window, as a user would: egui opens dialogs towards the top left.
 fn center_dialog(h: &mut Harness<'static, App>, id: &str) {
-    let r = h.ctx.memory(|m| m.area_rect(egui::Id::new(id))).unwrap_or_else(|| panic!("no dialog {id}"));
+    let r = h.ctx.memory(|m| m.area_rect(egui::Id::unique(id))).unwrap_or_else(|| panic!("no dialog {id}"));
     let grab = r.left_top() + egui::vec2(40.0, 30.0);
     drag(h, grab, grab + (pos2(W / 2.0, H / 2.0) - r.center()));
 }
@@ -973,7 +974,16 @@ fn center_dialog(h: &mut Harness<'static, App>, id: &str) {
 /// Scroll the Settings page down, leaving the pointer on nothing that reacts to it.
 fn scroll_settings(h: &mut Harness<'static, App>, by: f32) {
     move_to(h, pos2(W * 0.7, H * 0.6));
-    push(h, Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, -by), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+    push(
+        h,
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, -by),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Modifiers::NONE,
+        },
+    );
     settle(h, 4);
     move_to(h, pos2(330.0, H - 12.0));
     settle(h, 2);
@@ -2111,7 +2121,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             app.shot_pane(0, &d.home.join("Downloads"), Some("photo.jpg"));
             app.shot_pane(1, &d.home.join("Projects/matrix_finder"), Some(".."));
             settle(&mut h, 2);
-            egui::Popup::open_id(&h.ctx, egui::Id::new(("bookmark-folder", folder)));
+            egui::Popup::open_id(&h.ctx, egui::Id::unique(("bookmark-folder", folder)));
             shot(&mut h, "bookmarks-bar");
         }
         if want("settings-bookmarks") {
@@ -2138,8 +2148,8 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             }
             settle(&mut h, 3);
             let uid = h.state().panes[0].tab().uid;
-            egui::Popup::open_id(&h.ctx, egui::Id::new(("quick-filter", uid)));
-            h.ctx.data_mut(|m| m.insert_temp(egui::Id::new("find-options-open"), true));
+            egui::Popup::open_id(&h.ctx, egui::Id::unique(("quick-filter", uid)));
+            h.ctx.data_mut(|m| m.insert_temp(egui::Id::unique("find-options-open"), true));
             shot(&mut h, "quick-filter");
         }
         if want("settings-quick-filters") {
@@ -2792,7 +2802,7 @@ fn transfers_open_in_a_tab() {
     assert_eq!(app.strip.tabs.len(), before + 1);
     assert!(app.panes[app.active].tab().transfers);
     assert_eq!(app.panes[app.active].tab().title(), t("Tasks"));
-    assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new(t("Tasks")))).is_none());
+    assert!(h.ctx.memory(|m| m.area_rect(egui::Id::unique(t("Tasks")))).is_none());
 
     // It has no file list for file commands to act on.
     press_chord(&mut h, "F5");
@@ -3292,6 +3302,8 @@ fn broken_settings_are_kept_and_told() {
     let mut h = Harness::builder()
         .with_size(egui::vec2(W, H))
         .with_pixels_per_point(1.0)
+        // Screenshots without the mouse pointer kittest would draw.
+        .with_render_cursor(false)
         .wgpu()
         .build_eframe(|cc| App::new(cc, crate::ui::chrome::Chrome::detect(true), None));
     settle(&mut h, 3);
@@ -3323,6 +3335,8 @@ fn saved_passwords_move_into_memory() {
     let mut h = Harness::builder()
         .with_size(egui::vec2(W, H))
         .with_pixels_per_point(1.0)
+        // Screenshots without the mouse pointer kittest would draw.
+        .with_render_cursor(false)
         .wgpu()
         .build_eframe(|cc| App::new(cc, crate::ui::chrome::Chrome::detect(true), None));
     settle(&mut h, 2);
@@ -3577,7 +3591,13 @@ fn geometry_preview_moves_and_shows_its_source() {
     move_to(&mut h, middle);
     push(
         &mut h,
-        Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 240.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE },
+        Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta: egui::vec2(0.0, 240.0),
+            phase: egui::TouchPhase::Move,
+            source: egui::MouseWheelSource::Wheel,
+            modifiers: Modifiers::NONE,
+        },
     );
     settle(&mut h, 4);
     let after = h.render().unwrap();
@@ -4101,7 +4121,7 @@ fn sidebar_button_next_to_the_app_menu() {
             h.get_by_label_contains("Matrix Finder").click_accesskit();
             settle(&mut h, 2);
             // Submenus open on hover.
-            h.get_by_role_and_label(Role::Button, &format!("{} ⏵", t("View"))).hover();
+            h.get_by_role_and_label(Role::Button, &t("View")).hover();
             settle(&mut h, 3);
             let item = h.get_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar")))));
             assert_eq!(item.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True), !want, "{chrome}: the item shows the state");
@@ -4167,7 +4187,7 @@ fn checksum_and_batch_rename_open_in_tabs() {
     assert!(h.state().panes[0].tab().checksum.is_some());
     assert!(!h.state().panes[0].tab().is_files());
     assert_eq!(h.state().panes[0].tab().title(), t("Checksum"));
-    assert!(h.ctx.memory(|m| m.area_rect(egui::Id::new("checksum-window"))).is_none(), "no floating window");
+    assert!(h.ctx.memory(|m| m.area_rect(egui::Id::unique("checksum-window"))).is_none(), "no floating window");
     let want = crate::tools::checksum::hash_reader(&b"alpha"[..], crate::tools::checksum::Algo::Sha256, |_| true).unwrap();
     for _ in 0..100 {
         if h.query_by_label(&want).is_some() {
@@ -4264,7 +4284,7 @@ fn copy_dialog_suggests_folders_and_has_a_tree() {
     wait_names(&mut h, &["alpha", "beta"]);
     settle(&mut h, 2);
     assert_eq!(h.state().dialog_path.complete.rows.len(), 2, "the list is shown");
-    let width = |h: &Harness<'static, App>| h.ctx.memory(|m| m.area_rect(egui::Id::new("dialog"))).map(|r| r.width());
+    let width = |h: &Harness<'static, App>| h.ctx.memory(|m| m.area_rect(egui::Id::unique("dialog"))).map(|r| r.width());
     let w0 = width(&h);
     settle(&mut h, 10);
     assert_eq!(width(&h), w0, "the dialog keeps its width");
@@ -4293,7 +4313,7 @@ fn copy_dialog_suggests_folders_and_has_a_tree() {
     settle(&mut h, 2);
     assert!(names(&h).is_empty(), "Esc closes the list");
     assert!(dst(&h).is_some(), "and leaves the dialog open");
-    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")), "typing goes on in the field");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::unique("dialog-dst")), "typing goes on in the field");
     // Enter with no suggestion chosen copies.
     key_press(&mut h, Key::A, None, Modifiers::COMMAND);
     push(&mut h, Event::Text(format!("{}/beta", dir.display())));
@@ -4312,7 +4332,7 @@ fn copy_dialog_suggests_folders_and_has_a_tree() {
     other_folder(&mut h);
     let r = open_dialog_tree(&mut h, &docs);
     assert_eq!(tree(&h).unwrap().1, Some(d.home.clone()), "the folder in the field is chosen");
-    assert_eq!(h.state().dialog_path.tree_of(egui::Id::new("dialog-dst")).unwrap().current(), Some(d.home.as_path()));
+    assert_eq!(h.state().dialog_path.tree_of(egui::Id::unique("dialog-dst")).unwrap().current(), Some(d.home.as_path()));
     // Small: well inside the window.
     let (ok, cancel) = tree(&h).unwrap().2.expect("OK and Cancel");
     assert!(ok.bottom() < H - 40.0 && cancel.right() < ok.left(), "Cancel, then OK: {cancel:?} {ok:?}");
@@ -4354,7 +4374,7 @@ fn copy_dialog_suggests_folders_and_has_a_tree() {
     click_at(&mut h, ok.center());
     assert!(tree(&h).is_none(), "OK closes the tree");
     assert_eq!(dst(&h), Some(docs.display().to_string()));
-    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")), "the field has the keyboard back");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::unique("dialog-dst")), "the field has the keyboard back");
     key_press(&mut h, Key::Enter, None, Modifiers::NONE);
     settle(&mut h, 2);
     wait_until(&mut h, 5.0, |_| docs.join("src.txt").exists());
@@ -4462,7 +4482,7 @@ type TreeSeen = (Vec<(PathBuf, egui::Rect)>, Option<PathBuf>, Option<(egui::Rect
 
 /// The folder tree of the dialog's folder field, while it is open.
 fn dialog_tree(h: &Harness<'static, App>) -> Option<TreeSeen> {
-    h.state().dialog_path.tree_of(egui::Id::new("dialog-dst")).map(|t| (t.rows.clone(), t.selected().map(Path::to_path_buf), t.buttons))
+    h.state().dialog_path.tree_of(egui::Id::unique("dialog-dst")).map(|t| (t.rows.clone(), t.selected().map(Path::to_path_buf), t.buttons))
 }
 
 /// Open the dialog's folder tree (the lowest "Folder tree" button: the address bars have
@@ -4552,7 +4572,7 @@ fn compress_dialog() {
     assert_eq!(pack(&h).unwrap().2, ArchiveFormat::Tar);
     assert_eq!(h.query_all_by_role(Role::Slider).count(), 0, "no level for .tar");
     // A format typed in the name is chosen, and not added twice.
-    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("pack-name")));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("pack-name")));
     settle(&mut h, 1);
     key_press(&mut h, Key::A, None, Modifiers::COMMAND);
     push(&mut h, Event::Text("album.tar.gz".into()));
@@ -4561,7 +4581,7 @@ fn compress_dialog() {
     assert!(makes(&h, "album.tar.gz", &dest));
 
     // Save to: folders that match what is typed.
-    h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("dialog-dst")));
+    h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("dialog-dst")));
     settle(&mut h, 1);
     key_press(&mut h, Key::A, None, Modifiers::COMMAND);
     push(&mut h, Event::Text(format!("{}/", dir.display())));
@@ -4685,7 +4705,7 @@ fn extract_dialog_suggests_folders_and_has_a_tree() {
     h.state_mut().run_cmd(Cmd::ExtractOther);
     settle(&mut h, 3);
     assert_eq!(dest(&h), Some(d.home.join("bundle").display().to_string()));
-    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")));
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::unique("dialog-dst")));
     key_press(&mut h, Key::A, None, Modifiers::COMMAND);
     push(&mut h, Event::Text(format!("{}/Doc", d.home.display())));
     for _ in 0..60 {
@@ -4808,7 +4828,7 @@ fn quick_filter_ticks_several_kinds() {
         let tab = h.state().panes[0].tab();
         tab.view.iter().map(|&i| &tab.entries[i]).filter(|e| !e.is_parent).map(|e| e.name.clone()).collect()
     };
-    let menu_open = |h: &Harness<'static, App>| egui::Popup::is_id_open(&h.ctx, egui::Id::new(("quick-filter", h.state().panes[0].tab().uid)));
+    let menu_open = |h: &Harness<'static, App>| egui::Popup::is_id_open(&h.ctx, egui::Id::unique(("quick-filter", h.state().panes[0].tab().uid)));
     let funnel = |h: &mut Harness<'static, App>| {
         h.query_all_by_role_and_label(Role::Button, &t("Find and filter"))
             .min_by(|a, b| a.accesskit_node().bounding_box().unwrap().x0.total_cmp(&b.accesskit_node().bounding_box().unwrap().x0))
@@ -5021,7 +5041,8 @@ fn narrow_sidebar_leaves_no_band() {
             h.set_size(egui::vec2(w, H));
             settle(&mut h, 4);
             let img = h.render().unwrap();
-            let r = egui::containers::panel::PanelState::load(&h.ctx, egui::Id::new("sidebar")).unwrap().outer_rect;
+            // The panel's right edge: the end of its resize grip (the gap of its right margin).
+            let r = h.ctx.read_response(egui::Id::unique("sidebar-grip")).expect("the sidebar's grip").rect;
             let panel = h.state().theme.panel;
             let px = img.get_pixel(r.right() as u32 - 2, (H - 120.0) as u32).0;
             assert_eq!([px[0], px[1], px[2]], [panel.r(), panel.g(), panel.b()], "{chrome} sidebar {sidebar} window {w}: painted to its edge ({r:?})");
@@ -5172,7 +5193,7 @@ fn transfer_destinations() {
     assert!(selected(&h, &other) && !selected(&h, &win(3, &images)), "only Another folder is chosen");
     assert_eq!(fields(&h), 1);
     assert!(h.state().dialog_tree.is_some(), "with the folder tree");
-    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::new("dialog-dst")), "typing goes to the address");
+    assert_eq!(h.ctx.memory(|m| m.focused()), Some(egui::Id::unique("dialog-dst")), "typing goes to the address");
     key_press(&mut h, Key::A, None, Modifiers::COMMAND);
     let formats = d.demo.join("formats");
     push(&mut h, Event::Text(formats.display().to_string()));
@@ -5262,7 +5283,7 @@ fn dialogs_close_by_their_button_and_esc() {
             h.render().unwrap().save(format!("{dir}/about-{chrome}.png")).unwrap();
         }
         // The close button in About's title bar.
-        let about = h.ctx.memory(|m| m.area_rect(egui::Id::new("about"))).expect("About is shown");
+        let about = h.ctx.memory(|m| m.area_rect(egui::Id::unique("about"))).expect("About is shown");
         let close = h
             .query_all_by_label(&t("Close"))
             .filter_map(|n| n.accesskit_node().bounding_box())
@@ -5291,7 +5312,7 @@ fn dialogs_close_by_their_button_and_esc() {
         key_press(&mut h, Key::Escape, None, Modifiers::NONE);
         assert!(h.state().show_about, "{chrome}: Esc after a click in the files is not the window's");
         // A click on the window gives it the keyboard back.
-        let about = h.ctx.memory(|m| m.area_rect(egui::Id::new("about"))).unwrap();
+        let about = h.ctx.memory(|m| m.area_rect(egui::Id::unique("about"))).unwrap();
         click_at(&mut h, about.center());
         key_press(&mut h, Key::Escape, None, Modifiers::NONE);
         assert!(!h.state().show_about, "{chrome}: Esc after a click on the window closes it");
@@ -5373,6 +5394,7 @@ fn window_size_at_start_setting() {
                     unit: egui::MouseWheelUnit::Point,
                     delta: egui::vec2(0.0, -120.0),
                     phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Wheel,
                     modifiers: Modifiers::NONE,
                 },
             );
@@ -5738,7 +5760,7 @@ fn bookmarks_reorder_by_dragging_in_settings() {
     h.state_mut().open_settings(SettingsPage::Bookmarks);
     settle(&mut h, 4);
     scroll_settings(&mut h, 300.0);
-    let grip = |h: &Harness<'static, App>, at: (usize, Option<usize>)| h.ctx.read_response(egui::Id::new(("bm-grip", at))).expect("a drag handle").rect;
+    let grip = |h: &Harness<'static, App>, at: (usize, Option<usize>)| h.ctx.read_response(egui::Id::unique(("bm-grip", at))).expect("a drag handle").rect;
     let order =
         |h: &Harness<'static, App>| {
             h.state()
@@ -5956,7 +5978,7 @@ fn quick_filters_are_edited_in_settings() {
     assert_eq!(names(&h), ["Images", "Mine"]);
 
     // Dragged by its handle above the first one.
-    let grip = |h: &Harness<'static, App>, i: usize| h.ctx.read_response(egui::Id::new(("qf-row", i)).with("grip")).expect("a drag handle").rect;
+    let grip = |h: &Harness<'static, App>, i: usize| h.ctx.read_response(egui::Id::unique(("qf-row", i)).with("grip")).expect("a drag handle").rect;
     let (from, to) = (grip(&h, 1).center(), grip(&h, 0));
     drag(&mut h, from, pos2(from.x, to.top() + 2.0));
     assert_eq!(names(&h), ["Mine", "Images"]);
@@ -6075,7 +6097,8 @@ fn split_view_splits_the_focused_window() {
     let choose = |h: &mut Harness<'static, App>, label: &str| {
         h.get_by_label(&t("Split view")).click_accesskit();
         settle(h, 2);
-        h.get_by_label_contains(label).click_accesskit();
+        // The menu's item (the windows' own close buttons are named by their tooltip).
+        h.get_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.contains(label))).click_accesskit();
         settle(h, 4);
     };
     if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {

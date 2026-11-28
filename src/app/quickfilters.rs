@@ -221,10 +221,10 @@ impl App {
         let exts = q.ext_list();
         let open = self.qf.open == Some(i);
         let asking = self.qf.delete == Some(i);
-        let id = egui::Id::new(("qf-row", i));
+        let id = egui::Id::unique(("qf-row", i));
         let (row, resp) = ui.allocate_exact_size(vec2(w, ROW_H), Sense::click());
         let label = q.display_name();
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader, true, open, &label));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, open, &label));
         let mut edit = None;
 
         // The handle, and the buttons on the right: drawn over the row, so they take its clicks.
@@ -253,7 +253,7 @@ impl App {
         } else {
             let tr = Rect::from_center_size(pos2(row.right() - 18.0, row.center().y), vec2(26.0, 26.0));
             let trash = ui.interact(tr, id.with("remove"), Sense::click());
-            trash.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Remove")));
+            trash.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Remove")));
             if trash.hovered() {
                 ui.painter().rect_filled(tr, 6.0, th.hover());
             }
@@ -369,7 +369,7 @@ impl App {
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing = vec2(6.0, 6.0);
                         for (k, e) in exts.iter().enumerate() {
-                            if ext_chip(ui, th, e, egui::Id::new(("qf-chip", i, k))) {
+                            if ext_chip(ui, th, e, egui::Id::unique(("qf-chip", i, k))) {
                                 remove = Some(k);
                             }
                         }
@@ -443,7 +443,7 @@ fn ext_chip(ui: &mut egui::Ui, th: &Theme, ext: &str, id: egui::Id) -> bool {
     let (r, _) = ui.allocate_exact_size(size, Sense::hover());
     let xr = Rect::from_center_size(pos2(r.right() - 11.0, r.center().y), vec2(16.0, 16.0));
     let x = ui.interact(xr, id, Sense::click());
-    x.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, format!("{} .{ext}", t("Remove"))));
+    x.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{} .{ext}", t("Remove"))));
     let fill = if x.hovered() { th.danger.gamma_multiply(0.15) } else { th.surface };
     ui.painter().rect(r, 11.0, fill, Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
     ui.painter().galley(pos2(r.left() + 10.0, r.center().y - g.size().y / 2.0), g, th.text);

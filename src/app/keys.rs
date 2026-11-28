@@ -467,7 +467,7 @@ impl App {
         let text_w = ctx.fonts_mut(|f| f.layout_no_wrap(format!("{text}▏"), egui::FontId::proportional(13.5), th.text).size().x);
         let width = (text_w + 130.0).clamp(260.0, (rect.width() - 28.0).max(260.0)).min(rect.width() - 24.0).max(120.0);
         let pos = egui::pos2(rect.right() - width - 14.0, rect.bottom() - 28.0 - 44.0);
-        egui::Area::new(egui::Id::new("type-search")).order(egui::Order::Foreground).fixed_pos(pos).interactable(false).show(ctx, |ui| {
+        egui::Area::new(egui::Id::unique("type-search")).order(egui::Order::Foreground).fixed_pos(pos).interactable(false).show(ctx, |ui| {
             egui::Frame::new()
                 .fill(th.panel)
                 .stroke(egui::Stroke::new(1.0_f32, th.accent))

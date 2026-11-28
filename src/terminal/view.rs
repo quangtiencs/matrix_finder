@@ -181,6 +181,9 @@ pub struct TermSession {
     report_dragging: bool,
     last_report_cell: Option<(usize, usize)>,
     skip_text: bool,
+    /// Ctrl+Shift+V asked eframe for the clipboard: the paste that comes is the terminal's,
+    /// in a full-screen program too.
+    paste_asked: bool,
     /// Text an input method is composing (Telex, pinyin, kana…): drawn at the cursor,
     /// sent only once it is committed.
     preedit: String,
@@ -210,6 +213,25 @@ pub struct TermSession {
 impl Drop for TermSession {
     fn drop(&mut self) {
         let _ = self.sender.send(Msg::Shutdown);
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Clip {
+    Copy,
+    Paste,
+}
+
+/// Ctrl+Shift+C and Ctrl+Shift+V, the terminal's copy and paste on Linux and Windows
+/// (egui only turns plain Ctrl+C / Ctrl+V into Copy and Paste).
+fn shift_clipboard(key: Key, m: egui::Modifiers, mac: bool) -> Option<Clip> {
+    if mac || !(m.ctrl && m.shift) || m.alt {
+        return None;
+    }
+    match key {
+        Key::C => Some(Clip::Copy),
+        Key::V => Some(Clip::Paste),
+        _ => None,
     }
 }
 
@@ -264,7 +286,7 @@ impl TermSession {
             sender,
             rx,
             dirty,
-            id: egui::Id::new(("terminal", next_id())),
+            id: egui::Id::unique(("terminal", next_id())),
             title: String::new(),
             cwd: dir.to_path_buf(),
             cwd_at: Instant::now(),
@@ -294,6 +316,7 @@ impl TermSession {
             report_dragging: false,
             last_report_cell: None,
             skip_text: false,
+            paste_asked: false,
             reported_focus: None,
             menu_link: None,
             link_press: None,
@@ -776,12 +799,8 @@ impl TermSession {
         // system font that has them (the frame is repainted once one is added).
         if !others.is_empty() {
             let bold = self.bold_font.clone();
-            let missing: Vec<char> = ui.fonts_mut(|f| {
-                others
-                    .into_iter()
-                    .filter(|&c| !c.is_whitespace() && (!crate::style::fonts::draws(f, &font, c) || !crate::style::fonts::draws(f, &bold, c)))
-                    .collect()
-            });
+            let missing: Vec<char> =
+                ui.fonts_mut(|f| others.into_iter().filter(|&c| !c.is_whitespace() && (!f.has_glyph(&font, c) || !f.has_glyph(&bold, c))).collect());
             if !missing.is_empty() {
                 crate::style::fontfallback::request(ui.ctx(), missing);
             }
@@ -1082,7 +1101,7 @@ impl TermSession {
                 | egui::Event::Key { key: Key::Backspace | Key::ArrowUp | Key::ArrowDown | Key::ArrowLeft | Key::ArrowRight, .. }
                     if !self.preedit.is_empty() => {}
                 egui::Event::Copy => {
-                    // Cmd+C / Ctrl+Shift+C copy. Plain Ctrl+C copies too while text is
+                    // Cmd+C copies. Plain Ctrl+C copies too while text is
                     // selected (and clears the selection), otherwise it interrupts.
                     // (Shift is not reliable here: a quick chord can be released
                     // before the frame that sees the event.)
@@ -1111,7 +1130,7 @@ impl TermSession {
                 egui::Event::Paste(s) => {
                     // Ctrl+V pastes too, except in full-screen programs (vim's
                     // block mode) where plain Ctrl+V is passed through.
-                    if mac || mods.shift || !mode.contains(TermMode::ALT_SCREEN) {
+                    if mac || std::mem::take(&mut self.paste_asked) || mods.shift || !mode.contains(TermMode::ALT_SCREEN) {
                         self.paste(&s);
                     } else {
                         self.write(ctrl(b'v', 0x16));
@@ -1124,6 +1143,20 @@ impl TermSession {
                         if let Some((bytes, _)) = kitty_key_bytes(key, m, mode, mac, KeyEvent::Release) {
                             self.write(bytes);
                         }
+                    }
+                }
+                // Ctrl+Shift+C / Ctrl+Shift+V copy and paste (egui sends Copy and Paste for
+                // plain Ctrl+C / Ctrl+V only). Without a selection nothing is copied, and
+                // nothing interrupts the program either.
+                egui::Event::Key { key, pressed: true, modifiers: m, .. } if shift_clipboard(key, m, mac).is_some() => {
+                    if shift_clipboard(key, m, mac) == Some(Clip::Copy) {
+                        if let Some(s) = self.selection_text() {
+                            ui.ctx().copy_text(s);
+                            self.term.lock().selection = None;
+                        }
+                    } else {
+                        self.paste_asked = true;
+                        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
                     }
                 }
                 egui::Event::Key { key, pressed: true, repeat, modifiers: m, .. } => {
@@ -2035,6 +2068,18 @@ fn clipboard_set_primary(_text: &str) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn ctrl_shift_c_and_v_copy_and_paste_off_macos() {
+        let cs = egui::Modifiers { ctrl: true, shift: true, ..Default::default() };
+        assert_eq!(shift_clipboard(Key::C, cs, false), Some(Clip::Copy));
+        assert_eq!(shift_clipboard(Key::V, cs, false), Some(Clip::Paste));
+        assert_eq!(shift_clipboard(Key::C, egui::Modifiers::CTRL, false), None, "plain Ctrl+C interrupts");
+        assert_eq!(shift_clipboard(Key::C, cs, true), None, "macOS uses ⌘C");
+        assert_eq!(shift_clipboard(Key::C, egui::Modifiers { alt: true, ..cs }, false), None);
+        assert_eq!(shift_clipboard(Key::X, cs, false), None);
+    }
+
     use super::*;
 
     #[test]

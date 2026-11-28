@@ -423,7 +423,7 @@ impl FolderTree {
                 let x = rect.left() + 2.0 + row.depth as f32 * INDENT;
                 let chev = Rect::from_center_size(pos2(x + 8.0, rect.center().y), vec2(14.0, 14.0));
                 let has_chev = !matches!(row.kids, Kids::None);
-                let chev_resp = has_chev.then(|| ui.interact(chev.expand(3.0), ui.id().with(("tree-chevron", &row.path)), Sense::click()));
+                let chev_resp = has_chev.then(|| ui.interact(chev.expand(3.0), ui.scope_id().with(("tree-chevron", &row.path)), Sense::click()));
                 let is_sel = at == Some(i);
                 let is_current = self.current.as_ref() == Some(&row.path);
                 if is_sel {
@@ -469,7 +469,7 @@ impl FolderTree {
             }
         });
         ui.spacing_mut().item_spacing.y = spacing;
-        self.offset = out.state.offset.y;
+        self.offset = out.state.clamped_offset().y;
         self.settled |= !reading;
         if let Some((p, i)) = toggle {
             self.toggle_row(&p, Some(i));

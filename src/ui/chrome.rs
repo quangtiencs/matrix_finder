@@ -240,7 +240,7 @@ impl Chrome {
         let screen = ctx.content_rect();
         let maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
         let n = self.right.len() as f32;
-        egui::Area::new(egui::Id::new("caption-buttons")).order(egui::Order::Foreground).fixed_pos(pos2(screen.right() - WIN_BTN_W * n, screen.top())).show(
+        egui::Area::new(egui::Id::unique("caption-buttons")).order(egui::Order::Foreground).fixed_pos(pos2(screen.right() - WIN_BTN_W * n, screen.top())).show(
             ctx,
             |ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -282,7 +282,7 @@ impl Chrome {
         if !self.integrated {
             return;
         }
-        let resp = ui.interact(rect, egui::Id::new(("window-drag", id)), Sense::click_and_drag());
+        let resp = ui.interact(rect, egui::Id::unique(("window-drag", id)), Sense::click_and_drag());
         if resp.drag_started_by(egui::PointerButton::Primary) {
             ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
         }
@@ -367,7 +367,7 @@ impl Chrome {
             _ if close_left => Rect::from_center_size(pos2(bar.left() + 26.0, bar.center().y), vec2(26.0, 26.0)),
             _ => Rect::from_center_size(pos2(bar.right() - 26.0, bar.center().y), vec2(26.0, 26.0)),
         };
-        let resp = ui.interact(btn, ui.id().with("dialog-close"), Sense::click());
+        let resp = ui.interact(btn, ui.scope_id().with("dialog-close"), Sense::click());
         let (hovered, pressed) = (resp.hovered(), resp.is_pointer_button_down_on());
         let p = ui.painter();
         let mut glyph = th.text;
@@ -425,7 +425,7 @@ impl Chrome {
         ui.painter().galley(pos2(x, bar.center().y - galley.size().y / 2.0), galley, th.strong());
         ui.painter().line_segment([pos2(bar.left(), bar.bottom()), pos2(bar.right(), bar.bottom())], Stroke::new(1.0_f32, th.border));
         ui.add_space(8.0);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, crate::i18n::t("Close")));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, crate::i18n::t("Close")));
         resp.on_hover_text(crate::i18n::t("Close")).clicked()
     }
 
@@ -434,7 +434,7 @@ impl Chrome {
         if !self.integrated || self.style == Style::Mac || ctx.input(|i| i.viewport().maximized.unwrap_or(false)) {
             return;
         }
-        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("window-outline")));
+        let p = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("window-outline")));
         p.rect_stroke(ctx.viewport_rect(), self.window_radius(ctx), Stroke::new(1.0_f32, th.border), egui::StrokeKind::Inside);
     }
 }

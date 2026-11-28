@@ -869,7 +869,7 @@ mod tests {
             }
         }
         ctx.fonts_mut(|f| {
-            let mut drawn = |family: &egui::FontFamily, c: char| crate::style::fonts::draws(f, &egui::FontId::new(14.0, family.clone()), c);
+            let mut drawn = |family: &egui::FontFamily, c: char| f.has_glyph(&egui::FontId::new(14.0, family.clone()), c);
             // The check finds a character no font has.
             assert!(!drawn(&egui::FontFamily::Proportional, '\u{10FFFD}'));
             for text in &texts {

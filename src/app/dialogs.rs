@@ -106,7 +106,11 @@ impl App {
         if self.window_radius <= 0.0 {
             return dim;
         }
-        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::new("rounded-backdrop"))).rect_filled(ctx.viewport_rect(), self.window_radius, dim);
+        ctx.layer_painter(egui::LayerId::new(egui::Order::Middle, egui::Id::unique("rounded-backdrop"))).rect_filled(
+            ctx.viewport_rect(),
+            self.window_radius,
+            dim,
+        );
         egui::Color32::TRANSPARENT
     }
 
@@ -192,7 +196,7 @@ impl App {
         let title = t("Update available");
         let chrome = &self.chrome;
         chrome
-            .dialog_window(ctx, &title, egui::Id::new("update"))
+            .dialog_window(ctx, &title, egui::Id::unique("update"))
             .open(&mut open)
             .resizable(false)
             .default_width(460.0)
@@ -273,7 +277,7 @@ impl App {
         let mut keep = false;
         let mut stop = false;
         let edited: Vec<String> = self.temp_copies.unsaved().map(|c| c.name.clone()).collect();
-        egui::Modal::new(egui::Id::new("quit-confirm")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
+        egui::Modal::new(egui::Id::unique("quit-confirm")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
             ui.set_width(420.0);
             ui.heading(if n > 0 {
                 t("Quit while tasks are running?")
@@ -366,7 +370,7 @@ impl App {
         let mut confirmed = false;
         // The folder field of Copy / Move, Compress and Extract: its suggestions and tree
         // take their keys before the dialog does.
-        let dst_id = egui::Id::new("dialog-dst");
+        let dst_id = egui::Id::unique("dialog-dst");
         if let Dialog::Transfer { dst, .. } | Dialog::Pack { dest_dir: dst, .. } | Dialog::Unpack { dest: dst, .. } = &mut dialog {
             self.dialog_path.keys(ctx, dst, dst_id);
         }
@@ -387,7 +391,7 @@ impl App {
             _ => (Vec::new(), Vec::new()),
         };
         let focus = std::mem::take(&mut self.dialog_focus);
-        let modal = egui::Modal::new(egui::Id::new("dialog")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
+        let modal = egui::Modal::new(egui::Id::unique("dialog")).backdrop_color(self.modal_backdrop(ctx)).show(ctx, |ui| {
             ui.set_min_width(440.0);
             let enter = ui.input(|i| i.key_pressed(Key::Enter));
             // Enter confirms from a text field, or when nothing has the keyboard. On a button
@@ -552,7 +556,7 @@ impl App {
                         let ext = format!(".{}", format.extension());
                         let ext_w = ui.fonts_mut(|f| f.layout_no_wrap(ext.clone(), egui::FontId::proportional(14.0), th.weak).size().x);
                         let w = ui.available_width() - ext_w - ui.spacing().item_spacing.x - 8.0;
-                        let r = ui.add(egui::TextEdit::singleline(name).id(egui::Id::new("pack-name")).margin(egui::Margin::symmetric(4, 2)).desired_width(w));
+                        let r = ui.add(egui::TextEdit::singleline(name).id(egui::Id::unique("pack-name")).margin(egui::Margin::symmetric(4, 2)).desired_width(w));
                         focus_edit(&r);
                         // A format typed at the end of the name is chosen.
                         if r.changed() {
@@ -1118,7 +1122,7 @@ impl App {
         let title = t("Reset to defaults");
         let chrome = self.chrome.clone();
         chrome
-            .dialog_window(ctx, &title, egui::Id::new("settings-reset"))
+            .dialog_window(ctx, &title, egui::Id::unique("settings-reset"))
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
             .order(egui::Order::Foreground)
@@ -1164,7 +1168,7 @@ impl App {
         let mut go_to_settings = false;
         let title = t("Keyboard shortcuts");
         let chrome = self.chrome.clone();
-        chrome.dialog_window(ctx, &title, egui::Id::new("help")).open(&mut open).default_width(620.0).show(ctx, |ui| {
+        chrome.dialog_window(ctx, &title, egui::Id::unique("help")).open(&mut open).default_width(620.0).show(ctx, |ui| {
             if chrome.dialog_title(ui, self.theme, &title) {
                 self.show_help = false;
             }
@@ -1227,7 +1231,7 @@ impl App {
         let title = t("About");
         let chrome = self.chrome.clone();
         let mut close = false;
-        chrome.dialog_window(ctx, &title, egui::Id::new("about")).open(&mut open).resizable(false).default_width(420.0).show(ctx, |ui| {
+        chrome.dialog_window(ctx, &title, egui::Id::unique("about")).open(&mut open).resizable(false).default_width(420.0).show(ctx, |ui| {
             close |= chrome.dialog_title(ui, self.theme, &title);
             ui.vertical_centered(|ui| {
                 if let Some(tex) = &self.logo_large {
@@ -1333,7 +1337,7 @@ fn other_folder_head(ui: &mut egui::Ui, th: &Theme, chosen: bool) -> egui::Respo
             th.weak,
         );
     }
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, chosen, &title));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, chosen, &title));
     resp
 }
 
@@ -1381,7 +1385,7 @@ fn dst_choice_row(ui: &mut egui::Ui, th: &Theme, c: &DstChoice, chosen: bool, th
     p.galley(egui::pos2(x, rect.top() + 6.0), g1, th.text);
     p.galley(egui::pos2(x, rect.top() + 25.0), g2, th.weak);
     let label = format!("{title}: {}", c.text);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, chosen, &label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, chosen, &label));
     resp.on_hover_text(c.text.clone())
 }
 
@@ -1417,7 +1421,7 @@ fn format_chip(ui: &mut egui::Ui, th: &Theme, f: ArchiveFormat, on: bool, enable
     };
     ui.painter().rect(r, 13.0, fill, egui::Stroke::new(1.0_f32, stroke), egui::StrokeKind::Inside);
     ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, &text, egui::FontId::proportional(13.0), fg);
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, enabled, on, &text));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, &text));
     if enabled {
         resp.on_hover_text(f.blurb())
     } else {

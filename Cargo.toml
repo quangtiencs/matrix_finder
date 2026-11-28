@@ -4,12 +4,13 @@ description = "Matrix Finder: a cross-platform dual-panel file manager"
 license = "MIT"
 version = "0.17.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.95"
 
 [dependencies]
 # The OpenGL (glow) renderer the app has always used; eframe 0.34 made wgpu the default.
-eframe = { version = "0.36", default-features = false, features = ["accesskit", "default_fonts", "glow", "wayland", "x11"] }
-egui = "0.36"
+eframe = { version = "0.37", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "wayland", "x11"] }
+# The monochrome emoji fonts egui bundled until 0.37 (🎨 🌐 and the like in menus).
+egui = { version = "0.37", features = ["monochrome_emoji_fonts"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "ico", "tiff", "tga", "qoi", "pnm", "dds", "exr", "hdr"] }
 resvg = "0.45"
 # Already in the tree via resvg/fontdb and ab_glyph; reads system fonts for glyph fallback.
@@ -41,7 +42,7 @@ sysinfo = "0.33"
 globset = "0.4"
 rfd = "0.15"
 trash = "5"
-egui_extras = { version = "0.36", default-features = false }
+egui_extras = { version = "0.37", default-features = false }
 parquet = { version = "59", default-features = false, features = ["snap", "brotli", "flate2-zlib-rs", "lz4", "zstd"] }
 apache-avro = { version = "0.21", features = ["snappy", "zstandard", "bzip"] }
 calamine = { version = "0.38", features = ["dates"] }
@@ -150,7 +151,7 @@ git = "*"
 ffmpeg = "*"
 
 [dev-dependencies]
-egui_kittest = { version = "0.36", features = ["wgpu", "eframe"] }
+egui_kittest = { version = "0.37", features = ["wgpu", "eframe"] }
 rust_xlsxwriter = "0.102"
 
 [target.'cfg(target_os = "macos")'.dependencies]

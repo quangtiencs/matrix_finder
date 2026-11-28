@@ -177,16 +177,6 @@ fn put_first(d: &mut FontDefinitions, family: FontFamily, key: String) {
     d.families.entry(family).or_default().insert(0, key);
 }
 
-/// Whether `font` draws `c` rather than egui's replacement box (◻). egui's `has_glyph`
-/// alone says no to every character of the font that also has the box.
-pub fn draws(f: &mut egui::epaint::text::FontsView<'_>, font: &egui::FontId, c: char) -> bool {
-    if f.has_glyph(font, c) {
-        return true;
-    }
-    let mut uv = |c: char| f.layout_no_wrap(c.to_string(), font.clone(), egui::Color32::WHITE).rows.first().and_then(|r| r.glyphs.first()).map(|g| g.uv_rect);
-    c != '◻' && uv(c) != uv('◻')
-}
-
 /// The scale of the interface font (read by the on-demand system fallback fonts too).
 static UI_SCALE: AtomicU32 = AtomicU32::new(1.0f32.to_bits());
 

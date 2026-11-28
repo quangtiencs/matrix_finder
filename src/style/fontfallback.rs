@@ -18,7 +18,7 @@ struct Resolver {
 
 static RESOLVER: OnceLock<Mutex<Resolver>> = OnceLock::new();
 
-/// Ask for fallback fonts covering `missing` (characters `fonts::draws` said no to).
+/// Ask for fallback fonts covering `missing` (characters `has_glyph` said no to).
 /// Returns immediately; the fonts take effect from a later frame, which is repainted.
 pub fn request(ctx: &egui::Context, missing: impl IntoIterator<Item = char>) {
     let r = RESOLVER.get_or_init(|| {

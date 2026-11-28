@@ -504,7 +504,7 @@ fn entry_menu(ui: &mut egui::Ui, n: &Node, p: &Path, t: &dyn Fn(&str) -> String,
 }
 
 fn treemap(ui: &mut egui::Ui, rect: Rect, node: &Node, path: &Path, theme: &Theme, t: &dyn Fn(&str) -> String, act: &mut Act) {
-    let resp = ui.interact(rect, ui.id().with("du-treemap"), Sense::click());
+    let resp = ui.interact(rect, ui.scope_id().with("du-treemap"), Sense::click());
     let painter = ui.painter_at(rect);
     let kids: Vec<(usize, &Node)> = node.children.iter().enumerate().filter(|(_, c)| c.size > 0).take(400).collect();
     if kids.is_empty() {

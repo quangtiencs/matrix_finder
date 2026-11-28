@@ -23,7 +23,7 @@ pub enum Set {
 type Cache = HashMap<(Set, &'static str, u32), Option<egui::TextureHandle>>;
 
 fn cache_id() -> egui::Id {
-    egui::Id::new("bundled-icon-textures")
+    egui::Id::unique("bundled-icon-textures")
 }
 
 fn find(table: &'static [(&'static str, &'static str)], key: &str) -> Option<&'static str> {
@@ -150,7 +150,7 @@ fn texture(ctx: &egui::Context, set: Set, icon: &str, px: u32) -> Tex {
     }
     let frame = ctx.cumulative_pass_nr();
     let allowed = ctx.data_mut(|d| {
-        let b = d.get_temp_mut_or_default::<Budget>(egui::Id::new("bundled-icon-budget"));
+        let b = d.get_temp_mut_or_default::<Budget>(egui::Id::unique("bundled-icon-budget"));
         if b.0 != frame {
             *b = Budget(frame, 0);
         }

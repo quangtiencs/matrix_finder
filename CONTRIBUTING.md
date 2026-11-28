@@ -3,7 +3,7 @@
 ## Building
 
 The [install script](scripts/install.sh) is the easy way (see the README). By hand, with
-**Rust 1.85+** and a C/C++ compiler (the RAR reader and libssh2 are written in C/C++):
+**Rust 1.95+** and a C/C++ compiler (the RAR reader and libssh2 are written in C/C++):
 
 ```bash
 cargo build --release

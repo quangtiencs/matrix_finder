@@ -11,7 +11,7 @@
 Browse folders, archives and servers, and see what a Parquet table, an HDF5 file or a<br>
 model checkpoint holds without opening Python. A terminal sits next to your files.
 
-[![Rust 1.85+](https://img.shields.io/badge/Rust-1.85%2B-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Rust 1.95+](https://img.shields.io/badge/Rust-1.95%2B-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
 [![Platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-2ea44f)](#install)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](#license)
 [![No telemetry](https://img.shields.io/badge/telemetry-none-success)](#privacy-and-security)
@@ -172,7 +172,7 @@ More in [`docs/light`](docs/light) and [`docs/dark`](docs/dark).
 curl -fsSL https://raw.githubusercontent.com/quangtiencs/matrix_finder/main/scripts/install.sh | bash
 ```
 
-**From source** (Rust 1.85+ and a C/C++ compiler; also Windows): `cargo build --release`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the details.
+**From source** (Rust 1.95+ and a C/C++ compiler; also Windows): `cargo build --release`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the details.
 
 Then `matrix_finder ~/project` opens a folder, a file, an archive or an `sftp://` address; while it runs, a second launch opens a new tab in the same window.
 

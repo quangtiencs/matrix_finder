@@ -146,7 +146,7 @@ impl App {
         let th = self.theme;
         let w = self.chip_width(ui, b);
         let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
-        let popup = egui::Id::new(("bookmark-folder", i));
+        let popup = egui::Id::unique(("bookmark-folder", i));
         let open = b.folder && egui::Popup::is_id_open(ui.ctx(), popup);
         let p = ui.painter();
         if !b.folder && bookmark_target(&b.path) == active {
@@ -230,7 +230,7 @@ impl App {
                     icons::chevron(p, r.translate(egui::vec2(2.5, 0.0)), 1, c);
                 })
                 .on_hover_text(t("More bookmarks"));
-                let id = egui::Id::new("bookmarks-more");
+                let id = egui::Id::unique("bookmarks-more");
                 if more.clicked() {
                     egui::Popup::toggle_id(ui.ctx(), id);
                 }
@@ -441,7 +441,7 @@ impl App {
                         ui.add_space(22.0);
                     }
                     let (gr, _) = ui.allocate_exact_size(egui::vec2(14.0, 26.0), egui::Sense::hover());
-                    let grip = ui.interact(gr, egui::Id::new(("bm-grip", at)), egui::Sense::drag());
+                    let grip = ui.interact(gr, egui::Id::unique(("bm-grip", at)), egui::Sense::drag());
                     let c = if grip.hovered() || grip.dragged() { th.text } else { th.weak };
                     super::settings_ui::grip_dots(ui.painter(), gr.center(), c);
                     let grip = if grip.dragged() { grip } else { grip.on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(t("Drag to reorder")) };
@@ -491,7 +491,7 @@ impl App {
                     *changed |= name.changed();
                     if !b.folder {
                         let o = crate::ui::pathfield::Opts { base: home.as_deref(), show_hidden, drives, width: path_w, hint: Some(t("Location")) };
-                        *changed |= paths.show(ui, &mut b.path, egui::Id::new(("bm-path", at)), o, th).changed();
+                        *changed |= paths.show(ui, &mut b.path, egui::Id::unique(("bm-path", at)), o, th).changed();
                         // Folder to keep it in.
                         let cur = at.1.and_then(|_| folders.iter().find(|(i, _)| *i == at.0)).map(|(_, n)| n.clone()).unwrap_or_else(|| "—".into());
                         egui::ComboBox::from_id_salt(("bm-folder", at.0, at.1))

@@ -36,7 +36,7 @@ pub(super) fn grip_dots(p: &egui::Painter, c: egui::Pos2, col: egui::Color32) {
 /// grabbing cursor, and the page scrolling near its top or bottom to reach the rest.
 pub(super) fn drag_feedback(ui: &mut egui::Ui, grip: &egui::Response, name: &str) {
     let Some(pointer) = ui.ctx().pointer_latest_pos() else { return };
-    egui::Area::new(egui::Id::new("settings-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(pointer + vec2(14.0, 6.0)).interactable(false).show(
+    egui::Area::new(egui::Id::unique("settings-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(pointer + vec2(14.0, 6.0)).interactable(false).show(
         ui.ctx(),
         |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {
@@ -135,7 +135,7 @@ pub(super) fn toggle(ui: &mut egui::Ui, th: &Theme, on: &mut bool, label: &str) 
         *on = !*on;
         resp.mark_changed();
     }
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *on, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::CheckBox, ui.is_enabled(), *on, label));
     let k = ui.ctx().animate_bool_responsive(resp.id, *on);
     let off = th.weak.lerp_to_gamma(th.bg, 0.35);
     let mut track = off.lerp_to_gamma(th.accent, k);
@@ -167,7 +167,7 @@ pub(super) fn toggle_row(ui: &mut egui::Ui, th: &Theme, value: &mut bool, label:
 /// A theme's picture: its panels and a selected file row.
 pub(super) fn theme_card(ui: &mut egui::Ui, th: &Theme, label: &str, width: f32, selected: bool, cur: &Theme) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 70.0), egui::Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label));
     let p = ui.painter();
     p.rect_filled(rect, 9.0, th.panel);
     let content = egui::Rect::from_min_max(rect.min + egui::vec2(8.0, 8.0), egui::pos2(rect.right() - 8.0, rect.bottom() - 24.0));
@@ -211,7 +211,7 @@ fn card_outline(p: &egui::Painter, rect: Rect, radius: f32, selected: bool, hove
 /// A terminal colour scheme's picture: a prompt and its colours, on its background.
 pub(super) fn term_theme_card(ui: &mut egui::Ui, scheme: &Theme, label: &str, width: f32, selected: bool, cur: &Theme) -> egui::Response {
     let (rect, resp) = ui.allocate_exact_size(vec2(width, 76.0), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, true, selected, label));
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, true, selected, label));
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 8.0, scheme.bg);
     let term = FontId::new(11.0, FontFamily::Name("term".into()));
@@ -238,10 +238,10 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
     }
     const W: f32 = 300.0;
     const ITEM_H: f32 = 28.0;
-    let id = egui::Id::new(("font-picker", id_salt));
+    let id = egui::Id::unique(("font-picker", id_salt));
     let shown = fonts::label(current, builtin).to_string();
     let (r, btn) = ui.allocate_exact_size(vec2(W, 28.0), Sense::click());
-    btn.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, true, &shown));
+    btn.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, &shown));
     let visuals = ui.style().interact(&btn);
     ui.painter().rect_filled(r, th.radius, visuals.weak_bg_fill);
     ui.painter().with_clip_rect(r.shrink2(vec2(10.0, 0.0))).text(
@@ -288,7 +288,7 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
                         ui.painter().text(pos2(row.left() + 8.0, row.bottom() - 9.0), Align2::LEFT_CENTER, text, FontId::proportional(11.5), th.weak);
                     }
                     Item::Font(value, name) => {
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, *name));
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, *name));
                         crate::ui::pane::menu_row_fill(ui, row, th, *value == current, resp.hovered());
                         ui.painter().with_clip_rect(row).text(
                             pos2(row.left() + 8.0, row.center().y),
@@ -1419,8 +1419,8 @@ impl App {
                         ui.add_space(6.0);
                         row_label(ui, th, (ui.available_width() - 8.0).max(100.0), ROW_H, &name, &hint);
                     });
-                    let resp = ui.interact(row.response.rect, ui.id().with(("ai-agent", id)), if available { Sense::click() } else { Sense::hover() });
-                    resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::RadioButton, available, selected, &name));
+                    let resp = ui.interact(row.response.rect, ui.scope_id().with(("ai-agent", id)), if available { Sense::click() } else { Sense::hover() });
+                    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, available, selected, &name));
                     if available && resp.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }

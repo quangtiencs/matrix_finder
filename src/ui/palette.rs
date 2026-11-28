@@ -172,7 +172,7 @@ impl Palette {
         let mut chosen: Option<PalItem> = None;
         let screen = ctx.content_rect();
         let width = (screen.width() - 48.0).min(600.0);
-        let area = egui::Area::new(egui::Id::new("palette")).order(egui::Order::Foreground).anchor(Align2::CENTER_TOP, vec2(0.0, 64.0)).show(ctx, |ui| {
+        let area = egui::Area::new(egui::Id::unique("palette")).order(egui::Order::Foreground).anchor(Align2::CENTER_TOP, vec2(0.0, 64.0)).show(ctx, |ui| {
             egui::Frame::popup(ui.style())
                 .fill(th.panel)
                 .corner_radius(14)
@@ -184,7 +184,7 @@ impl Palette {
                         let (r, _) = ui.allocate_exact_size(vec2(22.0, 30.0), Sense::hover());
                         icons::search(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), th.weak);
                         let edit = egui::TextEdit::singleline(&mut self.query)
-                            .id(egui::Id::new("palette-input"))
+                            .id(egui::Id::unique("palette-input"))
                             .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(4, 2)))
                             .font(FontId::proportional(16.0))
                             .hint_text(egui::RichText::new(t("Search files, commands, folders, settings…")).color(th.weak))

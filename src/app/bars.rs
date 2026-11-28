@@ -294,7 +294,7 @@ impl App {
     fn sidebar_toggle(&mut self, ui: &mut egui::Ui) {
         let label = if self.cfg.show_sidebar { t("Hide sidebar") } else { t("Show sidebar") };
         let resp = tool_icon(ui, self.theme, &format!("{label} ({})", hint(Action::Sidebar)), false, sidebar_icon);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &label));
         if resp.clicked() {
             self.cfg.show_sidebar = !self.cfg.show_sidebar;
             self.save_cfg();
@@ -395,7 +395,7 @@ impl App {
                     self.run_cmd(Cmd::DiskUsage);
                 }
                 // Split button: main part opens the default profile, the chevron lists profiles.
-                let popup_id = egui::Id::new("terminal-profiles");
+                let popup_id = egui::Id::unique("terminal-profiles");
                 let (cr, chev) = ui.allocate_exact_size(egui::vec2(16.0, 28.0), egui::Sense::click());
                 if chev.hovered() {
                     ui.painter().rect_filled(cr, 6.0, th.surface);
@@ -500,7 +500,7 @@ impl App {
                     if self.ejecting.iter().any(|e| e.0 == mp) {
                         egui::Spinner::new().size(13.0).color(th.weak).paint_at(ui, r.shrink(4.0));
                     } else {
-                        let b = ui.interact(r, ui.id().with(("eject", &mp)), egui::Sense::click());
+                        let b = ui.interact(r, ui.scope_id().with(("eject", &mp)), egui::Sense::click());
                         if b.hovered() {
                             ui.painter().rect_filled(r, 5.0, if sel { th.bg } else { th.hover() });
                         }
@@ -681,26 +681,29 @@ impl App {
             return;
         }
         ctx.request_repaint_after(Duration::from_millis(250));
-        egui::Area::new(egui::Id::new("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -44.0)).order(egui::Order::Foreground).show(ctx, |ui| {
-            for toast in self.toasts.iter().rev().take(5) {
-                let th = self.theme;
-                let color = if toast.error { th.danger } else { th.accent };
-                egui::Frame::popup(ui.style())
-                    .fill(th.panel)
-                    .corner_radius(10)
-                    .inner_margin(egui::Margin::symmetric(14, 10))
-                    .stroke(egui::Stroke::new(1.0_f32, th.border))
-                    .show(ui, |ui| {
-                        ui.set_max_width(420.0);
-                        ui.horizontal(|ui| {
-                            let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
-                            ui.painter().circle_filled(r.center(), 4.0, color);
-                            ui.add(egui::Label::new(RichText::new(&toast.text).color(th.text)).wrap());
+        egui::Area::new(egui::Id::unique("toasts")).anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-18.0, -44.0)).order(egui::Order::Foreground).show(
+            ctx,
+            |ui| {
+                for toast in self.toasts.iter().rev().take(5) {
+                    let th = self.theme;
+                    let color = if toast.error { th.danger } else { th.accent };
+                    egui::Frame::popup(ui.style())
+                        .fill(th.panel)
+                        .corner_radius(10)
+                        .inner_margin(egui::Margin::symmetric(14, 10))
+                        .stroke(egui::Stroke::new(1.0_f32, th.border))
+                        .show(ui, |ui| {
+                            ui.set_max_width(420.0);
+                            ui.horizontal(|ui| {
+                                let (r, _) = ui.allocate_exact_size(egui::vec2(8.0, 8.0), egui::Sense::hover());
+                                ui.painter().circle_filled(r.center(), 4.0, color);
+                                ui.add(egui::Label::new(RichText::new(&toast.text).color(th.text)).wrap());
+                            });
                         });
-                    });
-                ui.add_space(4.0);
-            }
-        });
+                    ui.add_space(4.0);
+                }
+            },
+        );
     }
 }
 
@@ -709,7 +712,7 @@ impl App {
     /// or icons. Dimmed (and closed) while another kind of window has the focus.
     fn view_options_button(&mut self, ui: &mut egui::Ui, th: &Theme) {
         use crate::config::ViewMode;
-        let id = egui::Id::new("view-options");
+        let id = egui::Id::unique("view-options");
         let tab = self.panes[self.active].tab();
         let files = tab.is_files();
         let mode = tab.view_mode.unwrap_or(self.cfg.default_view);
@@ -721,7 +724,7 @@ impl App {
             .add_enabled_ui(files, |ui| tool_icon(ui, th, &t("View options"), open, |p, r, c| view_icon(p, r, c, mode == ViewMode::Icons)))
             .inner
             .on_disabled_hover_text(t("View options are for file windows"));
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, files, t("View options")));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, files, t("View options")));
         if resp.clicked() {
             egui::Popup::toggle_id(ui.ctx(), id);
         }
@@ -758,10 +761,10 @@ impl App {
     /// The toolbar's split view: split the focused window (files or a terminal on any
     /// side, within 2 × 2), or close it.
     fn split_view_button(&mut self, ui: &mut egui::Ui, th: &Theme) {
-        let id = egui::Id::new("split-view");
+        let id = egui::Id::unique("split-view");
         let open = egui::Popup::is_id_open(ui.ctx(), id);
         let resp = tool_icon(ui, th, &t("Split view"), open, icons::mi_split);
-        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Split view")));
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Split view")));
         if resp.clicked() {
             egui::Popup::toggle_id(ui.ctx(), id);
         }
@@ -849,7 +852,7 @@ fn key_hint(ui: &mut egui::Ui, th: &Theme, key: &str, label: &str) -> egui::Resp
 
 /// Response for the chevron part of a split button (so the popup can anchor to both parts).
 fn chev_rect_response(ui: &egui::Ui, r: egui::Rect) -> egui::Response {
-    ui.interact(r, egui::Id::new("terminal-chevron-anchor"), egui::Sense::hover())
+    ui.interact(r, egui::Id::unique("terminal-chevron-anchor"), egui::Sense::hover())
 }
 
 /// A saved connection's address, and whether its password is held in memory this session.

@@ -194,7 +194,7 @@ impl PathField {
                 let accent = th.accent;
                 let b = crate::style::icons::icon_button(ui, 28.0, true, th, |p, r, c| foldertree::icon(p, r, if tree_open { accent } else { c }))
                     .on_hover_text(t("Folder tree"));
-                b.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Folder tree")));
+                b.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, t("Folder tree")));
                 (r, b)
             })
             .inner;

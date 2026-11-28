@@ -619,7 +619,7 @@ pub fn tab_bar(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], c: &BarCt
     let bar = Rect::from_min_max(row.response.rect.min, pos2(ui.max_rect().right(), row.response.rect.bottom()));
 
     // Scroll the active tab into view when it changes.
-    let key = egui::Id::new("tab-strip-active");
+    let key = egui::Id::unique("tab-strip-active");
     let uid = strip.tabs[strip.active].uid;
     if ctx.data(|d| d.get_temp::<u64>(key)) != Some(uid) {
         ctx.data_mut(|d| d.insert_temp(key, uid));
@@ -708,11 +708,14 @@ pub fn tab_bar(ui: &mut egui::Ui, strip: &mut Strip, info: &[TabInfo], c: &BarCt
     if let (Some(d), Some(p)) = (tab_drag, pointer) {
         if let Some(i) = strip.index_of(d.uid) {
             let title = info[i].title.clone();
-            egui::Area::new(egui::Id::new("tab-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(&ctx, |ui| {
-                egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.label(title);
-                });
-            });
+            egui::Area::new(egui::Id::unique("tab-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
+                &ctx,
+                |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.label(title);
+                    });
+                },
+            );
             ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
         }
     }
@@ -775,7 +778,7 @@ fn group_chip(ui: &mut egui::Ui, strip: &mut Strip, gid: u32, c: &BarCtx, ev: &m
     if resp.clicked() {
         local.push(Local::Collapse(gid));
     }
-    let focus_key = egui::Id::new(("group-name-focus", gid));
+    let focus_key = egui::Id::unique(("group-name-focus", gid));
     if resp.secondary_clicked() {
         ui.ctx().data_mut(|d| d.insert_temp(focus_key, true));
     }
@@ -852,7 +855,7 @@ fn tab_item(
     let (rect, _) = ui.allocate_exact_size(vec2(w, TAB_H), Sense::hover());
     let tab = &strip.tabs[i];
     let inf = &info[i];
-    let id = egui::Id::new(("tab", tab.uid));
+    let id = egui::Id::unique(("tab", tab.uid));
     let resp = ui.interact(rect, id, Sense::click_and_drag());
     let p = ui.painter().clone();
     let being_dragged = egui::DragAndDrop::payload::<TabDrag>(ui.ctx()).is_some_and(|d| d.uid == tab.uid);

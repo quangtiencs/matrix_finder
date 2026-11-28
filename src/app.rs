@@ -1186,7 +1186,7 @@ impl App {
         self.layout.arrange(rect, 10.0, &mut rects, &mut handles);
         // Dividers between panes.
         for (i, h) in handles.iter().enumerate() {
-            let hr = ui.interact(h.rect, egui::Id::new(("splitter", i, h.path.clone())), egui::Sense::click_and_drag());
+            let hr = ui.interact(h.rect, egui::Id::unique(("splitter", i, h.path.clone())), egui::Sense::click_and_drag());
             if hr.hovered() || hr.dragged() {
                 ui.ctx().set_cursor_icon(if h.horizontal { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
                 let line = if h.horizontal {
@@ -1477,7 +1477,7 @@ impl eframe::App for App {
                     // The gap on the right edge is the resize grip (no full-height line).
                     let inner = ui.max_rect();
                     let grip = egui::Rect::from_min_max(egui::pos2(inner.right() + 1.0, inner.top()), egui::pos2(inner.right() + 8.0, inner.bottom()));
-                    let g = ui.interact(grip, egui::Id::new("sidebar-grip"), egui::Sense::click_and_drag());
+                    let g = ui.interact(grip, egui::Id::unique("sidebar-grip"), egui::Sense::click_and_drag());
                     // Only the cursor changes: a coloured bar next to the panel border looked like two lines.
                     if g.hovered() || g.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -1534,7 +1534,7 @@ impl eframe::App for App {
                     // The 10 px gap on the left edge is the resize grip.
                     let inner = ui.max_rect();
                     let grip = egui::Rect::from_min_max(egui::pos2(inner.left() - 10.0, inner.top()), egui::pos2(inner.left(), inner.bottom()));
-                    let g = ui.interact(grip, egui::Id::new("quickview-grip"), egui::Sense::click_and_drag());
+                    let g = ui.interact(grip, egui::Id::unique("quickview-grip"), egui::Sense::click_and_drag());
                     // Only the cursor changes: a coloured bar next to the panel border looked like two lines.
                     if g.hovered() || g.dragged() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
@@ -1564,7 +1564,7 @@ impl eframe::App for App {
             let mut open = true;
             let name = self.viewer.as_ref().map(|v| v.name.clone()).unwrap_or_default();
             let chrome = self.chrome.clone();
-            chrome.dialog_window(ctx, &name, egui::Id::new("viewer")).open(&mut open).default_size([820.0, 600.0]).show(ctx, |ui| {
+            chrome.dialog_window(ctx, &name, egui::Id::unique("viewer")).open(&mut open).default_size([820.0, 600.0]).show(ctx, |ui| {
                 if chrome.dialog_title(ui, self.theme, &name) {
                     self.viewer = None;
                 }
@@ -1713,7 +1713,7 @@ struct DstChoice {
 
 /// The egui id of one of the app's windows, by its name in `App::windows`.
 fn window_id(name: &str) -> egui::Id {
-    egui::Id::new(if name == "reset" { "settings-reset" } else { name })
+    egui::Id::unique(if name == "reset" { "settings-reset" } else { name })
 }
 
 /// The last part of a typed destination, for the dialog's button (cut past 18 characters,

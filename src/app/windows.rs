@@ -682,7 +682,7 @@ impl App {
         // Ghost label for a dragged window.
         if let Some(s) = src {
             let title = self.panes[s].tab().title();
-            egui::Area::new(egui::Id::new("window-drag-ghost"))
+            egui::Area::new(egui::Id::unique("window-drag-ghost"))
                 .order(egui::Order::Tooltip)
                 .fixed_pos(pointer + egui::vec2(12.0, 8.0))
                 .interactable(false)
