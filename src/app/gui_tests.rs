@@ -10,7 +10,7 @@
 use super::*;
 use alacritty_terminal::term::TermMode;
 use egui::{pos2, Event, PointerButton, Pos2};
-use egui_kittest::kittest::Queryable;
+use egui_kittest::kittest::{NodeT, Queryable};
 use egui_kittest::Harness;
 use image::RgbaImage;
 use std::time::SystemTime;
@@ -832,7 +832,7 @@ fn right_click(h: &mut Harness<'static, App>, p: Pos2) {
 fn type_into(h: &mut Harness<'static, App>, area: egui::Rect, text: &str) -> bool {
     let at = h
         .query_all_by_role(egui::accesskit::Role::TextInput)
-        .filter_map(|n| n.bounding_box())
+        .filter_map(|n| n.accesskit_node().bounding_box())
         .map(|r| pos2(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32))
         .find(|c| area.contains(*c));
     let Some(at) = at else { return false };
@@ -858,11 +858,14 @@ fn term_type(h: &mut Harness<'static, App>, side: usize, uid: u64, text: &str) {
 }
 
 /// Centre of the first accessibility node with this label (and an optional x range).
+/// A submenu's button is named with its arrow (`View ⏵`), a menu item with its key.
 fn node_center(h: &Harness<'static, App>, label: &str, x_min: f32) -> Option<Pos2> {
-    h.query_all_by_label(label).find_map(|n| {
-        let r = n.bounding_box()?;
+    let submenu = format!("{label} ⏵");
+    let found = h.query_all_by(|n| n.label().is_some_and(|l| l.trim_end() == label || l == submenu)).find_map(|n| {
+        let r = n.accesskit_node().bounding_box()?;
         ((r.x0 as f32) >= x_min).then(|| pos2(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32))
-    })
+    });
+    found
 }
 
 impl App {
@@ -1123,14 +1126,14 @@ fn default_apps_choose_and_reset() {
     h.state_mut().open_settings(SettingsPage::DefaultApps);
     settle(&mut h, 4);
     assert_eq!(h.state().cfg.default_apps.len(), 2);
-    h.get_all_by_label("↺").next().unwrap().click();
+    h.get_all_by_label("↺").next().unwrap().click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.default_apps.len(), 1);
     scroll_settings(&mut h, 500.0);
-    h.get_by_label(&t("Reset all to system defaults")).click();
+    h.get_by_label(&t("Reset all to system defaults")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.default_apps.len(), 1, "asks first");
-    h.get_by_label(&t("Reset")).click();
+    h.get_by_label(&t("Reset")).click_accesskit();
     settle(&mut h, 3);
     assert!(h.state().cfg.default_apps.is_empty());
     assert!(Settings::load().default_apps.is_empty());
@@ -1154,7 +1157,7 @@ fn terminal_close_asks_while_a_program_runs() {
     h.state_mut().request_close_tabs(&[live]);
     assert!(matches!(&h.state().dialog, Some(Dialog::CloseTerminals { programs, .. }) if programs == &["sleep"]));
     settle(&mut h, 2);
-    h.get_by_label(&t("Cancel")).click();
+    h.get_by_label(&t("Cancel")).click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().strip.tabs.len(), tabs);
@@ -1164,7 +1167,7 @@ fn terminal_close_asks_while_a_program_runs() {
     h.state_mut().quit = Quit::Asking;
     settle(&mut h, 2);
     h.get_by_label("sleep");
-    h.get_by_label(&t("Cancel")).click();
+    h.get_by_label(&t("Cancel")).click_accesskit();
     settle(&mut h, 2);
     assert!(matches!(h.state().quit, Quit::No));
 
@@ -1221,7 +1224,7 @@ fn terminal_ai_button() {
     assert!(h.query_by_label("Gemini CLI").is_none());
 
     // At the prompt, a click starts it in this terminal and folder.
-    h.get_by_role_and_label(Role::Button, "Claude Code").click();
+    h.get_by_role_and_label(Role::Button, "Claude Code").click_accesskit();
     wait_until(&mut h, 5.0, |app| !idle(app) && bin.join("claude.ran").exists());
     let ran = std::fs::read_to_string(bin.join("claude.ran")).expect("the agent ran");
     assert_eq!(Path::new(ran.trim()).canonicalize().unwrap(), d.demo.canonicalize().unwrap());
@@ -1229,9 +1232,9 @@ fn terminal_ai_button() {
 
     // While it runs, the button is greyed out and a click does nothing.
     let tabs = h.state().strip.tabs.len();
-    assert!(h.get_by_role_and_label(Role::Button, "Claude Code").is_disabled());
+    assert!(h.get_by_role_and_label(Role::Button, "Claude Code").accesskit_node().is_disabled());
     std::fs::remove_file(bin.join("claude.ran")).unwrap();
-    h.get_by_role_and_label(Role::Button, "Claude Code").click();
+    h.get_by_role_and_label(Role::Button, "Claude Code").click_accesskit();
     wait_until(&mut h, 1.0, |_| false);
     assert!(!bin.join("claude.ran").exists());
     assert_eq!(h.state().strip.tabs.len(), tabs);
@@ -1239,7 +1242,7 @@ fn terminal_ai_button() {
     // Back at the prompt it works again.
     term_type(&mut h, 0, term, "\x03");
     wait_until(&mut h, 5.0, idle);
-    assert!(!h.get_by_role_and_label(Role::Button, "Claude Code").is_disabled());
+    assert!(!h.get_by_role_and_label(Role::Button, "Claude Code").accesskit_node().is_disabled());
 
     // Its menu switches to another installed agent; that is saved.
     h.state_mut().agent_act(0, AgentAct::Choose("codex"));
@@ -1253,11 +1256,11 @@ fn terminal_ai_button() {
     h.state_mut().open_settings(SettingsPage::Terminal);
     settle(&mut h, 4);
     scroll_settings(&mut h, 1250.0);
-    h.get_by_role_and_label(Role::RadioButton, "Gemini CLI").click();
+    h.get_by_role_and_label(Role::RadioButton, "Gemini CLI").click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.term_agent, "gemini");
-    assert!(h.get_by_role_and_label(Role::RadioButton, "Qwen Code").is_disabled());
-    h.get_by_role_and_label(Role::RadioButton, "Qwen Code").click();
+    assert!(h.get_by_role_and_label(Role::RadioButton, "Qwen Code").accesskit_node().is_disabled());
+    h.get_by_role_and_label(Role::RadioButton, "Qwen Code").click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.term_agent, "gemini");
     let settings_tab = h.state().strip.active;
@@ -1266,12 +1269,12 @@ fn terminal_ai_button() {
     assert!(h.query_by_role_and_label(Role::Button, "Gemini CLI").is_some());
     h.state_mut().show_tab(settings_tab);
     settle(&mut h, 3);
-    h.get_by_role_and_label(Role::RadioButton, &t("Automatic: the first one installed")).click();
+    h.get_by_role_and_label(Role::RadioButton, &t("Automatic: the first one installed")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.term_agent, "");
 
     // The switch turns the button off.
-    h.get_by_role_and_label(Role::CheckBox, &t("Show the AI button")).click();
+    h.get_by_role_and_label(Role::CheckBox, &t("Show the AI button")).click_accesskit();
     settle(&mut h, 3);
     assert!(!h.state().cfg.term_agents);
     h.state_mut().show_tab(settings_tab - 1);
@@ -1362,7 +1365,7 @@ fn git_folders_show_badges_and_branches() {
     h.state_mut().open_settings(SettingsPage::Files);
     settle(&mut h, 4);
     scroll_settings(&mut h, 220.0);
-    h.query_all_by_label("Colour by commit state").last().expect("the switch").click();
+    h.query_all_by_label("Colour by commit state").last().expect("the switch").click_accesskit();
     settle(&mut h, 3);
     assert!(h.state().cfg.git_status);
     shot(&mut h, "git-settings");
@@ -1623,7 +1626,7 @@ fn settings_fonts_and_terminal_themes() {
     h.state_mut().open_settings(SettingsPage::Terminal);
     settle(&mut h, 4);
     scroll_settings(&mut h, 300.0);
-    h.get_by_label("One Dark").click();
+    h.get_by_label("One Dark").click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.terminal_profiles[0].theme, "One Dark");
     assert_eq!(term_theme(h.state()), Some("One Dark"));
@@ -1642,9 +1645,9 @@ fn settings_fonts_and_terminal_themes() {
     // A font from the dropdown is applied and saved.
     h.state_mut().settings_page = SettingsPage::Fonts;
     settle(&mut h, 3);
-    h.get_by_label("JetBrains Mono").click();
+    h.get_by_label("JetBrains Mono").click_accesskit();
     settle(&mut h, 3);
-    h.get_by_label("DejaVu Sans Mono").click();
+    h.get_by_label("DejaVu Sans Mono").click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.term_font, "builtin:dejavu");
     assert_eq!(h.state().fonts_applied.term_font, "builtin:dejavu");
@@ -1814,7 +1817,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         app.drive_watch = crate::files::drives::Watcher::spawn_with(move || fixed.clone(), Duration::from_secs(3600), Duration::from_secs(3600), None);
         app.shot_pane(0, &d.demo.join("home").join("Documents"), None);
         settle(&mut h, 3);
-        let b = h.get_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree")).next().unwrap().bounding_box().unwrap();
+        let b = h.get_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree")).next().unwrap().accesskit_node().bounding_box().unwrap();
         click_at(&mut h, pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32));
         for _ in 0..40 {
             settle(&mut h, 1);
@@ -1885,7 +1888,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         settle(&mut h, 10);
         if name == "quickview-hdf5" {
             // A dataset, not just the list of them.
-            h.get_all_by_label("temperature_c").next().expect("its tab").click();
+            h.get_all_by_label("temperature_c").next().expect("its tab").click_accesskit();
             settle(&mut h, 3);
         }
         if name == "quickview-json" {
@@ -1968,7 +1971,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         app.shot_focus(0);
         app.open_batch_rename();
         settle(&mut h, 4);
-        h.get_by_label("Web-safe (slug)").click();
+        h.get_by_label("Web-safe (slug)").click_accesskit();
         settle(&mut h, 4);
         move_to(&mut h, pos2(W / 2.0, H - 20.0));
         shot(&mut h, "batch-rename");
@@ -2111,7 +2114,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             app.shot_pane(0, &d.home.join("Downloads"), Some("photo.jpg"));
             app.shot_pane(1, &d.home.join("Projects/matrix_finder"), Some(".."));
             settle(&mut h, 2);
-            h.ctx.memory_mut(|m| m.open_popup(egui::Id::new(("bookmark-folder", folder))));
+            egui::Popup::open_id(&h.ctx, egui::Id::new(("bookmark-folder", folder)));
             shot(&mut h, "bookmarks-bar");
         }
         if want("settings-bookmarks") {
@@ -2138,7 +2141,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
             }
             settle(&mut h, 3);
             let uid = h.state().panes[0].tab().uid;
-            h.ctx.memory_mut(|m| m.open_popup(egui::Id::new(("quick-filter", uid))));
+            egui::Popup::open_id(&h.ctx, egui::Id::new(("quick-filter", uid)));
             h.ctx.data_mut(|m| m.insert_temp(egui::Id::new("find-options-open"), true));
             shot(&mut h, "quick-filter");
         }
@@ -2188,7 +2191,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         settle(&mut h, 4);
         // With rules, "Advanced" is open: down until Links is at the top.
         for _ in 0..60 {
-            let top = h.query_by_label(&t("Web browser")).and_then(|n| n.bounding_box()).map(|b| b.y0);
+            let top = h.query_by_label(&t("Web browser")).and_then(|n| n.accesskit_node().bounding_box()).map(|b| b.y0);
             if top.is_some_and(|y| y < 200.0) {
                 break;
             }
@@ -2311,7 +2314,7 @@ fn render_scenes(d: &Demo, mode: Mode, want: &dyn Fn(&str) -> bool) {
         app.open_checksum();
         settle(&mut h, 4);
         if h.query_by_label("SHA-256").is_some() {
-            h.get_by_label("SHA-256").click();
+            h.get_by_label("SHA-256").click_accesskit();
             settle(&mut h, 4);
         }
         let iso = std::fs::File::open(d.downloads.join("ubuntu-26.04-desktop.iso")).unwrap();
@@ -2554,7 +2557,7 @@ fn animated_images_play_and_pause() {
         std::thread::sleep(Duration::from_millis(50));
     }
     assert!(seen.contains(&40) && seen.contains(&200), "both frames came up: {seen:?}");
-    h.get_by_label(&t("Pause")).click();
+    h.get_by_label(&t("Pause")).click_accesskit();
     settle(&mut h, 3);
     let held = sample(&mut h);
     for _ in 0..8 {
@@ -2823,7 +2826,7 @@ fn transfers_open_in_a_tab() {
         at: "12:00".into(),
     });
     settle(&mut h, 2);
-    h.get_by_label(&t("Show")).click();
+    h.get_by_label(&t("Show")).click_accesskit();
     settle(&mut h, 3);
     let app = h.state();
     assert_eq!(app.strip.tabs.len(), before + 2);
@@ -2848,7 +2851,7 @@ fn transfers_open_in_a_tab() {
     settle(&mut h, 3);
 
     // Clear empties the history.
-    h.get_by_label(&t("Clear")).click();
+    h.get_by_label(&t("Clear")).click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().history.is_empty());
 
@@ -2910,7 +2913,7 @@ fn quitting_with_transfers_asks_first() {
     // Asked, and it can be turned down by button and by Escape.
     request_close(&mut h);
     assert!(h.state().quit == Quit::Asking);
-    h.get_by_label(&t("Keep running")).click();
+    h.get_by_label(&t("Keep running")).click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().quit == Quit::No);
     assert!(!job.cancelled());
@@ -2926,7 +2929,7 @@ fn quitting_with_transfers_asks_first() {
     assert!(h.state().dialog.is_none(), "F7 must not open the New folder dialog");
 
     // Stop and quit: the jobs are cancelled and get to finish before it goes ahead.
-    h.get_by_label(&t("Stop and quit")).click();
+    h.get_by_label(&t("Stop and quit")).click_accesskit();
     settle(&mut h, 1);
     assert!(job.cancelled());
     wait_until(&mut h, 5.0, |a| a.quit == Quit::Go);
@@ -3074,7 +3077,7 @@ fn shortcuts_can_be_changed_in_settings() {
     let copy_key = first(Action::Copy);
 
     // Click its key, press a new one: a hint shows, and the old key is free.
-    h.get_all_by_label(&copy_key.display(os)).next().expect("the key of Copy").click();
+    h.get_all_by_label(&copy_key.display(os)).next().expect("the key of Copy").click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().shortcut_capture, Some((Action::Copy, Some(0))));
     press_chord(&mut h, "F12");
@@ -3105,9 +3108,9 @@ fn shortcuts_can_be_changed_in_settings() {
         h.render().unwrap().save(Path::new(&out).join("settings-note.png")).unwrap();
     }
     let label = format!("{} {}", t("Reset all to the defaults of"), os.name());
-    h.get_by_label(&label).click();
+    h.get_by_label(&label).click_accesskit();
     settle(&mut h, 3);
-    h.get_by_label(&t("Reset")).click();
+    h.get_by_label(&t("Reset")).click_accesskit();
     settle(&mut h, 3);
     assert!(h.state().cfg.shortcuts.is_empty());
     assert!(Settings::load().shortcuts.is_empty());
@@ -3155,7 +3158,7 @@ fn password_protected_archives() {
     assert_eq!(describe(&h), "locked");
 
     // The button asks for it; a wrong password is told apart, and cleared.
-    h.get_by_label(&t("Enter password…")).click();
+    h.get_by_label(&t("Enter password…")).click_accesskit();
     settle(&mut h, 3);
     assert!(matches!(h.state().dialog, Some(Dialog::ArchivePassword { .. })));
     if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
@@ -3165,7 +3168,7 @@ fn password_protected_archives() {
         if let Some(Dialog::ArchivePassword { password, .. }) = h.state_mut().dialog.as_mut() {
             *password = typed.to_string();
         }
-        h.get_by_label(&t("Unlock")).click();
+        h.get_by_label(&t("Unlock")).click_accesskit();
     };
     confirm(&mut h, "wrong");
     wait_until(&mut h, 5.0, |a| matches!(&a.dialog, Some(Dialog::ArchivePassword { wrong: true, .. })));
@@ -3391,7 +3394,7 @@ fn update_check_offers_a_newer_version() {
     if let Ok(out) = std::env::var("MF_SHOT_DIR") {
         h.render().unwrap().save(format!("{out}/update.png")).unwrap();
     }
-    h.get_by_label(&t("Skip this version")).click();
+    h.get_by_label(&t("Skip this version")).click_accesskit();
     settle(&mut h, 3);
     assert!(h.state().update_found.is_none());
     assert_eq!(h.state().cfg.update_skip, "v99.1.0");
@@ -3405,7 +3408,7 @@ fn update_check_offers_a_newer_version() {
     answer(Ok(release("99.2.0")));
     h.state_mut().check_for_updates(false);
     wait_until(&mut h, 5.0, |a| a.update_found.is_some());
-    h.get_by_label(&t("Later")).click();
+    h.get_by_label(&t("Later")).click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().update_found.is_none());
     assert_eq!(h.state().cfg.update_skip, "v99.1.0", "Later skips nothing");
@@ -3491,11 +3494,11 @@ fn long_names_leave_room_for_the_buttons() {
             h.state_mut().shot_pane(0, &dir, Some(&name));
             wait_until(&mut h, 5.0, |a| a.quick.as_ref().is_some_and(|q| q.name == name && q.is_ready()));
             settle(&mut h, 3);
-            let button = h.get_by_label(&t(button)).bounding_box().unwrap();
+            let button = h.get_by_label(&t(button)).accesskit_node().bounding_box().unwrap();
             // The title, not the file's row in the list or the status bar.
             let title = h
                 .get_all_by_label(&name)
-                .filter_map(|n| n.bounding_box())
+                .filter_map(|n| n.accesskit_node().bounding_box())
                 .find(|r| r.y1 < 150.0 && r.x0 > f64::from(W) * 0.35)
                 .unwrap_or_else(|| panic!("no title for {ext}"));
             let beside = title.y0 < button.y1 && title.y1 > button.y0;
@@ -3524,7 +3527,7 @@ fn json_tree_copies_paths() {
     assert!(status.starts_with("json values=41 depth=4"), "{status}");
     settle(&mut h, 3);
     let copied = |h: &mut Harness<'static, App>| {
-        h.get_by_label(&t("Copy path")).click();
+        h.get_by_label(&t("Copy path")).click_accesskit();
         h.step();
         h.output().platform_output.commands.iter().find_map(|c| match c {
             egui::OutputCommand::CopyText(s) => Some(s.clone()),
@@ -3535,19 +3538,19 @@ fn json_tree_copies_paths() {
     settle(&mut h, 2);
     assert_eq!(copied(&mut h).as_deref(), Some("j['data'][0]['title']"));
     // Another style, kept for the next file.
-    h.get_by_label("jq").click();
+    h.get_by_label("jq").click_accesskit();
     settle(&mut h, 2);
     assert_eq!(copied(&mut h).as_deref(), Some(".data[0].title"));
-    h.get_by_label("JSONPath").click();
+    h.get_by_label("JSONPath").click_accesskit();
     settle(&mut h, 2);
     assert_eq!(copied(&mut h).as_deref(), Some("$.data[0].title"));
-    h.get_by_label("Python").click();
+    h.get_by_label("Python").click_accesskit();
     settle(&mut h, 2);
     // Folders open and close; the source is there too.
-    h.get_by_label(&t("Collapse all")).click();
+    h.get_by_label(&t("Collapse all")).click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().quick.as_ref().unwrap().describe().ends_with("rows=6"), "{}", h.state().quick.as_ref().unwrap().describe());
-    h.get_by_label(&t("Source")).click();
+    h.get_by_label(&t("Source")).click_accesskit();
     settle(&mut h, 2);
     assert!(h.query_by_label(&t("Copy path")).is_none());
     // Not JSON after all: shown as text.
@@ -3579,13 +3582,13 @@ fn geometry_preview_moves_and_shows_its_source() {
     settle(&mut h, 4);
     let after = h.render().unwrap();
     assert!(before.as_raw() != after.as_raw(), "dragging and zooming changed the view");
-    h.get_by_label(&t("Reset view")).click();
+    h.get_by_label(&t("Reset view")).click_accesskit();
     settle(&mut h, 4);
     // The source, then back.
-    h.get_by_label(&t("Source")).click();
+    h.get_by_label(&t("Source")).click_accesskit();
     settle(&mut h, 3);
     assert!(h.query_by_label(&t("Reset view")).is_none());
-    h.get_by_label(&t("Source")).click();
+    h.get_by_label(&t("Source")).click_accesskit();
     settle(&mut h, 3);
     assert!(h.query_by_label(&t("Reset view")).is_some());
 }
@@ -3603,7 +3606,7 @@ fn huge_image_at_full_size_stays_responsive() {
     let mut h = app_harness(&cfg, "gnome");
     h.state_mut().shot_pane(0, &dir, Some("a.png"));
     wait_until(&mut h, 40.0, |a| a.quick.as_ref().is_some_and(|q| q.is_ready()));
-    h.get_by_label("1:1").click();
+    h.get_by_label("1:1").click_accesskit();
     settle(&mut h, 3);
     let t0 = Instant::now();
     for _ in 0..5 {
@@ -3968,7 +3971,7 @@ fn drives_section_follows_the_setting() {
     h.state_mut().open_settings(SettingsPage::Files);
     settle(&mut h, 4);
     scroll_settings(&mut h, 600.0);
-    h.get_by_role_and_label(Role::RadioButton, &t("Never")).click();
+    h.get_by_role_and_label(Role::RadioButton, &t("Never")).click_accesskit();
     settle(&mut h, 3);
     if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
         h.render().unwrap().save(Path::new(&out).join("drives-setting.png")).unwrap();
@@ -3977,12 +3980,12 @@ fn drives_section_follows_the_setting() {
     assert_eq!(Settings::load().sidebar_drives, crate::config::SidebarDrives::Never, "saved");
     wait_rows(&mut h, &[]);
     // Always: also with one drive.
-    h.get_by_role_and_label(Role::RadioButton, &t("Always")).click();
+    h.get_by_role_and_label(Role::RadioButton, &t("Always")).click_accesskit();
     settle(&mut h, 3);
     now.lock().unwrap().pop();
     wait_rows(&mut h, &[&root_name]);
     // Back to the default: hidden again with one drive.
-    h.get_by_role_and_label(Role::RadioButton, &t("Only when there is more than one drive")).click();
+    h.get_by_role_and_label(Role::RadioButton, &t("Only when there is more than one drive")).click_accesskit();
     settle(&mut h, 3);
     wait_rows(&mut h, &[]);
 }
@@ -4053,11 +4056,11 @@ fn sidebar_button_next_to_the_app_menu() {
     for (theme, chrome) in [("Adwaita Light", "gnome"), ("macOS Light", "mac"), ("Windows 11 Light", "windows")] {
         let mut h = app_harness(&settings(theme, &d), chrome);
         let rect = |h: &Harness<'static, App>, label: &str| {
-            let r = h.get_by_role_and_label(Role::Button, label).bounding_box().unwrap_or_else(|| panic!("{chrome}: no box for {label:?}"));
+            let r = h.get_by_role_and_label(Role::Button, label).accesskit_node().bounding_box().unwrap_or_else(|| panic!("{chrome}: no box for {label:?}"));
             egui::Rect::from_min_max(pos2(r.x0 as f32, r.y0 as f32), pos2(r.x1 as f32, r.y1 as f32))
         };
         let brand = |h: &Harness<'static, App>| {
-            let r = h.get_by_label_contains("Matrix Finder").bounding_box().unwrap();
+            let r = h.get_by_label_contains("Matrix Finder").accesskit_node().bounding_box().unwrap();
             egui::Rect::from_min_max(pos2(r.x0 as f32, r.y0 as f32), pos2(r.x1 as f32, r.y1 as f32))
         };
         let next_to = |b: egui::Rect, s: egui::Rect, what: &str| {
@@ -4071,7 +4074,7 @@ fn sidebar_button_next_to_the_app_menu() {
         next_to(b, s, "shown");
         assert!(s.right() <= h.state().cfg.sidebar_width + 1.0, "{chrome}: inside the sidebar ({s:?})");
         assert!(h.query_by_role_and_label(Role::Button, &t("Show sidebar")).is_none());
-        h.get_by_role_and_label(Role::Button, &t("Hide sidebar")).click();
+        h.get_by_role_and_label(Role::Button, &t("Hide sidebar")).click_accesskit();
         settle(&mut h, 3);
         assert!(!h.state().cfg.show_sidebar, "{chrome}: hidden");
         assert!(!Settings::load().show_sidebar, "{chrome}: saved");
@@ -4083,7 +4086,7 @@ fn sidebar_button_next_to_the_app_menu() {
         let (b, s) = (brand(&h), rect(&h, &t("Show sidebar")));
         next_to(b, s, "hidden");
         assert!(h.query_by_role_and_label(Role::Button, &t("Hide sidebar")).is_none());
-        h.get_by_role_and_label(Role::Button, &t("Show sidebar")).click();
+        h.get_by_role_and_label(Role::Button, &t("Show sidebar")).click_accesskit();
         settle(&mut h, 3);
         assert!(h.state().cfg.show_sidebar, "{chrome}: shown again");
         assert!(Settings::load().show_sidebar, "{chrome}: saved");
@@ -4095,19 +4098,19 @@ fn sidebar_button_next_to_the_app_menu() {
 
         // The app menu: View → Sidebar, checked while shown; it hides and shows the sidebar.
         for want in [false, true] {
-            h.get_by_label_contains("Matrix Finder").click();
+            h.get_by_label_contains("Matrix Finder").click_accesskit();
             settle(&mut h, 2);
             // Submenus open on hover.
-            h.get_by_role_and_label(Role::Button, &t("View")).hover();
+            h.get_by_role_and_label(Role::Button, &format!("{} ⏵", t("View"))).hover();
             settle(&mut h, 3);
             let item = h.get_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar")))));
-            assert_eq!(item.toggled() == Some(egui::accesskit::Toggled::True), !want, "{chrome}: the item shows the state");
+            assert_eq!(item.accesskit_node().toggled() == Some(egui::accesskit::Toggled::True), !want, "{chrome}: the item shows the state");
             if !want {
                 if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
                     h.render().unwrap().save(Path::new(&out).join(format!("sidebar-menu-{chrome}.png"))).unwrap();
                 }
             }
-            h.get_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar"))))).click();
+            h.get_by(|n| n.role() == Role::CheckBox && n.label().is_some_and(|l| l.starts_with(&format!("{}\t", t("Sidebar"))))).click_accesskit();
             settle(&mut h, 3);
             assert_eq!(h.state().cfg.show_sidebar, want, "{chrome}: from the menu");
             assert_eq!(Settings::load().show_sidebar, want, "{chrome}: saved");
@@ -4146,7 +4149,7 @@ fn checksum_and_batch_rename_open_in_tabs() {
     let files_tab = h.state().live;
     // A button is in sight: above the bottom of the window's card (the status bar is below).
     let in_sight = |h: &Harness<'static, App>, label: &str| {
-        let b = h.get_by_role_and_label(egui::accesskit::Role::Button, label).bounding_box().unwrap();
+        let b = h.get_by_role_and_label(egui::accesskit::Role::Button, label).accesskit_node().bounding_box().unwrap();
         assert!(b.y1 as f32 <= H - 36.0, "{label:?} is cut off at the bottom ({b:?})");
     };
     let names = || {
@@ -4190,17 +4193,17 @@ fn checksum_and_batch_rename_open_in_tabs() {
     assert_eq!(h.state().strip.tabs.len(), tabs + 1);
     assert!(h.state().panes[0].tab().renamer.is_some());
     assert_eq!(h.state().panes[0].tab().title(), t("Batch rename"));
-    h.get_by_label("Web-safe (slug)").click();
+    h.get_by_label("Web-safe (slug)").click_accesskit();
     settle(&mut h, 3);
     if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
         h.render().unwrap().save(Path::new(&out).join("rename-tab.png")).unwrap();
     }
     in_sight(&h, &t("Rename"));
-    h.get_by_role_and_label(egui::accesskit::Role::Button, &t("Rename")).click();
+    h.get_by_role_and_label(egui::accesskit::Role::Button, &t("Rename")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(names(), ["bao-cao-a.txt", "bao-cao-b.txt"]);
     in_sight(&h, &t("Undo last rename"));
-    h.get_by_label(&t("Undo last rename")).click();
+    h.get_by_label(&t("Undo last rename")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(names(), ["Báo cáo A.TXT", "Báo cáo B.TXT"]);
     let rename_tab = h.state().live;
@@ -4247,7 +4250,7 @@ fn copy_dialog_suggests_folders_and_has_a_tree() {
 
     // The other window is chosen; "Another folder" shows the address, with it filled in.
     let other_folder = |h: &mut Harness<'static, App>| {
-        h.get_by_label(&t("Another folder")).click();
+        h.get_by_label(&t("Another folder")).click_accesskit();
         settle(h, 3);
     };
     // Typing a path: its folders, not the zip.
@@ -4385,9 +4388,9 @@ fn address_bar_folder_tree() {
     // The address bar of the window on the left.
     let open = |h: &mut Harness<'static, App>| {
         h.query_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree"))
-            .min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0))
+            .min_by(|a, b| a.accesskit_node().bounding_box().unwrap().x0.total_cmp(&b.accesskit_node().bounding_box().unwrap().x0))
             .unwrap()
-            .click();
+            .click_accesskit();
         settle(h, 3);
         assert!(h.state().panes[0].tab().tree.is_some(), "the tree opens");
     };
@@ -4466,9 +4469,9 @@ fn dialog_tree(h: &Harness<'static, App>) -> Option<TreeSeen> {
 /// one too) and wait for the row of `p`.
 fn open_dialog_tree(h: &mut Harness<'static, App>, p: &Path) -> egui::Rect {
     h.query_all_by_role_and_label(egui::accesskit::Role::Button, &t("Folder tree"))
-        .max_by(|a, b| a.bounding_box().unwrap().y0.total_cmp(&b.bounding_box().unwrap().y0))
+        .max_by(|a, b| a.accesskit_node().bounding_box().unwrap().y0.total_cmp(&b.accesskit_node().bounding_box().unwrap().y0))
         .unwrap()
-        .click();
+        .click_accesskit();
     settle(h, 3);
     for _ in 0..60 {
         if let Some(r) = dialog_tree(h).and_then(|t| t.0.iter().find(|r| r.0 == p).map(|r| r.1)) {
@@ -4512,7 +4515,9 @@ fn compress_dialog() {
         Some(Dialog::Pack { name, dest_dir, format, .. }) => Some((name.clone(), dest_dir.clone(), *format)),
         _ => None,
     };
-    let chip = |h: &Harness<'static, App>, ext: &str| h.query_all_by_role_and_label(Role::Button, &format!(".{ext}")).next().map(|n| n.bounding_box().unwrap());
+    let chip = |h: &Harness<'static, App>, ext: &str| {
+        h.query_all_by_role_and_label(Role::Button, &format!(".{ext}")).next().map(|n| n.accesskit_node().bounding_box().unwrap())
+    };
     let has_text = |h: &Harness<'static, App>, s: &str| h.query_by_label(s).is_some();
     let taken = t("A file with this name is already there: choose another name.");
 
@@ -4803,16 +4808,16 @@ fn quick_filter_ticks_several_kinds() {
         let tab = h.state().panes[0].tab();
         tab.view.iter().map(|&i| &tab.entries[i]).filter(|e| !e.is_parent).map(|e| e.name.clone()).collect()
     };
-    let menu_open = |h: &Harness<'static, App>| h.ctx.memory(|m| m.is_popup_open(egui::Id::new(("quick-filter", h.state().panes[0].tab().uid))));
+    let menu_open = |h: &Harness<'static, App>| egui::Popup::is_id_open(&h.ctx, egui::Id::new(("quick-filter", h.state().panes[0].tab().uid)));
     let funnel = |h: &mut Harness<'static, App>| {
         h.query_all_by_role_and_label(Role::Button, &t("Find and filter"))
-            .min_by(|a, b| a.bounding_box().unwrap().x0.total_cmp(&b.bounding_box().unwrap().x0))
+            .min_by(|a, b| a.accesskit_node().bounding_box().unwrap().x0.total_cmp(&b.accesskit_node().bounding_box().unwrap().x0))
             .unwrap()
-            .click();
+            .click_accesskit();
         settle(h, 2);
     };
     let tick = |h: &mut Harness<'static, App>, name: &str| {
-        let b = h.get_by_role_and_label(Role::CheckBox, &t(name)).bounding_box().unwrap();
+        let b = h.get_by_role_and_label(Role::CheckBox, &t(name)).accesskit_node().bounding_box().unwrap();
         click_at(h, pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32));
     };
 
@@ -4830,7 +4835,7 @@ fn quick_filter_ticks_several_kinds() {
     }
     // Several ticked: Untick all shows every kind again and keeps the menu open.
     assert!(h.query_by_label(&t("Untick all")).is_some());
-    h.get_by_label(&t("Untick all")).click();
+    h.get_by_label(&t("Untick all")).click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().panes[0].tab().quick.is_none());
     assert!(menu_open(&h));
@@ -4850,7 +4855,7 @@ fn quick_filter_ticks_several_kinds() {
     settle(&mut h, 2);
     assert_eq!(shown(&h), ["sub", "b.mp4", "c.mp3"]);
     // The chip's × turns it off.
-    h.get_by_label(&format!("{}, {}", t("Music"), t("Videos"))).click();
+    h.get_by_label(&format!("{}, {}", t("Music"), t("Videos"))).click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().panes[0].tab().quick.is_none());
     assert_eq!(shown(&h), ["sub", "a.jpg", "b.mp4", "c.mp3", "d.txt"]);
@@ -5061,7 +5066,7 @@ fn terminal_in_selected_folders() {
     }
     assert_eq!(h.state().strip.tabs.len(), tabs, "nothing opened yet");
     assert!(h.query_by_label(&t("Open {n} terminals?").replace("{n}", "2")).is_some());
-    h.get_by_label(&t("Open {n} terminals").replace("{n}", "2")).click();
+    h.get_by_label(&t("Open {n} terminals").replace("{n}", "2")).click_accesskit();
     settle(&mut h, 4);
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().strip.tabs.len(), tabs + 2, "a terminal tab for each folder");
@@ -5075,7 +5080,7 @@ fn terminal_in_selected_folders() {
     settle(&mut h, 3);
     let tabs = h.state().strip.tabs.len();
     menu_item(&mut h, 2.0, &t("Open terminals in {n} folders…").replace("{n}", "2"));
-    h.get_by_label(&t("Cancel")).click();
+    h.get_by_label(&t("Cancel")).click_accesskit();
     settle(&mut h, 3);
     assert!(h.state().dialog.is_none());
     assert_eq!(h.state().strip.tabs.len(), tabs, "cancelled");
@@ -5144,7 +5149,7 @@ fn transfer_destinations() {
     let win = |n: usize, dir: &Path| {
         format!("{} · {}: {}", t("Window {n}").replace("{n}", &n.to_string()), dir.file_name().unwrap().to_string_lossy(), dir.display())
     };
-    let selected = |h: &Harness<'static, App>, label: &str| h.get_by_label(label).toggled() == Some(egui::accesskit::Toggled::True);
+    let selected = |h: &Harness<'static, App>, label: &str| h.get_by_label(label).accesskit_node().toggled() == Some(egui::accesskit::Toggled::True);
     let other = t("Another folder");
     let fields = |h: &Harness<'static, App>| h.query_all_by_role(egui::accesskit::Role::TextInput).count();
     let docs = d.demo.join("docs");
@@ -5157,12 +5162,12 @@ fn transfer_destinations() {
     if let Some(dir) = &shots {
         h.render().unwrap().save(format!("{dir}/transfer-split.png")).unwrap();
     }
-    h.get_by_label(&win(3, &images)).click();
+    h.get_by_label(&win(3, &images)).click_accesskit();
     settle(&mut h, 2);
     assert_eq!(dst(&h), images.display().to_string());
     assert!(selected(&h, &win(3, &images)) && !selected(&h, &win(2, &docs)));
     // Another folder: the address shows, has the keyboard, and the windows are not chosen.
-    h.get_by_label(&other).click();
+    h.get_by_label(&other).click_accesskit();
     settle(&mut h, 3);
     assert!(selected(&h, &other) && !selected(&h, &win(3, &images)), "only Another folder is chosen");
     assert_eq!(fields(&h), 1);
@@ -5178,7 +5183,7 @@ fn transfer_destinations() {
         h.render().unwrap().save(format!("{dir}/transfer-split-other.png")).unwrap();
     }
     // Back to a window: the address goes away.
-    h.get_by_label(&win(2, &docs)).click();
+    h.get_by_label(&win(2, &docs)).click_accesskit();
     settle(&mut h, 2);
     assert_eq!(dst(&h), docs.display().to_string());
     assert_eq!(fields(&h), 0);
@@ -5209,7 +5214,7 @@ fn transfer_destinations() {
     // bearings, nothing chosen, and Copy waits for a destination.
     assert_eq!(dst(&h), "");
     assert_eq!((tree.current(), tree.selected()), (Some(d.demo.as_path()), None));
-    assert!(h.query_all_by_label(&t("Copy")).any(|n| n.is_disabled()), "Copy waits for a destination");
+    assert!(h.query_all_by_label(&t("Copy")).any(|n| n.accesskit_node().is_disabled()), "Copy waits for a destination");
     let formats = d.demo.join("formats");
     let row = tree.rows.iter().find(|(p, _)| *p == formats).map(|(_, r)| r.center()).expect("formats in the tree");
     if let Some(dir) = &shots {
@@ -5260,7 +5265,7 @@ fn dialogs_close_by_their_button_and_esc() {
         let about = h.ctx.memory(|m| m.area_rect(egui::Id::new("about"))).expect("About is shown");
         let close = h
             .query_all_by_label(&t("Close"))
-            .filter_map(|n| n.bounding_box())
+            .filter_map(|n| n.accesskit_node().bounding_box())
             .map(|r| pos2(((r.x0 + r.x1) / 2.0) as f32, ((r.y0 + r.y1) / 2.0) as f32))
             .find(|p| about.contains(*p))
             .unwrap_or_else(|| panic!("{chrome}: a close button in About"));
@@ -5354,7 +5359,7 @@ fn window_size_at_start_setting() {
     h.state_mut().open_settings(SettingsPage::Appearance);
     settle(&mut h, 3);
     assert!(h.query_by_label(&t("Window size at start")).is_some());
-    h.get_by_label(&t("Use current size")).click();
+    h.get_by_label(&t("Use current size")).click_accesskit();
     settle(&mut h, 2);
     assert_eq!((h.state().cfg.window_width, h.state().cfg.window_height), (W, H), "the window as it is");
     assert_eq!((Settings::load().window_width, Settings::load().window_height), (W, H), "saved");
@@ -5368,7 +5373,7 @@ fn window_size_at_start_setting() {
         settle(&mut h, 3);
         h.render().unwrap().save(format!("{dir}/window-size.png")).unwrap();
     }
-    h.get_by_label(&format!("{} (1000 × 600)", t("Default"))).click();
+    h.get_by_label(&format!("{} (1000 × 600)", t("Default"))).click_accesskit();
     settle(&mut h, 2);
     assert_eq!((h.state().cfg.window_width, h.state().cfg.window_height), (1000.0, 600.0));
 }
@@ -5388,25 +5393,25 @@ fn bookmark_toolbar_adds_folders_and_groups() {
     h.state_mut().open_settings(SettingsPage::Bookmarks);
     settle(&mut h, 3);
     let before = h.state().cfg.bookmarks.len();
-    h.get_by_label(&format!("+ {}", t("Add bookmark"))).click();
+    h.get_by_label(&format!("+ {}", t("Add bookmark"))).click_accesskit();
     settle(&mut h, 3);
     if let Some(dir) = &shots {
         h.render().unwrap().save(format!("{dir}/bookmarks-add.png")).unwrap();
     }
     let item = t("The folder you were in: {name}").replace("{name}", "formats");
-    h.get_by_label(&item).click();
+    h.get_by_label(&item).click_accesskit();
     settle(&mut h, 3);
     let b = h.state().cfg.bookmarks.last().unwrap().clone();
     assert_eq!(h.state().cfg.bookmarks.len(), before + 1);
     assert_eq!((b.name.as_str(), b.path.as_str()), ("formats", formats.to_string_lossy().as_ref()), "the folder the user was in");
     assert_eq!(Settings::load().bookmarks.len(), before + 1, "saved");
     // Once bookmarked, it is offered no more.
-    h.get_by_label(&format!("+ {}", t("Add bookmark"))).click();
+    h.get_by_label(&format!("+ {}", t("Add bookmark"))).click_accesskit();
     settle(&mut h, 3);
-    assert!(h.get_by_label(&item).is_disabled(), "already a bookmark");
+    assert!(h.get_by_label(&item).accesskit_node().is_disabled(), "already a bookmark");
     key_press(&mut h, Key::Escape, None, Modifiers::NONE);
     // A new group: at the end, its name has the keyboard.
-    h.get_by_label(&format!("+ {}", t("New group"))).click();
+    h.get_by_label(&format!("+ {}", t("New group"))).click_accesskit();
     settle(&mut h, 4);
     let g = h.state().cfg.bookmarks.last().unwrap().clone();
     assert!(g.folder && g.name == t("New group"));
@@ -5503,11 +5508,11 @@ fn view_options_switch_icons_and_hidden_files() {
     h.state_mut().shot_focus(0);
     settle(&mut h, 3);
     assert_eq!(h.state().panes[0].tab().grid_cols, None, "the list by default");
-    let click_button = |h: &Harness<'static, App>| h.query_by_label("View options").expect("the button").click();
+    let click_button = |h: &Harness<'static, App>| h.query_by_label("View options").expect("the button").click_accesskit();
     let choose = |h: &mut Harness<'static, App>, label: &str| {
         click_button(h);
         settle(h, 2);
-        h.query_by_label_contains(label).expect("in the menu").click();
+        h.query_by_label_contains(label).expect("in the menu").click_accesskit();
         settle(h, 2);
         key_press(h, Key::Escape, None, Modifiers::NONE);
         settle(h, 2);
@@ -5608,7 +5613,7 @@ fn a_right_click_menu_keeps_its_file() {
     h.state_mut().panes[0].tab_mut().reload(&lc);
     settle(&mut h, 2);
     assert_eq!(names(h.state()), ["..", "aa.txt", "mm.txt", "zz.txt"]);
-    h.query_by_label_contains(&t("Properties")).expect("the menu is still open").click();
+    h.query_by_label_contains(&t("Properties")).expect("the menu is still open").click_accesskit();
     settle(&mut h, 2);
     match &h.state().dialog {
         Some(Dialog::Message { text, .. }) => assert!(text.contains("zz.txt") && !text.contains("mm.txt"), "{text}"),
@@ -5658,11 +5663,11 @@ fn the_find_panel_filters_searches_and_stops() {
     settle(&mut h, 3);
     assert_eq!(names(h.state()), ["My_Report.txt", "my-report.md"]);
     // Subfolders too: it waits for Find.
-    h.query_by_label(&t("Subfolders too")).expect("the choice").click();
+    h.query_by_label(&t("Subfolders too")).expect("the choice").click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().panes[0].tab().search.is_none(), "not as you type");
     assert_eq!(names(h.state()).len(), 5, "the whole folder until Find");
-    h.query_by_role_and_label(Role::Button, &t("Find")).expect("Find").click();
+    h.query_by_role_and_label(Role::Button, &t("Find")).expect("Find").click_accesskit();
     wait_until(&mut h, 10.0, |a| a.panes[0].tab().search.as_ref().is_some_and(|s| !s.running));
     let sep = std::path::MAIN_SEPARATOR;
     assert_eq!(names(h.state()), ["My_Report.txt", format!("deep{sep}Old my report.pdf").as_str(), "my-report.md"]);
@@ -5673,7 +5678,7 @@ fn the_find_panel_filters_searches_and_stops() {
     h.state_mut().panes[0].tab_mut().set_find(f.clone(), &lc).unwrap();
     settle(&mut h, 2);
     assert!(h.state().panes[0].tab().search.as_ref().is_some_and(|s| s.running), "still reading");
-    h.query_by_role_and_label(Role::Button, &t("Stop")).expect("Stop in the footer").click();
+    h.query_by_role_and_label(Role::Button, &t("Stop")).expect("Stop in the footer").click_accesskit();
     wait_until(&mut h, 10.0, |a| a.panes[0].tab().search.as_ref().is_some_and(|s| !s.running));
     assert!(h.state().panes[0].tab().search.as_ref().unwrap().stopped);
     // Esc stops a running search first, then shows the folder again.
@@ -5770,7 +5775,7 @@ fn the_users_themes_are_made_edited_and_deleted() {
     let mut h = app_harness(&settings("Nord", &d), "gnome");
     h.state_mut().open_settings(SettingsPage::Appearance);
     settle(&mut h, 4);
-    h.get_by_label(&t("New theme")).click();
+    h.get_by_label(&t("New theme")).click_accesskit();
     settle(&mut h, 4);
     let name = format!("Nord ({})", t("custom"));
     assert_eq!(h.state().cfg.custom_themes.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), [name.as_str()]);
@@ -5784,10 +5789,10 @@ fn the_users_themes_are_made_edited_and_deleted() {
     assert_eq!(h.state().theme.bg, egui::Color32::from_rgb(0x12, 0x34, 0x56));
     assert_eq!(h.ctx.style().visuals.extreme_bg_color, h.state().theme.surface, "and to egui's colours");
     // Delete asks first; then the app is back on a built-in theme.
-    h.get_by_label(&t("Delete")).click();
+    h.get_by_label(&t("Delete")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.custom_themes.len(), 1, "not yet: asked first");
-    h.query_all_by_label(&t("Delete")).last().unwrap().click();
+    h.query_all_by_label(&t("Delete")).last().unwrap().click_accesskit();
     settle(&mut h, 3);
     assert!(h.state().cfg.custom_themes.is_empty());
     assert!(!h.state().cfg.theme.contains("custom") && theme::is_builtin(&h.state().cfg.theme));
@@ -5799,15 +5804,15 @@ fn the_users_themes_are_made_edited_and_deleted() {
     h.state_mut().cfg.terminal_profiles[p].theme = "Dracula".into();
     h.state_mut().open_settings(SettingsPage::Terminal);
     settle(&mut h, 4);
-    h.get_by_label(&t("New colour theme")).click();
+    h.get_by_label(&t("New colour theme")).click_accesskit();
     settle(&mut h, 4);
     let name = format!("Dracula ({})", t("custom"));
     assert_eq!(h.state().cfg.custom_terminal_themes.len(), 1);
     assert_eq!(h.state().cfg.terminal_profiles[p].theme, name, "the profile uses it");
     assert_eq!(theme::term_by_name(&name).ansi, theme::term_by_name("Dracula").ansi);
-    h.get_by_label(&t("Delete")).click();
+    h.get_by_label(&t("Delete")).click_accesskit();
     settle(&mut h, 3);
-    h.query_all_by_label(&t("Delete")).last().unwrap().click();
+    h.query_all_by_label(&t("Delete")).last().unwrap().click_accesskit();
     settle(&mut h, 3);
     assert!(h.state().cfg.custom_terminal_themes.is_empty());
     assert_eq!(h.state().cfg.terminal_profiles[p].theme, "", "back to the app's colours");
@@ -5831,7 +5836,7 @@ fn bundled_icon_sets_draw_in_the_icon_view() {
     let mut h = app_harness(&cfg, "gnome");
     h.state_mut().open_settings(SettingsPage::Appearance);
     settle(&mut h, 4);
-    h.get_by_label("Material Icon Theme").click();
+    h.get_by_label("Material Icon Theme").click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.icon_pack, "material");
     h.state_mut().shot_pane(0, &dir, None);
@@ -5861,9 +5866,9 @@ fn links_open_in_a_browser_chosen_by_website() {
     let mut h = app_harness(&cfg, "gnome");
     h.state_mut().open_settings(SettingsPage::Terminal);
     settle(&mut h, 4);
-    h.get_by_label(&t("Advanced: a browser for each website")).click();
+    h.get_by_label(&t("Advanced: a browser for each website")).click_accesskit();
     settle(&mut h, 3);
-    h.get_by_label(&format!("+ {}", t("Add website"))).click();
+    h.get_by_label(&format!("+ {}", t("Add website"))).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.link_rules.len(), 1);
     assert_eq!(h.state().cfg.link_rules[0].browser, "firefox", "starts with the default browser");
@@ -5899,15 +5904,15 @@ fn quick_filters_are_edited_in_settings() {
     let centre = |b: egui::accesskit::Rect| pos2(((b.x0 + b.x1) / 2.0) as f32, ((b.y0 + b.y1) / 2.0) as f32);
 
     // Open, then close, by clicking the row.
-    h.get_by_label(&t("Images")).click();
+    h.get_by_label(&t("Images")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().qf.open, Some(0));
     // A chip's × removes its extension.
-    h.get_by_label(&format!("{} .jpg", t("Remove"))).click();
+    h.get_by_label(&format!("{} .jpg", t("Remove"))).click_accesskit();
     settle(&mut h, 3);
     assert!(!exts(&h, 0).contains(&"jpg".to_string()));
     // Typed ones are added (once each, without dots, in lower case) with Enter.
-    let add = h.get_by_label(&t("Add")).bounding_box().unwrap();
+    let add = h.get_by_label(&t("Add")).accesskit_node().bounding_box().unwrap();
     let field = egui::Rect::from_min_max(pos2(add.x0 as f32 - 300.0, add.y0 as f32), pos2(add.x0 as f32, add.y1 as f32));
     assert!(type_into(&mut h, field, "HEIC, .foo jpg"), "the add field");
     key_press(&mut h, Key::Enter, None, Modifiers::NONE);
@@ -5915,21 +5920,25 @@ fn quick_filters_are_edited_in_settings() {
     assert_eq!(&got[got.len() - 2..], ["foo", "jpg"]);
     assert_eq!(got.iter().filter(|e| *e == "heic").count(), 1);
     // A built-in filter goes back to its own extensions.
-    h.get_by_label(&t("Reset to built-in")).click();
+    h.get_by_label(&t("Reset to built-in")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(exts(&h, 0), builtin[0].ext_list());
-    h.get_by_label(&t("Images")).click();
+    h.get_by_label(&t("Images")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().qf.open, None);
 
     // Removing asks first: Cancel keeps it, Remove removes it.
     let trash_of = |h: &Harness<'static, App>, name: &str| {
-        let row = centre(h.get_by_label(&t(name)).bounding_box().unwrap());
-        h.query_all_by_label(&t("Remove")).filter_map(|n| n.bounding_box()).map(centre).find(|p| (p.y - row.y).abs() < 4.0).expect("its trash can")
+        let row = centre(h.get_by_label(&t(name)).accesskit_node().bounding_box().unwrap());
+        h.query_all_by_label(&t("Remove"))
+            .filter_map(|n| n.accesskit_node().bounding_box())
+            .map(centre)
+            .find(|p| (p.y - row.y).abs() < 4.0)
+            .expect("its trash can")
     };
     let at = trash_of(&h, "Music");
     click_at(&mut h, at);
-    h.get_by_label(&t("Cancel")).click();
+    h.get_by_label(&t("Cancel")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(names(&h), ["Images", "Music", "Mine"]);
     let at = trash_of(&h, "Music");
@@ -5958,11 +5967,11 @@ fn quick_filters_are_edited_in_settings() {
         }
         uid.expect("a file window")
     };
-    h.get_by_label("Mine").click();
+    h.get_by_label("Mine").click_accesskit();
     settle(&mut h, 3);
     let name_field = h
         .query_all_by_role(egui::accesskit::Role::TextInput)
-        .filter_map(|n| n.bounding_box())
+        .filter_map(|n| n.accesskit_node().bounding_box())
         .min_by(|a, b| a.y0.total_cmp(&b.y0))
         .map(centre)
         .expect("the name field");
@@ -5981,11 +5990,11 @@ fn quick_filters_are_edited_in_settings() {
         v
     };
     assert_eq!(on(h.state()), Some(vec!["Mine too".to_string()]), "still on, renamed");
-    h.get_by_label("Mine too").click();
+    h.get_by_label("Mine too").click_accesskit();
     settle(&mut h, 3);
 
     // A new one: its editor opens with the name selected, so typing renames it.
-    h.get_by_label(&format!("+ {}", t("New quick filter"))).click();
+    h.get_by_label(&format!("+ {}", t("New quick filter"))).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().qf.open, Some(2));
     push(&mut h, Event::Text("Raw".into()));
@@ -6012,7 +6021,7 @@ fn view_options_set_the_default_view() {
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.default_view, ViewMode::List);
     let open_menu = |h: &mut Harness<'static, App>| {
-        h.query_by_label("View options").expect("the button").click();
+        h.query_by_label("View options").expect("the button").click_accesskit();
         settle(h, 2);
     };
     // The default: nothing to set.
@@ -6020,13 +6029,13 @@ fn view_options_set_the_default_view() {
     assert!(h.query_by_label_contains(&t("This is the default view")).is_some());
     assert!(h.query_by_label(&t("Set as default view")).is_none());
     // Icons in this window, then made the default.
-    h.query_by_label_contains(&t("Icons")).expect("in the menu").click();
+    h.query_by_label_contains(&t("Icons")).expect("in the menu").click_accesskit();
     settle(&mut h, 2);
     assert!(h.state().panes[1].tab().grid_cols.is_none(), "the other window: still a list");
     if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
         h.render().unwrap().save(Path::new(&out).join("view-options-menu.png")).unwrap();
     }
-    h.get_by_label(&t("Set as default view")).click();
+    h.get_by_label(&t("Set as default view")).click_accesskit();
     settle(&mut h, 3);
     assert_eq!(h.state().cfg.default_view, ViewMode::Icons);
     assert_eq!(h.state().panes[0].tab().view_mode, None, "this window follows the default now");
@@ -6056,13 +6065,13 @@ fn split_view_splits_the_focused_window() {
     h.state_mut().shot_focus(0);
     settle(&mut h, 3);
     let choose = |h: &mut Harness<'static, App>, label: &str| {
-        h.get_by_label(&t("Split view")).click();
+        h.get_by_label(&t("Split view")).click_accesskit();
         settle(h, 2);
-        h.get_by_label_contains(label).click();
+        h.get_by_label_contains(label).click_accesskit();
         settle(h, 4);
     };
     if let Ok(out) = std::env::var("MATRIX_FINDER_SAMPLES_OUT") {
-        h.get_by_label(&t("Split view")).click();
+        h.get_by_label(&t("Split view")).click_accesskit();
         settle(&mut h, 3);
         h.render().unwrap().save(Path::new(&out).join("split-view-menu.png")).unwrap();
         key_press(&mut h, Key::Escape, None, Modifiers::NONE);
@@ -6074,7 +6083,7 @@ fn split_view_splits_the_focused_window() {
     assert_eq!(h.state().panes.len(), 3);
     assert!(h.state().panes[h.state().active].tab().is_terminal(), "a terminal below");
     // Two columns already: no more sideways splits in the menu.
-    h.get_by_label(&t("Split view")).click();
+    h.get_by_label(&t("Split view")).click_accesskit();
     settle(&mut h, 2);
     assert!(h.query_by_label_contains(&t("Split right")).is_none());
     assert!(h.query_by_label_contains(&t("Files to the right")).is_none(), "a terminal offers files beside it");

@@ -39,7 +39,7 @@ pub fn upload_texture(ctx: &egui::Context, name: impl Into<String>, image: egui:
                 pixels.push(image.pixels[(y * h / nh) * w + x * w / nw]);
             }
         }
-        egui::ColorImage { size: [nw, nh], pixels }
+        egui::ColorImage::new([nw, nh], pixels)
     } else {
         image
     };

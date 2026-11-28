@@ -5,6 +5,7 @@
 use super::settings_ui::{bold, drag_feedback, grip_dots};
 use super::*;
 use crate::config::{default_quick_filters, unused_quick_filter_name, QuickFilter};
+use crate::ui::KeptContextMenu as _;
 use egui::{pos2, vec2, Align2, FontId, Rect, Sense, Stroke};
 
 /// What the Quick filters page has open: kept between frames.
@@ -297,23 +298,23 @@ impl App {
             self.qf.add.clear();
             self.qf.delete = None;
         }
-        resp.context_menu(|ui| {
+        resp.kept_context_menu(|ui| {
             if ui.add_enabled(i > 0, egui::Button::new(t("Move up"))).clicked() {
                 edit = Some(QfEdit::Move(i, i - 1));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.add_enabled(i + 1 < n, egui::Button::new(t("Move down"))).clicked() {
                 edit = Some(QfEdit::Move(i, i + 2));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button(t("Duplicate")).clicked() {
                 edit = Some(QfEdit::Duplicate(i));
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             ui.separator();
             if ui.button(RichText::new(t("Remove…")).color(th.danger)).clicked() {
                 self.qf.delete = Some(i);
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
         (grip, edit)

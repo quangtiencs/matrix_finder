@@ -255,7 +255,7 @@ impl App {
     /// rows under it must not move.
     pub(super) fn poll_dir_watch(&mut self, ctx: &egui::Context) {
         let changed = self.dir_watch.take_changed();
-        let busy = ctx.memory(|m| m.any_popup_open()) || crate::ui::pane::drag_payload(ctx).is_some();
+        let busy = egui::Popup::is_any_open(ctx) || crate::ui::pane::drag_payload(ctx).is_some();
         let c = lc!(self);
         for p in &mut self.panes {
             let tab = p.tab_mut();

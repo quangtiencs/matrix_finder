@@ -1219,7 +1219,10 @@ pub fn apply(ctx: &egui::Context, t: &Theme) {
         (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
     ]
     .into();
-    ctx.set_style(style);
+    // The same style whichever light/dark mode egui is in (the OS, or a test harness, may
+    // switch it): popups and menus would otherwise get egui's own.
+    ctx.set_style_of(egui::Theme::Light, style.clone());
+    ctx.set_style_of(egui::Theme::Dark, style);
 }
 
 #[cfg(test)]

@@ -78,6 +78,7 @@ impl Drop for Search {
 }
 
 use crate::ui::search::SEARCH_LIMIT;
+use crate::ui::KeptContextMenu as _;
 
 /// Listing a folder that takes this long stops it from reloading by itself.
 const SLOW_LISTING: std::time::Duration = std::time::Duration::from_millis(500);
@@ -1820,13 +1821,13 @@ fn quick_filter_button(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut
     let id = egui::Id::new(("quick-filter", tab.uid));
     let focus = id.with("focus");
     if std::mem::take(&mut tab.open_find) {
-        ui.memory_mut(|m| m.open_popup(id));
+        egui::Popup::open_id(ui.ctx(), id);
         ui.data_mut(|d| d.insert_temp(focus, true));
     } else if r.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(id));
+        egui::Popup::toggle_id(ui.ctx(), id);
         ui.data_mut(|d| d.insert_temp(focus, true));
     }
-    egui::popup::popup_below_widget(ui, id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+    crate::ui::popup_below(id, &r, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         menu_style(ui);
         ui.set_width(FIND_W);
         // One column: Find, then the kinds of files; it scrolls in a short window.
@@ -1919,7 +1920,7 @@ fn find_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pan
         ev.push(PaneEvent::Find(d));
         // A search shows its progress in the window: out of the way.
         if find && heavy && !clear {
-            ui.memory_mut(|m| m.close_popup());
+            ui.close();
         }
     }
 }
@@ -2050,7 +2051,7 @@ fn kinds_column(ui: &mut egui::Ui, tab: &mut Tab, c: &PaneUiCtx, ev: &mut Vec<Pa
     // Unticking turns a kind off; the chip's × in the title row turns them all off.
     if ui.button(t("Edit quick filters…")).clicked() {
         ev.push(PaneEvent::EditQuickFilters);
-        ui.memory_mut(|m| m.close_popup());
+        ui.close();
     }
 }
 
@@ -2135,9 +2136,9 @@ fn window_buttons(ui: &mut egui::Ui, terminal: bool, c: &PaneUiCtx, ev: &mut Vec
     let sr = icons::icon_button(ui, 26.0, true, th, icons::mi_split).on_hover_text(t("Split window"));
     let id = sr.id.with("split-menu");
     if sr.clicked() {
-        ui.memory_mut(|m| m.toggle_popup(id));
+        egui::Popup::toggle_id(ui.ctx(), id);
     }
-    egui::popup::popup_below_widget(ui, id, &sr, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+    crate::ui::popup_below(id, &sr, egui::PopupCloseBehavior::CloseOnClick, |ui| {
         ui.set_min_width(200.0);
         menu_style(ui);
         let mut out = None;
@@ -2227,14 +2228,14 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
             ev.push(PaneEvent::Focus);
         }
         let cwd = term.cwd.clone();
-        lresp.on_hover_text(cwd.display().to_string()).context_menu(|ui| {
+        lresp.on_hover_text(cwd.display().to_string()).kept_context_menu(|ui| {
             if ui.button(t("Copy path")).clicked() {
                 ui.ctx().copy_text(cwd.display().to_string());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button(t("Open folder in a file tab")).clicked() {
                 out.open_dir = Some(cwd.clone());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
         });
 
@@ -2252,24 +2253,24 @@ fn term_header(ui: &mut egui::Ui, tab: &Tab, c: &PaneUiCtx, ev: &mut Vec<PaneEve
             if r.clicked() && idle {
                 ev.push(PaneEvent::Agent(AgentAct::Run(a.id)));
             }
-            r.context_menu(|ui| {
+            r.kept_context_menu(|ui| {
                 if c.agents.len() > 1 {
                     for f in c.agents {
                         let Some(other) = crate::system::agents::get(f.id) else { continue };
                         if ui.radio(other.id == a.id, other.name).clicked() {
                             ev.push(PaneEvent::Agent(AgentAct::Choose(other.id)));
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                     ui.separator();
                 }
                 if ui.button(t("Hide the AI button")).clicked() {
                     ev.push(PaneEvent::Agent(AgentAct::HideButton));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(t("AI button settings…")).clicked() {
                     ev.push(PaneEvent::Agent(AgentAct::Settings));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
             ui.add_space(8.0);
@@ -2818,7 +2819,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
     } else if let Some(off) = tab.force_scroll.take() {
         sa = sa.vertical_scroll_offset(off);
     }
-    let sa = sa.drag_to_scroll(false);
+    let sa = sa.scroll_source(egui::scroll_area::ScrollSource { drag: false, ..egui::scroll_area::ScrollSource::ALL });
     let payload = drag_payload(ui.ctx());
     let mut row_target: Option<(Location, String)> = None;
     let mut drag_started: Option<(usize, Vec<Entry>)> = None;
@@ -3005,7 +3006,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 unmark = !e.is_parent;
             }
             let (entry_is_dir, entry_is_parent) = (e.is_dir, e.is_parent);
-            resp.context_menu(|ui| {
+            resp.kept_context_menu(|ui| {
                 menu_open = true;
                 // The local folders the menu acts on: the marked ones when this row is
                 // one of them, else this row (a right-click there unmarks the others).
@@ -3020,7 +3021,7 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 };
                 if let Some(cmd) = context_menu(ui, entry_is_dir, entry_is_parent, is_arch, is_sum, &dirs, c) {
                     context = Some((row, cmd));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
         };
@@ -3046,11 +3047,11 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                         if bg.clicked() {
                             ev.push(PaneEvent::Focus);
                         }
-                        bg.context_menu(|ui| {
+                        bg.kept_context_menu(|ui| {
                             bg_menu_open = true;
                             if let Some(cmd) = background_menu(ui, c) {
                                 bg_context = Some(cmd);
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                         });
                     }
@@ -3098,11 +3099,11 @@ fn list_and_footer(ui: &mut egui::Ui, tab: &mut Tab, side: usize, c: &PaneUiCtx,
                 if bg.clicked() {
                     ev.push(PaneEvent::Focus);
                 }
-                bg.context_menu(|ui| {
+                bg.kept_context_menu(|ui| {
                     bg_menu_open = true;
                     if let Some(cmd) = background_menu(ui, c) {
                         bg_context = Some(cmd);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
             }
@@ -3340,7 +3341,7 @@ fn mitem(ui: &mut egui::Ui, th: &Theme, icon: MenuIcon, label: &str, key: &str, 
     let r = ui.add(egui::Button::new(menu_text(ui, label, col)).shortcut_text(egui::RichText::new(key).color(th.weak)));
     paint_menu_icon(ui, r.rect, icon, if danger { th.danger } else { th.weak });
     if r.clicked() {
-        ui.close_menu();
+        ui.close_kind(egui::UiKind::Menu);
         return true;
     }
     false

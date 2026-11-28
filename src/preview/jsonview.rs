@@ -3,6 +3,7 @@
 use crate::i18n::t;
 use crate::preview::code::Styled;
 use crate::style::theme::Theme;
+use crate::ui::KeptContextMenu as _;
 use crate::util::ext_of;
 use egui::{Color32, FontId, Sense};
 use std::collections::{HashMap, HashSet};
@@ -568,27 +569,27 @@ impl JsonView {
                         resp.clone().on_hover_text(s);
                     }
                 }
-                resp.context_menu(|ui| {
+                resp.kept_context_menu(|ui| {
                     let st = style();
                     if ui.button(format!("{} ({})", t("Copy path"), st.label())).clicked() {
                         ui.ctx().copy_text(self.path(&at, st));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t("Copy value")).clicked() {
                         ui.ctx().copy_text(value_text(node));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if let Some(Seg::Key(k)) = self.segs(&at).last() {
                         if ui.button(t("Copy key")).clicked() {
                             ui.ctx().copy_text(k.to_string());
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                     if node.is_container() {
                         ui.separator();
                         if ui.button(t("Expand all")).clicked() {
                             action = Some(Action::ExpandAll(at.clone()));
-                            ui.close_menu();
+                            ui.close_kind(egui::UiKind::Menu);
                         }
                     }
                 });

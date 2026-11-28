@@ -15,7 +15,7 @@ impl App {
         if !self.keys_to_window
             || self.quit == Quit::Asking
             || !ctx.input(|i| i.key_pressed(Key::Escape) && !i.modifiers.any())
-            || ctx.memory(|m| m.any_popup_open())
+            || egui::Popup::is_any_open(ctx)
             || focus_keeps_esc
             || self.palette.open
             || crate::ui::pane::drag_payload(ctx).is_some()
@@ -527,7 +527,7 @@ impl App {
                 }
                 Key::Escape => {
                     // Esc that closes a menu (right-click, …) is that menu's alone.
-                    if ctx.memory(|m| m.any_popup_open()) || self.panes[a].tab().menu_open {
+                    if egui::Popup::is_any_open(ctx) || self.panes[a].tab().menu_open {
                     } else if crate::ui::pane::drag_payload(ctx).is_some() {
                         egui::DragAndDrop::clear_payload(ctx);
                     } else if self.viewer.is_some() {

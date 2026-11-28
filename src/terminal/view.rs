@@ -1401,11 +1401,11 @@ impl TermSession {
         if let Some(url) = self.menu_link.clone() {
             if ui.button(t("Open link")).clicked() {
                 open_link(&url, out);
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button(t("Copy link")).clicked() {
                 ui.ctx().copy_text(url.to_string());
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             ui.separator();
         }
@@ -1414,26 +1414,26 @@ impl TermSession {
             if let Some(s) = self.selection_text() {
                 ui.ctx().copy_text(s);
             }
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.add(egui::Button::new(t("Paste")).shortcut_text(k("Ctrl+Shift+V", "⌘V"))).clicked() {
             if let Some(s) = clipboard_get(false) {
                 self.paste(&s);
             }
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Select all")).clicked() {
             self.select_all();
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         ui.separator();
         if ui.button(t("Clear")).clicked() {
             self.clear();
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         if ui.button(t("Open folder in a file tab")).clicked() {
             out.open_dir = Some(self.cwd.clone());
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
         ui.separator();
         ui.horizontal(|ui| {
@@ -1461,24 +1461,24 @@ impl TermSession {
                 {
                     if o.can_split[k] && ui.add(egui::Button::new(label).shortcut_text(terminal_hint(key))).clicked() {
                         out.split = Some((d, true));
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 }
                 ui.separator();
                 if o.can_split[0] && ui.button(t("Files to the right")).clicked() {
                     out.split = Some((D::Right, false));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if o.can_split[2] && ui.button(t("Files below")).clicked() {
                     out.split = Some((D::Down, false));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
         }
         let close = if o.in_split { t("Close window") } else { t("Close tab") };
         if ui.add(egui::Button::new(close).shortcut_text(crate::ui::shortcuts::terminal_hint(crate::ui::shortcuts::Action::CloseWindow))).clicked() {
             out.close = true;
-            ui.close_menu();
+            ui.close_kind(egui::UiKind::Menu);
         }
     }
 }

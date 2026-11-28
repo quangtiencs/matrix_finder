@@ -254,11 +254,11 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
     icons::chevron(ui.painter(), Rect::from_center_size(pos2(r.right() - 16.0, r.center().y), vec2(10.0, 10.0)), 2, th.weak);
     if btn.clicked() {
         search.clear();
-        ui.memory_mut(|m| m.toggle_popup(id));
+        egui::Popup::toggle_id(ui.ctx(), id);
     }
     let mut picked = None;
     let installed = fonts::families(ui.ctx());
-    egui::popup::popup_below_widget(ui, id, &btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+    crate::ui::popup_below(id, &btn, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
         ui.set_width(W);
         crate::ui::pane::menu_style(ui);
         let field = ui.add(
@@ -312,7 +312,7 @@ fn font_picker(ui: &mut egui::Ui, th: &Theme, id_salt: &str, current: &str, buil
         }
     });
     if picked.is_some() {
-        ui.memory_mut(|m| m.close_popup());
+        egui::Popup::close_id(ui.ctx(), id);
     }
     picked
 }

@@ -1,6 +1,7 @@
 //! The frame around the windows: the application menu, the top bar, the sidebar, the
 //! status bar and the toasts.
 use super::*;
+use crate::ui::KeptContextMenu as _;
 
 impl App {
     fn main_menu(&mut self, ui: &mut egui::Ui) {
@@ -8,37 +9,37 @@ impl App {
             ui.menu_button(t("File"), |ui| {
                 if ui.button(format!("{}\t{}", t("New tab"), hint(Action::NewTab))).clicked() {
                     self.new_tab();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(format!("{}\t{}", t("New terminal tab"), hint(Action::NewTerminalTab))).clicked() {
                     self.new_terminal_here(None, None);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(format!("{}\t{}", t("Close tab"), hint(Action::CloseTab))).clicked() {
                     self.request_close_tabs(&[self.live]);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.add_enabled(!self.closed_tabs.is_empty(), egui::Button::new(format!("{}\t{}", t("Reopen closed tab"), hint(Action::ReopenTab)))).clicked()
                 {
                     self.reopen_closed_tab();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 if ui.button(format!("{}\tF7", t("New folder…"))).clicked() {
                     self.run_cmd(Cmd::NewFolder);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(format!("{}\t{}", t("New file…"), hint(Action::NewFile))).clicked() {
                     self.run_cmd(Cmd::NewFile);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(format!("{}\t{}", t("Open terminal here"), hint(Action::OpenTerminal))).clicked() {
                     self.open_terminal();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 if ui.button(t("Export settings…")).clicked() {
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                     if let Some(p) = rfd::FileDialog::new().set_file_name("matrix_finder-settings.json").save_file() {
                         match self.cfg.export_to(&p, false) {
                             Ok(()) => self.toast(format!("{} {}", t("Exported to"), p.display()), false),
@@ -47,7 +48,7 @@ impl App {
                     }
                 }
                 if ui.button(t("Import settings…")).clicked() {
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                     self.import_settings();
                 }
                 ui.separator();
@@ -70,7 +71,7 @@ impl App {
                             2 => self.panes[a].tab_mut().invert_marks(),
                             _ => self.calc_sizes(),
                         }
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 }
             });
@@ -92,30 +93,30 @@ impl App {
                 ] {
                     if ui.button(format!("{label}\t{key}")).clicked() {
                         self.run_cmd(cmd);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 }
                 ui.separator();
                 if ui.button(format!("{}\t{}", t("Swap panels"), hint(Action::SwapPanels))).clicked() {
                     self.swap_with_other();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(t("Same folder in other panel")).clicked() {
                     let loc = self.panes[self.active].tab().loc.clone();
                     let o = self.other_or_split();
                     self.panes[o].tab_mut().navigate(loc, &lc!(self));
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
             ui.menu_button(t("View"), |ui| {
                 if ui.checkbox(&mut self.cfg.show_sidebar.clone(), format!("{}\t{}", t("Sidebar"), hint(Action::Sidebar))).clicked() {
                     self.cfg.show_sidebar = !self.cfg.show_sidebar;
                     self.save_cfg();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.checkbox(&mut self.cfg.quick_view.clone(), format!("{}\t{}", t("Quick view panel"), hint(Action::QuickView))).clicked() {
                     self.toggle_quick_view();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.checkbox(&mut self.cfg.show_hidden, format!("{}\t{}", t("Show hidden files"), hint(Action::ToggleHidden))).changed() {
                     self.rebuild_views();
@@ -143,17 +144,17 @@ impl App {
                 ui.separator();
                 if ui.button(format!("{}\t{}", t("Refresh"), hint(Action::Refresh))).clicked() {
                     self.run_cmd(Cmd::Refresh);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
             ui.menu_button(t("Bookmarks"), |ui| {
                 if ui.button(format!("{}\t{}", t("Bookmark current folder"), hint(Action::Bookmark))).clicked() {
                     self.run_cmd(Cmd::Bookmark);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(t("Manage bookmarks…")).clicked() {
                     self.open_settings(SettingsPage::Bookmarks);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 ui.separator();
                 for b in self.cfg.bookmarks.clone() {
@@ -162,20 +163,20 @@ impl App {
                             for c in &b.children {
                                 if ui.button(&c.name).on_hover_text(&c.path).clicked() {
                                     self.open_bookmark(c);
-                                    ui.close_menu();
+                                    ui.close_kind(egui::UiKind::Menu);
                                 }
                             }
                         });
                     } else if ui.button(format!("★ {}", b.name)).on_hover_text(&b.path).clicked() {
                         self.open_bookmark(&b);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 }
             });
             ui.menu_button(t("Network"), |ui| {
                 if ui.button(format!("{}\t{}", t("Connect to server…"), hint(Action::Connect))).clicked() {
                     self.open_connect_dialog(None);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if !self.cfg.connections.is_empty() {
                     ui.separator();
@@ -185,11 +186,11 @@ impl App {
                         ui.horizontal(|ui| {
                             if ui.button(format!("{} {}", c.protocol.label(), c.name)).on_hover_text(connection_hover(&c)).clicked() {
                                 self.connect_saved(c.clone());
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             if ui.small_button("✏").on_hover_text(t("Edit")).clicked() {
                                 self.show_dialog(Dialog::Connect { profile: remote::with_known_password(c), save: true }, false);
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             if ui.small_button("🗑").on_hover_text(t("Delete")).clicked() {
                                 remove = Some(i);
@@ -209,11 +210,11 @@ impl App {
                         ui.horizontal(|ui| {
                             if ui.button(&label).clicked() {
                                 self.navigate_active(Location::Remote { id, path: "/".into() });
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                             if ui.small_button(t("Disconnect")).clicked() {
                                 self.disconnect(id);
-                                ui.close_menu();
+                                ui.close_kind(egui::UiKind::Menu);
                             }
                         });
                     }
@@ -222,33 +223,33 @@ impl App {
             ui.menu_button(t("Tools"), |ui| {
                 if ui.button(format!("📊 {}", t("Disk usage"))).clicked() {
                     self.run_cmd(Cmd::DiskUsage);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(format!("⇅ {}\t{}", t("Tasks"), hint(Action::Transfers))).clicked() {
                     self.open_transfers();
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(format!("🛡 {}\t{}", t("Backup…"), hint(Action::Backup))).clicked() {
                     self.backup.open = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(format!("⚙ {}\t{}", t("Settings…"), hint(Action::Settings))).clicked() {
                     self.open_settings(self.settings_page);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
             ui.menu_button(t("Help"), |ui| {
                 if ui.button(format!("{}\tF1", t("Keyboard shortcuts"))).clicked() {
                     self.show_help = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(t("Check for updates…")).clicked() {
                     self.check_for_updates(true);
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
                 if ui.button(t("About")).clicked() {
                     self.show_about = true;
-                    ui.close_menu();
+                    ui.close_kind(egui::UiKind::Menu);
                 }
             });
         }
@@ -261,31 +262,31 @@ impl App {
         let text = RichText::new("Matrix Finder      ").font(egui::FontId::new(14.5, egui::FontFamily::Name("bold".into()))).color(th.strong());
         // Text only: the logo lives in the About window, not in the toolbar.
         let button = egui::Button::new(text).fill(egui::Color32::TRANSPARENT).min_size(egui::vec2(0.0, 30.0));
-        let menu = egui::menu::menu_custom_button(ui, button, |ui| {
+        let menu = egui::containers::menu::MenuButton::from_button(button).config(crate::ui::kept_menu_config()).ui(ui, |ui| {
             ui.set_min_width(230.0);
             if ui.button(t("About")).clicked() {
                 self.show_about = true;
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             if ui.button(t("Check for updates…")).clicked() {
                 self.check_for_updates(true);
-                ui.close_menu();
+                ui.close_kind(egui::UiKind::Menu);
             }
             ui.separator();
             self.main_menu(ui);
         });
-        let r = menu.response.rect;
-        let open = menu.inner.is_some();
-        if menu.response.hovered() || open {
+        let r = menu.0.rect;
+        let open = menu.1.is_some();
+        if menu.0.hovered() || open {
             ui.painter().set(bg, egui::Shape::rect_filled(r, th.radius as f32 + 2.0, th.surface));
         }
         // Chevron drawn in the reserved trailing space.
         let c = egui::pos2(r.right() - 14.0, r.center().y + 1.0);
-        let col = if menu.response.hovered() || open { th.strong() } else { th.weak };
+        let col = if menu.0.hovered() || open { th.strong() } else { th.weak };
         let st = egui::Stroke::new(1.5_f32, col);
         ui.painter().line_segment([c + egui::vec2(-4.0, -2.0), c + egui::vec2(0.0, 2.0)], st);
         ui.painter().line_segment([c + egui::vec2(0.0, 2.0), c + egui::vec2(4.0, -2.0)], st);
-        menu.response.on_hover_text(t("Menu"));
+        menu.0.on_hover_text(t("Menu"));
     }
 
     /// The sidebar button, just before the app menu (in the sidebar, or in the top
@@ -404,14 +405,14 @@ impl App {
                 ui.painter().line_segment([cc + egui::vec2(-3.5, -1.5), cc + egui::vec2(0.0, 2.0)], st);
                 ui.painter().line_segment([cc + egui::vec2(0.0, 2.0), cc + egui::vec2(3.5, -1.5)], st);
                 if chev.on_hover_text(t("Terminal profiles")).clicked() {
-                    ui.memory_mut(|m| m.toggle_popup(popup_id));
+                    egui::Popup::toggle_id(ui.ctx(), popup_id);
                 }
                 let main = tool_icon(ui, th, &format!("{} ({})", t("Open terminal here"), hint(Action::OpenTerminal)), false, terminal_icon);
                 if main.clicked() {
                     self.open_terminal_profile(None);
                 }
                 let anchor = main.union(chev_rect_response(ui, cr));
-                egui::popup::popup_below_widget(ui, popup_id, &anchor, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                crate::ui::popup_below(popup_id, &anchor, egui::PopupCloseBehavior::CloseOnClick, |ui| {
                     ui.set_min_width(240.0);
                     for (i, p) in self.cfg.terminal_profiles.clone().iter().enumerate() {
                         let star = if i == self.cfg.default_terminal { "  ★" } else { "" };
@@ -514,14 +515,14 @@ impl App {
                 if resp.clicked() {
                     self.navigate_active(Location::Local(mp.clone()));
                 }
-                resp.context_menu(|ui| {
+                resp.kept_context_menu(|ui| {
                     if ui.button(t("Disk usage")).clicked() {
                         self.open_disk_usage(mp.clone());
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if d.ejectable && ui.add_enabled(!self.ejecting.iter().any(|e| e.0 == mp), egui::Button::new(t("Eject"))).clicked() {
                         eject = Some(d.clone());
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
             }
@@ -541,10 +542,10 @@ impl App {
                 if resp.clicked() {
                     self.navigate_active(Location::Remote { id, path: "/".into() });
                 }
-                resp.context_menu(|ui| {
+                resp.kept_context_menu(|ui| {
                     if ui.button(t("Disconnect")).clicked() {
                         self.disconnect(id);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
             }
@@ -553,15 +554,15 @@ impl App {
                 if resp.clicked() {
                     self.connect_saved(c.clone());
                 }
-                resp.context_menu(|ui| {
+                resp.kept_context_menu(|ui| {
                     if ui.button(t("Edit")).clicked() {
                         self.show_dialog(Dialog::Connect { profile: remote::with_known_password(c.clone()), save: true }, false);
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                     if ui.button(t("Delete")).clicked() {
                         self.cfg.connections.retain(|x| x.name != c.name);
                         self.save_cfg();
-                        ui.close_menu();
+                        ui.close_kind(egui::UiKind::Menu);
                     }
                 });
             }
@@ -712,19 +713,19 @@ impl App {
         let tab = self.panes[self.active].tab();
         let files = tab.is_files();
         let mode = tab.view_mode.unwrap_or(self.cfg.default_view);
-        if !files && ui.memory(|m| m.is_popup_open(id)) {
-            ui.memory_mut(|m| m.close_popup());
+        if !files && egui::Popup::is_id_open(ui.ctx(), id) {
+            egui::Popup::close_id(ui.ctx(), id);
         }
-        let open = ui.memory(|m| m.is_popup_open(id));
+        let open = egui::Popup::is_id_open(ui.ctx(), id);
         let resp = ui
             .add_enabled_ui(files, |ui| tool_icon(ui, th, &t("View options"), open, |p, r, c| view_icon(p, r, c, mode == ViewMode::Icons)))
             .inner
             .on_disabled_hover_text(t("View options are for file windows"));
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, files, t("View options")));
         if resp.clicked() {
-            ui.memory_mut(|m| m.toggle_popup(id));
+            egui::Popup::toggle_id(ui.ctx(), id);
         }
-        egui::popup::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
+        crate::ui::popup_below(id, &resp, egui::PopupCloseBehavior::CloseOnClickOutside, |ui| {
             ui.set_min_width(230.0);
             let mut hidden = self.cfg.show_hidden;
             if ui.checkbox(&mut hidden, format!("{}  ({})", t("Show hidden files"), hint(Action::ToggleHidden))).changed() {
@@ -758,13 +759,13 @@ impl App {
     /// side, within 2 × 2), or close it.
     fn split_view_button(&mut self, ui: &mut egui::Ui, th: &Theme) {
         let id = egui::Id::new("split-view");
-        let open = ui.memory(|m| m.is_popup_open(id));
+        let open = egui::Popup::is_id_open(ui.ctx(), id);
         let resp = tool_icon(ui, th, &t("Split view"), open, icons::mi_split);
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, t("Split view")));
         if resp.clicked() {
-            ui.memory_mut(|m| m.toggle_popup(id));
+            egui::Popup::toggle_id(ui.ctx(), id);
         }
-        egui::popup::popup_below_widget(ui, id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+        crate::ui::popup_below(id, &resp, egui::PopupCloseBehavior::CloseOnClick, |ui| {
             crate::ui::pane::menu_style(ui);
             ui.set_min_width(240.0);
             let a = self.active;
@@ -774,7 +775,7 @@ impl App {
             crate::ui::pane::split_menu(ui, th, &entries, &mut cmd);
             if let Some(c) = cmd {
                 self.run_cmd(c);
-                ui.memory_mut(|m| m.close_popup());
+                ui.close();
             }
         });
     }
